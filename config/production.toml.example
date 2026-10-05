@@ -1,0 +1,78 @@
+[server]
+bind = "0.0.0.0:3000"
+request_body_limit_bytes = 10485760
+cors_allowed_origins = ["https://farm.example"]
+
+[modules]
+enable = ["all"]
+disable = []
+
+[auth]
+keycloak_url = "http://127.0.0.1:9000"
+realm = "dev-realm"
+client_id = "dev-auth"
+user_role = "user"
+request_timeout_seconds = 10
+secure_cookies = true
+
+[database]
+max_connections = 20
+min_connections = 2
+acquire_timeout_seconds = 10
+idle_timeout_seconds = 600
+max_lifetime_seconds = 1800
+run_migrations = true
+
+[device]
+artifacts_base_url = ""
+artifacts_temp_dir = "/var/lib/farmcontroller/tmp/artifacts"
+nfs_host_path = "/nfs_share"
+tftp_output_dir = "/tftp_data"
+build_upload_dir = "/var/lib/farmcontroller/uploads"
+build_upload_max_bytes = 524288000
+build_artifacts_dir = "/artifacts"
+faulty_report_upload_dir = "/var/lib/farmcontroller/uploads/faulty-reports"
+faulty_report_max_bytes = 10485760
+server_ip = "127.0.0.1"
+request_timeout_seconds = 10
+terminal_username = "root"
+terminal_password = ""
+rtos_username = "hpcbdc"
+rtos_password = ""
+terminal_known_hosts_file = "/etc/farmcontroller/ssh_known_hosts"
+terminal_accept_unknown_host_keys = false
+ipl_artifacts_dir = "/Racer_IPL_flash"
+gen5_ipl_script = "/Racer_IPL_flash/gen5_ipl.sh"
+ipl_transfer_timeout_seconds = 120
+gen4_ipl_username = ""
+gen4_ipl_password = ""
+gen4_ipl_port = 22
+gen4_ipl_remote_path = "/home/hpcbdc/RACER_IPL"
+gen5_ipl_username = ""
+gen5_ipl_password = ""
+gen5_ipl_port = 22
+gen5_ipl_remote_path = "/home/racer/RACER_IPL"
+
+[reports]
+test_results_dir = "/test-results"
+queue_capacity = 64
+confluence_url = ""
+confluence_pat = ""
+confluence_space = ""
+confluence_parent_title = ""
+confluence_subpage_title = ""
+confluence_timeout_seconds = 60
+
+[tests]
+jira_base_url = ""
+jira_endpoint = "rest/api/2"
+jira_project_key = ""
+jira_api_token = ""
+jira_timeout_seconds = 30
+jira_script_base_url = ""
+
+[logging]
+level = "info"
+json = true
+stream = "stdout"
+file = "/var/log/farmcontroller/farmcontroller.log"

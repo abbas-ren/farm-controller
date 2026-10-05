@@ -1,0 +1,56 @@
+[package]
+name = "farmcontroller"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "Unified FarmController service"
+license = "Proprietary"
+publish = false
+
+[dependencies]
+async-trait = "0.1.92"
+axum = { version = "0.8.9", features = ["json", "macros", "multipart", "ws"] }
+base64 = "0.22.1"
+bzip2 = "0.6.1"
+chrono = { version = "0.4.42", features = ["serde"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+config = { version = "0.15.27", default-features = false, features = ["toml"] }
+csv = "1.4.0"
+futures-util = "0.3.31"
+prometheus = "0.14.0"
+percent-encoding = "2.3.2"
+plotters = { version = "0.3.7", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "line_series", "ttf"] }
+regex = "1.12.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["form", "json", "multipart", "query", "rustls", "stream"] }
+scraper = "0.25.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.9"
+sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "derive", "json", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs", "uuid"] }
+tar = "0.4.44"
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.17", features = ["io", "rt"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["catch-panic", "cors", "limit", "request-id", "sensitive-headers", "set-header", "trace"] }
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+utoipa = { version = "6.0.0", features = ["axum_extras", "uuid"] }
+utoipa-swagger-ui = { version = "10.0.1", features = ["axum", "vendored"] }
+uuid = { version = "1.26.1", features = ["serde", "v4"] }
+zip = "7.2.0"
+socketioxide = "0.18.7"
+sysinfo = "0.39.6"
+russh = "0.63.3"
+russh-sftp = "3.0.1"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+wiremock = "0.6.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

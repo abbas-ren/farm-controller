@@ -1,0 +1,84 @@
+services:
+  farmcontroller:
+    build:
+      context: .
+      dockerfile: Dockerfile.rust
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    environment:
+      FARMCONTROLLER__DATABASE__URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      FARMCONTROLLER__AUTH__KEYCLOAK_URL: http://keycloak:8080
+      FARMCONTROLLER__AUTH__CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      FARMCONTROLLER__DEVICE__SERVER_IP: ${FARMCONTROLLER_SERVER_IP}
+      FARMCONTROLLER__DEVICE__TERMINAL_PASSWORD: ${FARMCONTROLLER_TERMINAL_PASSWORD}
+      FARMCONTROLLER__DEVICE__RTOS_PASSWORD: ${FARMCONTROLLER_RTOS_PASSWORD}
+      FARMCONTROLLER__DEVICE__GEN4_IPL_USERNAME: ${FARMCONTROLLER_GEN4_IPL_USERNAME:-}
+      FARMCONTROLLER__DEVICE__GEN4_IPL_PASSWORD: ${FARMCONTROLLER_GEN4_IPL_PASSWORD:-}
+      FARMCONTROLLER__DEVICE__GEN5_IPL_USERNAME: ${FARMCONTROLLER_GEN5_IPL_USERNAME:-}
+      FARMCONTROLLER__DEVICE__GEN5_IPL_PASSWORD: ${FARMCONTROLLER_GEN5_IPL_PASSWORD:-}
+      FARMCONTROLLER__LOGGING__JSON: "true"
+    volumes:
+      - ./config/production.toml.example:/etc/farmcontroller/config.toml:ro
+      - ./deploy/ssh_known_hosts:/etc/farmcontroller/ssh_known_hosts:ro
+      - /nfs_share:/nfs_share:rw
+      - /artifacts:/artifacts:rw
+      - /test-results:/test-results:rw
+      - /Racer_IPL_flash:/Racer_IPL_flash:rw
+      - tftp_data:/tftp_data:rw
+      - uploads:/var/lib/farmcontroller/uploads:rw
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./auth-service/db/init.sql:/docker-entrypoint-initdb.d/10-legacy-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "9000:8080"
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: ${DB_USER}
+      KC_DB_PASSWORD: ${DB_PASSWORD}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    volumes:
+      - ./auth-service/dev-realm-realm.json:/opt/keycloak/data/import/dev-realm-realm.json:ro
+      - ./auth-service/keycloak-providers:/opt/keycloak/providers:ro
+    command: ["start", "--import-realm", "--http-enabled=true"]
+
+  tftp-server:
+    image: pghalliday/tftp
+    restart: unless-stopped
+    ports:
+      - "69:69/udp"
+    volumes:
+      - tftp_data:/var/tftpboot:ro
+
+volumes:
+  postgres_data:
+  tftp_data:
+  uploads:

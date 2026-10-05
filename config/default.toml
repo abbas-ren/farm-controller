@@ -1,0 +1,131 @@
+[server]
+bind = "0.0.0.0:3000"
+request_body_limit_bytes = 10485760
+# Empty preserves the legacy permissive policy. Set exact browser origins in production.
+cors_allowed_origins = []
+
+[modules]
+enable = ["api", "metrics", "swagger", "health"]
+disable = []
+
+[auth]
+keycloak_url = "http://127.0.0.1:9000"
+realm = "dev-realm"
+client_id = "dev-auth"
+user_role = "user"
+default_user_password = "Renesas123"
+request_timeout_seconds = 10
+secure_cookies = true
+
+[database]
+max_connections = 20
+min_connections = 2
+acquire_timeout_seconds = 10
+idle_timeout_seconds = 600
+max_lifetime_seconds = 1800
+run_migrations = true
+
+[device]
+artifacts_base_url = ""
+artifacts_temp_dir = "./tmp/artifacts"
+nfs_host_path = "/nfs_share"
+tftp_output_dir = "./tftp_data"
+build_upload_dir = "./tmp/uploads"
+build_upload_max_bytes = 524288000
+build_artifacts_dir = "/artifacts"
+faulty_report_upload_dir = "./uploads/faulty-reports"
+faulty_report_max_bytes = 10485760
+server_ip = "127.0.0.1"
+request_timeout_seconds = 2
+terminal_username = "root"
+terminal_password = ""
+rtos_username = "hpcbdc"
+rtos_password = ""
+terminal_known_hosts_file = ""
+terminal_accept_unknown_host_keys = true
+ipl_artifacts_dir = "/Racer_IPL_flash"
+gen5_ipl_script = "/Racer_IPL_flash/gen5_ipl.sh"
+ipl_transfer_timeout_seconds = 120
+gen4_ipl_username = ""
+gen4_ipl_password = ""
+gen4_ipl_port = 22
+gen4_ipl_remote_path = "/home/hpcbdc/RACER_IPL"
+gen5_ipl_username = ""
+gen5_ipl_password = ""
+gen5_ipl_port = 22
+gen5_ipl_remote_path = "/home/racer/RACER_IPL"
+
+[workers]
+artifact_scan_poll_seconds = 60
+artifact_scan_request_timeout_seconds = 10
+artifact_scan_compute_sha256 = true
+artifact_scan_cleanup_removed = "delete"
+retention_interval_seconds = 3600
+retention_max_batches_per_policy = 10
+relay_sync_queue_capacity = 128
+relay_config_timeout_seconds = 300
+relay_config_poll_seconds = 10
+relay_config_batch_size = 100
+controller_heartbeat_timeout_seconds = 30
+controller_heartbeat_poll_seconds = 5
+controller_heartbeat_batch_size = 100
+device_heartbeat_poll_seconds = 1
+device_heartbeat_batch_size = 100
+device_action_stale_timeout_minutes = 120
+device_action_watchdog_poll_seconds = 60
+device_action_watchdog_batch_size = 100
+test_preparation_poll_seconds = 5
+test_preparation_lease_seconds = 600
+test_preparation_batch_size = 4
+device_action_poll_seconds = 5
+device_action_batch_size = 8
+gen5_mapping_poll_seconds = 10
+gen5_mapping_batch_size = 10
+gen5_mapping_request_timeout_seconds = 10
+gen5_mapping_max_window_minutes = 30
+gen5_reboot_poll_seconds = 30
+gen5_reboot_timeout_seconds = 120
+gen5_reboot_request_timeout_seconds = 10
+gen5_reboot_batch_size = 20
+
+[reports]
+test_results_dir = "/test-results"
+queue_capacity = 64
+report_base_url = ""
+confluence_url = ""
+confluence_pat = ""
+confluence_space = ""
+confluence_parent_title = ""
+confluence_subpage_title = ""
+confluence_timeout_seconds = 60
+
+[tests]
+test_rail_base_url = ""
+test_rail_api_version = ""
+test_rail_username = ""
+test_rail_api_key = ""
+test_rail_project_id = 0
+test_rail_timeout_seconds = 30
+qmetry_base_url = ""
+qmetry_api_key = ""
+jira_project_id = ""
+jira_base_url = ""
+jira_endpoint = "rest/api/2"
+jira_project_key = ""
+jira_api_token = ""
+jira_timeout_seconds = 30
+jira_script_base_url = ""
+qmetry_timeout_seconds = 30
+test_script_server = "gitlab"
+local_test_script_server_url = "http://127.0.0.1:8081"
+gitlab_base_url = ""
+gitlab_project_id = "2222"
+gitlab_access_token = ""
+gitlab_branch = "main"
+test_script_max_bytes = 10485760
+test_logs_dir = "../log_data/test/logs"
+
+[logging]
+level = "info"
+json = false
+stream = "stdout"
