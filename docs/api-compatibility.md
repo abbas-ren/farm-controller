@@ -8,7 +8,7 @@ Legend: `public` means the current route has no auth middleware, `user` means an
 
 ## Current checkout status
 
-Source of truth for mounted Rust device routes is `src/devices/routes.rs`; auth routes are in `src/auth.rs`; report routes are merged from `src/reports/mod.rs` when the Reports module is enabled; `/ws`, `/socket.io`, and `/api/v1/device/ws/send/message` are owned by `src/events/mod.rs`; operational routes are in `src/api/mod.rs`.
+Source of truth for mounted Rust device routes is `crates/service/src/devices/routes.rs`; auth routes are in `crates/service/src/auth/mod.rs`; report routes are merged from `crates/service/src/reports/mod.rs` when the Reports module is enabled; `/ws`, `/socket.io`, and `/api/v1/device/ws/send/message` are owned by `crates/service/src/events/mod.rs`; operational routes are in `crates/service/src/api/mod.rs`.
 
 The current checkout is buildable. Retained relay, analytics, notification, and faulty-report route groups are mounted, registered in OpenAPI, and have focused route-contract coverage.
 

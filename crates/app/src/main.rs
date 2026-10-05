@@ -1,3 +1,5 @@
+//! FarmController process composition and runtime lifecycle.
+
 use std::sync::Arc;
 
 use clap::Parser;

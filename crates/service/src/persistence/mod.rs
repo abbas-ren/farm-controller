@@ -14,7 +14,7 @@ use sqlx::{
 
 use crate::{config::DatabaseConfig, error::AppError, observability::Metrics};
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 #[derive(Clone)]
 pub struct Database {

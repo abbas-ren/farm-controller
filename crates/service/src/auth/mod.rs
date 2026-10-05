@@ -1,3 +1,4 @@
+mod constants;
 #[cfg(test)]
 pub mod tests;
 
@@ -16,11 +17,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use utoipa::ToSchema;
 
 use crate::{config::AuthConfig, error::AppError, events::ServerEvent, state::AppState};
-
-const SIGNIN_SUCCESS: &str = "You have successfully signed in.";
-const INVALID_CREDENTIALS: &str = "Invalid username or password";
-const SESSION_EXPIRED: &str = "Your session has expired. Please log in again.";
-const FORBIDDEN: &str = "You do not have permission to perform this action.";
+use constants::{FORBIDDEN, INVALID_CREDENTIALS, SESSION_EXPIRED, SIGNIN_SUCCESS};
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

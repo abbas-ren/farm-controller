@@ -2,7 +2,7 @@
 
 This is the persistent execution checklist for the single-process Rust migration. `prompt.md` is authoritative. This document records verified implementation evidence; it does not prove completion by itself.
 
-Last reconciled: 2026-10-02
+Last reconciled: 2026-10-05
 
 ## Status legend
 
@@ -13,27 +13,28 @@ Last reconciled: 2026-10-02
 
 ## Handoff baseline
 
-This is the authoritative current-session snapshot for a new agent. The Farm-Controller root is **not a Git worktree** (`git status` returns “not a git repository”), so an exact Git diff or changed-file list cannot be produced. Treat current files as source of truth and do not revert unknown edits. Reconciliation used complete reads of `prompt.md`, `docs/database-migration.md`, `docs/migration-matrix.md`, current Rust/legacy/frontend/EdgeController source, diagnostics, and executable checks.
+This is the authoritative implementation ledger. The FarmController root is a Git worktree; preserve unrelated user changes when reconciling future work. Reconciliation used the current Rust source, migration and compatibility documents, diagnostics, and executable checks.
 
 `docs/migration-matrix.md` remains useful as the original component/configuration inventory, but many row statuses predate the current implementation. Use this document and `docs/api-compatibility.md` for current status, and verify both against source before changing code.
 
 Current stage: **Local implementation parity is complete.** Gateway, auth, device, report, worker, and event behavior has been source-audited against the active legacy paths. Remaining work requires live infrastructure, deployment/consumer validation, or is explicitly tracked refactoring and database-modernization debt.
 
-Current checkout health (2026-10-02):
+Current checkout health (2026-10-05):
 
 - **PASS** `cargo fmt --all -- --check`.
-- **PASS** `cargo check --all-targets --all-features`.
-- **PASS** `cargo clippy --all-targets --all-features -- -D warnings`.
-- **PASS** full tests: 146 passed, 0 failed, with 2 ignored PostgreSQL migration tests requiring `TEST_DATABASE_URL`.
+- **PASS** `cargo check --workspace --all-targets --all-features`.
+- **PASS** `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+- **PASS** full workspace tests: 148 passed, 0 failed. Live PostgreSQL coverage still requires `TEST_DATABASE_URL`.
 - Editor diagnostics additionally report legacy TypeScript setup issues: missing Jest types and deprecated `baseUrl`/`moduleResolution` options in `device-service/tsconfig.json`. These are legacy-tooling issues, not Rust errors.
 
 ## Current implementation map
 
 Migration-created/current Rust surfaces include:
 
-- Runtime/core: `Cargo.toml`, `rust-toolchain.toml`, `config/default.toml`, `src/{main,lib,cli,config,error,state,api,observability,persistence,workers,events}.rs`.
-- Auth/reports/integrations: `src/auth.rs`, `src/reports`, `src/test_catalog.rs`, `src/qmetry_catalog.rs`.
-- Device root and routing: `src/devices.rs`, `src/devices/{routes,repository,repository_types,types,error,constants,validation}.rs`.
+- Workspace/runtime: `Cargo.toml`, `crates/app`, `crates/core`, `crates/integrations`, and `crates/service`.
+- Auth/reports/stateful features: `crates/service/src/{auth,reports,api,state,persistence,observability,workers,events}`.
+- External adapters: `crates/integrations/src/{test_catalog,qmetry_catalog,jira.rs}`.
+- Device root and routing: `crates/service/src/devices/{mod,routes,repository,repository_types,types,error,constants,validation}.rs`.
 - Device registration/controller/callback/heartbeat: `device_registration_*`, `registration_store.rs`, `controller_store.rs`, `callback_store.rs`, `heartbeat_store.rs`, `flashing_*`, `test_completion_*`.
 - Builds/uploads/artifacts: `build_handlers.rs`, `build_store.rs`, `build_ingestion.rs`, `tus_handlers.rs`, `tus_store.rs`, `artifact_handlers.rs`, `artifacts.rs`, `csv_export.rs`, `device_export_*`.
 - Tests/reports/catalog: `test_execution_handlers.rs`, `test_export.rs`, `test_export_handlers.rs`, `test_catalog_handlers.rs`.
@@ -142,7 +143,7 @@ Remaining:
 
 - [x] Record implemented architecture and open decisions in `docs/architecture-decisions.md`.
 - [x] Add the final `docs/architecture.md` developer-facing dependency/ownership guide required by `prompt.md`.
-- [ ] Further split oversized `src/auth/mod.rs` (~1,679 lines), `src/reports/mod.rs` (~989 lines), remaining mixed `src/devices/mod.rs` (~3,170 lines), and `test_execution_handlers.rs` (~1,265 lines) as their stages are touched.
+- [ ] Further split oversized `crates/service/src/auth/mod.rs` (~1,740 lines), `crates/service/src/reports/mod.rs` (~1,630 lines), `crates/service/src/devices/mod.rs` (~3,490 lines), and `crates/service/src/devices/test_execution_handlers.rs` (~1,390 lines) with focused contract tests.
 - [x] Define an AppState-owned event transport boundary with bounded observation and lifecycle-owned Socket.IO delivery.
 - [x] Avoid detached tasks without lifecycle ownership; task spawns are owned by startup signal handling, reports, or `WorkerManager`, including bounded relay synchronization.
 
@@ -150,7 +151,7 @@ Remaining:
 
 Status: `[-]` implemented and validated, but stage documentation remains incomplete.
 
-- [x] Cargo package, one binary, and one listener.
+- [x] Cargo workspace, one binary, and one listener.
 - [x] Clap CLI with repeated/comma-separated `--enable` and `--disable`.
 - [x] TOML, environment, and CLI configuration loading.
 - [x] Structured error responses and request IDs.
@@ -161,7 +162,7 @@ Status: `[-]` implemented and validated, but stage documentation remains incompl
 - [x] Selectable stdout/stderr/off stream logging sink.
 - [x] Bootstrap/configuration/development documentation.
 
-Evidence: `src/main.rs`, `src/cli.rs`, `src/config/mod.rs`, `src/api/mod.rs`, `src/observability.rs`.
+Evidence: `crates/app/src/main.rs`, `crates/core/src/cli.rs`, `crates/core/src/config/mod.rs`, `crates/service/src/api/mod.rs`, `crates/service/src/observability.rs`.
 
 ### Step 5 - Core infrastructure
 
@@ -320,7 +321,7 @@ Status: `[-]` incremental suite exists; full matrix is incomplete.
 Current automated evidence (2026-10-02):
 
 - [x] `cargo fmt --all -- --check` passes.
-- [x] `cargo check --all-targets --all-features` passes.
+- [x] `cargo check --workspace --all-targets --all-features` passes.
 - [x] Strict Clippy passes with `-D warnings`.
 - [x] Full tests pass: 146 passed, 0 failed, 2 PostgreSQL integration tests ignored for missing `TEST_DATABASE_URL`.
 - [x] Unit tests cover configuration, parsers, retention safety, auth provider flows, device wire contracts, relay validation/mapping, analytics, notification, faulty-report, Socket.IO producer contracts, reports, and worker shutdown.
@@ -388,8 +389,8 @@ No speculative extension should displace missing legacy behavior. Any later exte
 
 ## Architecture and refactoring debt
 
-- `src/devices.rs` still combines the PostgreSQL repository implementation, many handlers, helpers, and tests.
-- `src/auth/mod.rs` and `src/reports/mod.rs` remain oversized mixed-responsibility modules.
+- `crates/service/src/devices/mod.rs` still combines the PostgreSQL repository implementation, compatibility handlers, and private helpers.
+- `crates/service/src/auth/mod.rs` and `crates/service/src/reports/mod.rs` remain oversized mixed-responsibility modules.
 - Relay hardware synchronization is lifecycle-owned by a bounded cancellable worker; durable retry policy remains open.
 - Transient report queue/status state remains in memory by legacy design; durable execution report state is synchronized to PostgreSQL.
 - The log API is mounted and tested, but live legacy-shaped PostgreSQL enum/table compatibility remains blocked by the unavailable test database.

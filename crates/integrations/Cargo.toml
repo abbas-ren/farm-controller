@@ -1,0 +1,26 @@
+[package]
+name = "farmcontroller-integrations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "FarmController adapters for external test and issue-management systems"
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+farmcontroller-core = { path = "../core" }
+futures-util.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock.workspace = true

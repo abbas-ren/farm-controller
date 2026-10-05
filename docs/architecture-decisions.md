@@ -2,7 +2,7 @@
 
 This document records decisions already reflected in the current Rust migration. It is descriptive, not proof of completion. `prompt.md` remains authoritative, and implementation status is tracked in `docs/rust-migration-progress.md` and `docs/api-compatibility.md`.
 
-Last reconciled against source: 2026-10-02
+Last reconciled against source: 2026-10-05
 
 ## Status vocabulary
 
@@ -12,9 +12,9 @@ Last reconciled against source: 2026-10-02
 
 ## Unified Rust service architecture
 
-**Decision: Accepted.** FarmController is one Cargo package, one `farmcontroller` binary, one Tokio runtime, one `AppState`, and one Axum listener. The listener conditionally mounts auth, device, reports, events, metrics, Swagger, health, and readiness routes. Internal Rust domains call providers/repositories directly rather than recreating legacy service-to-service HTTP hops.
+**Decision: Accepted.** FarmController is one Cargo workspace with four responsibility-driven packages, one `farmcontroller` binary, one Tokio runtime, one `AppState`, and one Axum listener. The listener conditionally mounts auth, device, reports, events, metrics, Swagger, health, and readiness routes. Internal Rust domains call providers/repositories directly rather than recreating legacy service-to-service HTTP hops.
 
-Evidence: `src/main.rs`, `src/api/mod.rs`, `src/state.rs`, `src/lib.rs`.
+Evidence: `Cargo.toml`, `crates/app/src/main.rs`, `crates/service/src/api/mod.rs`, `crates/service/src/state.rs`, `crates/service/src/lib.rs`.
 
 Consequences:
 
@@ -24,15 +24,15 @@ Consequences:
 
 ## Module and package organization
 
-**Decision: Accepted with debt.** Top-level domains are currently `auth`, `devices`, `reports`, `events`, `workers`, `persistence`, `observability`, TestRail (`test_catalog`), and Qmetry (`qmetry_catalog`). Device work is progressively split into handlers, DTOs, validation, stores, repository types, and routes under `src/devices/`.
+**Decision: Accepted with debt.** `farmcontroller-core` owns configuration, CLI types, shared startup errors, and outbound HTTP policy. `farmcontroller-integrations` owns TestRail/GitLab, Qmetry, and Jira adapters. `farmcontroller` owns the stateful API, auth, devices, reports, events, workers, persistence, and observability. `farmcontroller-app` owns process composition. Device work is progressively split into handlers, DTOs, validation, stores, repository types, and routes under `crates/service/src/devices/`.
 
-**Debt:** `src/devices/mod.rs` (~3,170 lines), `src/auth/mod.rs` (~1,679), `src/reports/mod.rs` (~989), and `src/devices/test_execution_handlers.rs` (~1,265) remain mixed-responsibility hotspots. Refactoring must preserve wire contracts and should occur with the owning migration slice, not as an unrelated rewrite.
+**Debt:** `crates/service/src/devices/mod.rs` (~3,490 lines), `crates/service/src/auth/mod.rs` (~1,740), `crates/service/src/reports/mod.rs` (~1,630), and `crates/service/src/devices/test_execution_handlers.rs` (~1,390) remain mixed-responsibility hotspots. Their private helpers cross repository and compatibility-handler boundaries, so further splitting must preserve wire contracts and occur with focused behavior tests.
 
 ## Dependency injection and external boundaries
 
 **Decision: Accepted.** `AppState` owns optional trait-backed providers for identity, device persistence, TestRail, Qmetry, reports, database, metrics, and configuration. Traits are used at genuine external boundaries rather than for every helper.
 
-Evidence: `src/state.rs`, `src/auth.rs`, `src/devices/repository.rs`, `src/test_catalog.rs`, `src/qmetry_catalog.rs`, `src/reports/mod.rs`.
+Evidence: `crates/service/src/state.rs`, `crates/service/src/auth/mod.rs`, `crates/service/src/devices/repository.rs`, `crates/integrations/src/test_catalog/mod.rs`, `crates/integrations/src/qmetry_catalog/mod.rs`, `crates/service/src/reports/mod.rs`.
 
 **Provisional:** the device repository trait is very broad. It currently centralizes legacy PostgreSQL behavior but may later split by domain once route parity and live-schema validation are complete.
 
@@ -113,7 +113,7 @@ Four additive migrations exist:
 
 **Decision: Accepted.** Runtime modules are `api`, `auth`, `device`, `reports`, `workers`, `events`, `metrics`, `swagger`, and `health`. Repeated/comma-separated `--enable` and `--disable` flags are supported. Precedence is defaults/config deserialization, environment, then CLI overrides; environment nesting uses `FARMCONTROLLER__...`.
 
-Configuration is centralized in `src/config/mod.rs` for server, modules, Keycloak, database, device/artifacts/uploads, workers, reports/Confluence, TestRail, Qmetry, test logs, and logging. Startup validates module dependencies, secrets, database requirements, sizes, and timeouts.
+Configuration is centralized in `crates/core/src/config/mod.rs` for server, modules, Keycloak, database, device/artifacts/uploads, workers, reports/Confluence, TestRail, Qmetry, test logs, and logging. Startup validates module dependencies, secrets, database requirements, sizes, and timeouts.
 
 ## Deployment decisions
 

@@ -1,0 +1,22 @@
+[package]
+name = "farmcontroller-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shared FarmController configuration, errors, and outbound HTTP policy"
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+config.workspace = true
+prometheus.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

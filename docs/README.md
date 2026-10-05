@@ -1,41 +1,39 @@
-# Website
+# FarmController Documentation
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+## Architecture and implementation
 
-## Installation
+- [Architecture](architecture.md): crates, dependency direction, runtime flow,
+  boundaries, persistence, errors, and observability.
+- [Architecture decisions](architecture-decisions.md): accepted decisions,
+  compatibility constraints, and intentional debt.
+- [Rearchitecture report](rearchitecture.md): before/after structure, completed
+  work, validation, limitations, and recommended improvements.
+- [Development](development.md): workspace commands, focused tests, and coding
+  constraints.
 
-```bash
-yarn
-```
+## API and compatibility
 
-## Local Development
+- [API](api.md): endpoint and protocol documentation.
+- [API compatibility](api-compatibility.md): legacy wire contracts and source of
+  truth.
+- [Compatibility](compatibility.md): broader consumer compatibility policy.
+- [Migration matrix](migration-matrix.md): implementation and verification ledger.
 
-```bash
-yarn start
-```
+## Configuration and operations
 
-This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
+- [Configuration](configuration.md): TOML, environment, CLI, defaults, and
+  validation.
+- [Deployment](deployment.md): Linux/container deployment and rollback.
+- [Observability](observability.md): tracing, metrics, dashboards, and safe labels.
+- [Troubleshooting](troubleshooting.md): operational diagnosis.
 
-## Build
+## Database and migration history
 
-```bash
-yarn build
-```
+- [Database migration](database-migration.md): schema safety and preflight rules.
+- [Migration](migration.md): cutover and rollback workflow.
+- [Rust migration progress](rust-migration-progress.md): detailed historical
+  implementation ledger.
 
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
-
-## Deployment
-
-Using SSH:
-
-```bash
-USE_SSH=true yarn deploy
-```
-
-Not using SSH:
-
-```bash
-GIT_USER=<Your GitHub username> yarn deploy
-```
-
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+Historical migration documents remain useful evidence. When they conflict with
+current build or source paths, the root README, architecture document, Cargo
+manifests, and generated OpenAPI are authoritative.

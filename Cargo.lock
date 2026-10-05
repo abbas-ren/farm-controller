@@ -1302,8 +1302,9 @@ dependencies = [
  "bzip2",
  "chrono",
  "clap",
- "config",
  "csv",
+ "farmcontroller-core",
+ "farmcontroller-integrations",
  "futures-util",
  "http-body-util",
  "percent-encoding",
@@ -1335,6 +1336,54 @@ dependencies = [
  "uuid",
  "wiremock",
  "zip 7.2.0",
+]
+
+[[package]]
+name = "farmcontroller-app"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "farmcontroller",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "farmcontroller-core"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "config",
+ "prometheus",
+ "reqwest",
+ "serde",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "utoipa",
+]
+
+[[package]]
+name = "farmcontroller-integrations"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "farmcontroller-core",
+ "futures-util",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "wiremock",
 ]
 
 [[package]]

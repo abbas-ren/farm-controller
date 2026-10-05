@@ -1,20 +1,16 @@
 pub mod api;
 pub mod auth;
-pub mod cli;
-pub mod config;
 pub mod devices;
-pub mod error;
 pub mod events;
-pub mod external_http;
-pub mod jira;
 pub mod observability;
 pub mod persistence;
-pub mod qmetry_catalog;
 pub mod reports;
 pub mod state;
-pub mod test_catalog;
 pub mod test_results;
 pub mod workers;
+
+pub use farmcontroller_core::{cli, config, error, external_http};
+pub use farmcontroller_integrations::{jira, qmetry_catalog, test_catalog};
 
 use std::sync::Arc;
 

@@ -1,0 +1,20 @@
+[package]
+name = "farmcontroller-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "FarmController process composition and server lifecycle"
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "farmcontroller"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+farmcontroller = { path = "../service" }
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
