@@ -53,6 +53,11 @@ pub(super) async fn decode_empty_response(response: Response) -> Result<(), Iden
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ClientTokenResponse {
+    pub(super) access_token: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct TokenResponse {
     pub(super) access_token: String,
     pub(super) refresh_token: String,

@@ -18,7 +18,6 @@ async fn keycloak_signin_preserves_frontend_user_shape() {
         .and(body_string_contains("grant_type=client_credentials"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": "admin-token",
-            "refresh_token": "unused",
             "expires_in": 900
         })))
         .mount(&server)

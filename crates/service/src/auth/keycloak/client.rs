@@ -40,10 +40,10 @@ impl KeycloakIdentityProvider {
         })
     }
 
-    pub(super) async fn token_request(
+    pub(super) async fn token_request<T: DeserializeOwned>(
         &self,
         form: &[(&str, &str)],
-    ) -> Result<transport::TokenResponse, IdentityError> {
+    ) -> Result<T, IdentityError> {
         let url = self.endpoint(&format!(
             "realms/{}/protocol/openid-connect/token",
             self.config.realm
@@ -59,7 +59,7 @@ impl KeycloakIdentityProvider {
     }
 
     pub(super) async fn client_token(&self) -> Result<String, IdentityError> {
-        let response = self
+        let response: transport::ClientTokenResponse = self
             .token_request(&[
                 ("grant_type", "client_credentials"),
                 ("client_id", &self.config.client_id),
@@ -112,7 +112,7 @@ impl KeycloakIdentityProvider {
         &self,
         refresh_token: &str,
     ) -> Result<RefreshedTokens, IdentityError> {
-        let response = self
+        let response: transport::TokenResponse = self
             .token_request(&[
                 ("grant_type", "refresh_token"),
                 ("client_id", &self.config.client_id),
