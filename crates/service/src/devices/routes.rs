@@ -64,7 +64,10 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
             "/controller/{id}",
             axum::routing::put(edit_controller).delete(delete_controller),
         )
-        .route("/controller/", post(register_controller))
+        .route(
+            "/controller/",
+            get(list_controllers).post(register_controller),
+        )
         .route("/mapping-gen5", post(mapping_gen5))
         .route("/flash-confirm", get(flash_confirm))
         .route("/flash-confirm-gen4", get(flash_confirm_gen4))

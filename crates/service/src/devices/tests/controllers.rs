@@ -86,6 +86,38 @@ async fn edgecontroller_registration_is_create_then_idempotent_update() {
 }
 
 #[tokio::test]
+async fn controller_list_accepts_optional_trailing_slash() {
+    let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
+    let state = AppState::with_identity_provider(
+        AppConfig::load(&cli).unwrap(),
+        Metrics::new().unwrap(),
+        Arc::new(AcceptingIdentityProvider),
+    )
+    .with_device_repository(Arc::new(RegistrationRepository {
+        calls: AtomicUsize::new(0),
+        callbacks: Mutex::new(Vec::new()),
+    }));
+    let app = api::router(Arc::new(state));
+
+    for path in [
+        "/api/v1/device/controller?search=&page=1&limit=20",
+        "/api/v1/device/controller/?search=&page=1&limit=20",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("authorization", "Bearer access-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "path: {path}");
+    }
+}
+
+#[tokio::test]
 async fn registration_request_publishes_pending_user_frontend_event() {
     let mut config = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
     config.modules.enabled.insert(crate::config::Module::Auth);
