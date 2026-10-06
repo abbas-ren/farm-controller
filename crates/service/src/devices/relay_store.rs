@@ -47,7 +47,7 @@ pub(crate) async fn apply_device_power(
     let mut transaction = pool.begin().await?;
     if let Some(channel_id) = channel_id {
         sqlx::query(
-            r#"UPDATE relay_channels SET state = $2, "updatedAt" = now()
+            r#"UPDATE relay_channels SET state = $2::"enum_relay_channels_state", "updatedAt" = now()
                WHERE id = $1 AND "deletedAt" IS NULL"#,
         )
         .bind(channel_id)
@@ -56,7 +56,7 @@ pub(crate) async fn apply_device_power(
         .await?;
     }
     let updated = sqlx::query(
-        r#"UPDATE devices SET power = $2, "updatedAt" = now()
+        r#"UPDATE devices SET power = $2::"enum_devices_power", "updatedAt" = now()
            WHERE "deviceId" = $1 AND "deletedAt" IS NULL"#,
     )
     .bind(device_id)
@@ -219,7 +219,7 @@ pub(crate) async fn update_state(
     state: &str,
 ) -> Result<(), DeviceRepositoryError> {
     sqlx::query(
-        r#"UPDATE relay_channels SET state = $2, "updatedAt" = now()
+        r#"UPDATE relay_channels SET state = $2::"enum_relay_channels_state", "updatedAt" = now()
            WHERE id = $1 AND "deletedAt" IS NULL"#,
     )
     .bind(channel_id)

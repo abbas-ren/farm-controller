@@ -22,9 +22,12 @@ pub(crate) async fn mark_device_flashing(
 ) -> Result<Option<DeviceFlashingResult>, DeviceRepositoryError> {
     let mut transaction = pool.begin().await?;
     let device = sqlx::query_as::<_, FlashingDevice>(
-        r#"SELECT state::text AS state, "softwareVersion" AS software_version,
-                  upgrading, flashing, "deviceFamily" AS device_family,
-                  "macAddress" AS mac_address
+        r#"SELECT COALESCE(state::text, 'unknown') AS state,
+              "softwareVersion" AS software_version,
+              COALESCE(upgrading, false) AS upgrading,
+              COALESCE(flashing, false) AS flashing,
+              "deviceFamily" AS device_family,
+              COALESCE(NULLIF("macAddress", ''), "deviceId") AS mac_address
            FROM devices WHERE "deviceId" = $1 AND "deletedAt" IS NULL FOR UPDATE"#,
     )
     .bind(device_id)

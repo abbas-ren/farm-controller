@@ -24,7 +24,8 @@ impl PostgresDeviceRepository {
                 Option<String>,
             ),
         >(
-            r#"SELECT COALESCE(execution."cancelRequested", false), execution.status::text,
+            r#"SELECT COALESCE(execution."cancelRequested", false),
+                      COALESCE(execution.status::text, 'not_executed'),
                       execution."buildId"::text, execution."executionPhase"::text,
                       execution."deviceId", execution."deviceType", execution."buildVersion",
                       execution."testCycleId", device."ipAddress", device."nfsPath",

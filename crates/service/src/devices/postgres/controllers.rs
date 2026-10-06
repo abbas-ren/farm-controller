@@ -7,8 +7,9 @@ impl ControllerRepository for PostgresDeviceRepository {
         device_id: &str,
     ) -> Result<Option<DeviceActionTarget>, DeviceRepositoryError> {
         Ok(sqlx::query_as::<_, (String, String, String)>(
-            r#"SELECT "deviceId", "ipAddress", status::text
-               FROM devices WHERE "deviceId" = $1 AND "deletedAt" IS NULL"#,
+            r#"SELECT "deviceId", "ipAddress", COALESCE(status::text, 'requested')
+                    FROM devices WHERE "deviceId" = $1 AND "deletedAt" IS NULL
+                      AND "ipAddress" IS NOT NULL"#,
         )
         .bind(device_id)
         .fetch_optional(&self.pool)
@@ -226,7 +227,8 @@ impl ControllerRepository for PostgresDeviceRepository {
         device_id: &str,
     ) -> Result<Option<DeviceDeleteTarget>, DeviceRepositoryError> {
         Ok(sqlx::query_as::<_, DeviceDeleteTarget>(
-            r#"SELECT d."ipAddress" AS ip_address, d."deviceFamily" AS device_family,
+            r#"SELECT COALESCE(d."ipAddress", '') AS ip_address,
+                 d."deviceFamily" AS device_family,
                  COALESCE(r."deviceControllerId", d."controllerId") AS controller_id,
                  dc."ipAddress" AS controller_ip, r."serialNumber" AS relay_serial,
                  rc."channelNumber" AS relay_channel

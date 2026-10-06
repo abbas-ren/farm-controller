@@ -158,7 +158,7 @@ pub(crate) async fn update_status(
     let mut transaction = pool.begin().await?;
     let report = sqlx::query_scalar::<_, serde_json::Value>(
         r#"UPDATE faulty_reports
-           SET status = $2, "updatedAt" = now()
+              SET status = $2::"enum_faulty_reports_status", "updatedAt" = now()
            WHERE id = $1
            RETURNING to_jsonb(faulty_reports)"#,
     )

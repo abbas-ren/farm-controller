@@ -40,7 +40,7 @@ Migration-created/current Rust surfaces include:
 - Tests/reports/catalog: `test_execution_handlers/`, `test_export.rs`, `test_export_handlers.rs`, and `test_catalog_handlers.rs`.
 - Relays: `relay_handlers/`, `relay_store.rs`, `relay_configuration_store.rs`, and `legacy_relay_store.rs`.
 - Analytics, notifications, faulty reports, and logs: dedicated `*_handlers.rs`/`*_store.rs` modules with repository methods and focused route tests.
-- Database: `migrations/0001_*`, `0002_*`, `0003_*`, `0004_*`, and `migrations/preflight/legacy_schema_audit.sql`; a live migration/repository test harness remains pending.
+- Database: `migrations/0001_*` through `0005_*` and `migrations/preflight/legacy_schema_audit.sql`; a live migration/repository test harness remains pending.
 
 Rust deployment deliverables are `Dockerfile.rust`, `docker-compose.rust.yml`, `deploy/systemd`, production configuration examples, and `dashboards/farmcontroller.json`. Root legacy deploy/Docker/Nginx assets remain available for rollback.
 
@@ -371,6 +371,7 @@ No speculative extension should displace missing legacy behavior. Any later exte
 | `0002_schema_evidence_and_indexes.sql` | Applied by SQLx; unit-discovered | Conditional indexes and corrected heartbeat evidence |
 | `0003_pending_relay_configuration.sql` | Applied by SQLx; unit-discovered | Additive pending relay state and indexes |
 | `0004_gen5_reboot_attempts.sql` | Applied by SQLx; unit-discovered | Durable bounded Gen5 reboot recovery state and indexes |
+| `0005_legacy_schema_compatibility.sql` | Applied by SQLx; unit-discovered | Conditional controller soft-delete support and corrected alerts retention metadata |
 | Legacy schema preflight | Script/document ready | Must run against production clone |
 | Live empty/legacy migration tests | Not started | Harness implementation and a disposable database ending in `_test` via `TEST_DATABASE_URL` are required |
 | High-growth heartbeat/metric partitioning | Not started | Requires production-shaped sizes/plans |
@@ -444,7 +445,7 @@ After each completed slice:
 
 ## Database handoff
 
-Completed: SQLx pool/readiness/migration bootstrap, additive `0001`-`0004`, preflight audit script, disabled retention policies, conditional evidence-backed indexes, pending relay and Gen5 reboot state, static parameterized repository SQL, and guarded migration tests.
+Completed: SQLx pool/readiness/migration bootstrap, additive `0001`-`0005`, preflight audit script, disabled retention policies, conditional evidence-backed indexes, pending relay and Gen5 reboot state, legacy-schema compatibility corrections, static parameterized repository SQL, and guarded migration tests.
 
 Remaining/blocked: production-clone preflight, live empty/legacy migration tests, repository integration/concurrency/rollback/constraint tests, duplicate/orphan catalog evidence, query plans, partitioning, data normalization, foreign-key/uniqueness rollout, retention approval/archive/restore evidence, and release-specific rollback artifacts. Rust migrations intentionally do not recreate legacy Sequelize domain tables.
 

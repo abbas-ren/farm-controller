@@ -92,6 +92,7 @@ pub(crate) async fn test_execution_analytics(
         r#"SELECT te."createdAt" AS created_at, tc.result::text AS result
            FROM test_executions te JOIN testcase tc ON tc."executionId" = te."testId"
            WHERE te."createdBy" = $1
+                         AND tc.result IS NOT NULL
              AND te.status::text NOT IN ('cancelled', 'queued', 'not_executed', 'failed')"#,
     )
     .bind(user_id)

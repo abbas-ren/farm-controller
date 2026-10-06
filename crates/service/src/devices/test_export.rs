@@ -8,12 +8,13 @@ pub(crate) async fn rows(
     user_id: &str,
 ) -> Result<Vec<TestExportRow>, DeviceRepositoryError> {
     Ok(sqlx::query_as::<_, TestExportRow>(
-        r#"SELECT te."testPlanName" AS test_plan_name, te.status::text,
-                  d."deviceType" AS device_type, te."startedAt" AS started_at,
-                  te."endedAt" AS ended_at, te."testCycleId" AS test_cycle_id,
-                  count(tc.id) AS total,
-                  count(tc.id) FILTER (WHERE tc.result::text = 'PASS') AS passed,
-                  count(tc.id) FILTER (WHERE tc.result::text = 'FAIL') AS failed
+        r#"SELECT COALESCE(te."testPlanName", '') AS test_plan_name,
+             COALESCE(te.status::text, 'not_executed') AS status,
+             d."deviceType" AS device_type, te."startedAt" AS started_at,
+             te."endedAt" AS ended_at, te."testCycleId" AS test_cycle_id,
+             count(tc.id) AS total,
+             count(tc.id) FILTER (WHERE tc.result::text = 'PASS') AS passed,
+             count(tc.id) FILTER (WHERE tc.result::text = 'FAIL') AS failed
            FROM test_executions te
            LEFT JOIN devices d ON d."deviceId" = te."deviceId"
            LEFT JOIN testcase tc ON tc."executionId" = te."testId"

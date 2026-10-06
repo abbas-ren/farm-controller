@@ -70,6 +70,7 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sqlx::Err
            JOIN releases release ON release.id::text = fallback."releaseId"::text
            WHERE fallback.status::text = 'pending'
              AND device.status::text = 'approved' AND device."deletedAt" IS NULL
+                         AND device."ipAddress" IS NOT NULL AND device."deviceType" IS NOT NULL
            ORDER BY fallback."createdAt" ASC
            LIMIT 1 FOR UPDATE OF fallback SKIP LOCKED"#,
     )

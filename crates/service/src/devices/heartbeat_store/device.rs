@@ -19,7 +19,7 @@ pub(crate) async fn record_device(
     let interface_statuses = interface::parse_interface_statuses(&heartbeat_data);
     let mut transaction = pool.begin().await?;
     let device = sqlx::query_as::<_, (String, bool)>(
-        r#"SELECT device.state::text,
+        r#"SELECT COALESCE(device.state::text, 'unknown'),
                   (EXISTS (SELECT 1 FROM device_action_queue action
                            WHERE action."targetDeviceId" = device."deviceId"
                              AND action.status::text IN ('queued', 'waiting', 'running'))

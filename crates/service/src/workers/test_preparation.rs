@@ -105,13 +105,16 @@ async fn claim(state: &AppState) -> Result<Option<Preparation>, sqlx::Error> {
                RETURNING execution.*
            )
            SELECT claimed."testId" AS test_id, claimed."deviceType" AS device_type,
-                  claimed."buildId"::text AS build_id, claimed."buildVersion" AS build_version,
+                claimed."buildId"::text AS build_id,
+                COALESCE(claimed."buildVersion", release.version) AS build_version,
                   claimed."testPlanId"::bigint AS test_plan_id,
-                  claimed."testPlanName" AS test_plan_name, claimed.name,
-                  claimed."isAllSelected" AS is_all_selected,
-                  claimed."createdBy" AS created_by,
+                COALESCE(claimed."testPlanName", '') AS test_plan_name,
+                COALESCE(claimed.name, claimed."testId") AS name,
+                COALESCE(claimed."isAllSelected", false) AS is_all_selected,
+                COALESCE(claimed."createdBy", 'system') AS created_by,
                   claimed."testCycleId" AS test_cycle_id, release.artifacts
-           FROM claimed JOIN releases release ON release.id = claimed."buildId""#,
+           FROM claimed
+           JOIN releases release ON release.id::text = claimed."buildId"::text"#,
     )
     .bind(lease_seconds)
     .fetch_optional(database.pool())
@@ -121,7 +124,8 @@ async fn claim(state: &AppState) -> Result<Option<Preparation>, sqlx::Error> {
 async fn prepare(state: &AppState, mut preparation: Preparation) -> Result<ServerEvent, String> {
     let database = state.database.as_ref().expect("worker requires database");
     let cases = sqlx::query_as::<_, PreparationCase>(
-        r#"SELECT "testCaseId"::bigint AS test_case_id, "scriptFile" AS script_file
+        r#"SELECT "testCaseId"::bigint AS test_case_id,
+              COALESCE("scriptFile", '') AS script_file
            FROM testcase WHERE "executionId" = $1 ORDER BY "suiteId", id"#,
     )
     .bind(&preparation.test_id)
@@ -280,7 +284,7 @@ async fn mark_failed(state: &AppState, test_id: &str, error: &str) -> Option<Ser
            SET status = 'failed', "executionPhase" = 'COMPLETE_FAILED',
                "endedAt" = now(), "updatedAt" = now()
            WHERE "testId" = $1
-           RETURNING "createdBy", "buildId"::text"#,
+           RETURNING COALESCE("createdBy", 'system'), "buildId"::text"#,
     )
     .bind(test_id)
     .fetch_optional(database.pool())

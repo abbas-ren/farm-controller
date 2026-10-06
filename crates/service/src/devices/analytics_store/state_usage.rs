@@ -26,9 +26,10 @@ pub(crate) async fn device_state_counts(
     pool: &PgPool,
 ) -> Result<DeviceStateAnalytics, DeviceRepositoryError> {
     let rows = sqlx::query_as::<_, StateCountRow>(
-        r#"SELECT state::text AS state, count(*) AS count
+        r#"SELECT COALESCE(state::text, 'unknown') AS state, count(*) AS count
            FROM devices WHERE status::text = 'approved' AND "deletedAt" IS NULL
-           GROUP BY state ORDER BY state::text ASC"#,
+              GROUP BY COALESCE(state::text, 'unknown')
+              ORDER BY COALESCE(state::text, 'unknown') ASC"#,
     )
     .fetch_all(pool)
     .await?;
@@ -44,7 +45,7 @@ pub(crate) async fn device_state_details(
     let rows = sqlx::query_as::<_, StateDetailRow>(
         r#"SELECT COALESCE("deviceFamily", 'Unknown') AS device_family,
              "deviceId" AS device_id, COALESCE("deviceType", 'Unknown') AS device_type,
-             state::text AS state
+             COALESCE(state::text, 'unknown') AS state
            FROM devices WHERE status::text = 'approved' AND "deletedAt" IS NULL
            ORDER BY COALESCE("deviceFamily", 'Unknown') ASC, "deviceId" ASC"#,
     )

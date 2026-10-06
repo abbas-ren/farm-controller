@@ -40,12 +40,13 @@ Evidence: `crates/service/src/state.rs`, `crates/service/src/auth/provider.rs`, 
 
 **Decision: Accepted.** PostgreSQL remains the persistence engine. SQLx uses the existing public legacy table/column names initially; the migration does not recreate or casually redesign the Sequelize domain schema. Static parameterized SQL and explicit transactions are preferred.
 
-Four additive migrations exist:
+Five additive migrations exist:
 
 1. `0001_persistence_control_plane.sql`: `farmcontroller` schema, evidence inventory, disabled retention policies.
 2. `0002_schema_evidence_and_indexes.sql`: corrected heartbeat evidence and conditional indexes.
 3. `0003_pending_relay_configuration.sql`: durable pending relay configuration state.
 4. `0004_gen5_reboot_attempts.sql`: durable Gen5 reboot-attempt and grace-period state.
+5. `0005_legacy_schema_compatibility.sql`: conditional controller soft-delete support and corrected alerts retention metadata.
 
 `migrations/preflight/legacy_schema_audit.sql` and `docs/database-migration.md` define the safety boundary. Domain DDL is intentionally assumed from an upgraded legacy deployment until production-catalog evidence is captured. No destructive schema modernization is approved without preflight, backup/restore, duplicate/orphan analysis, query plans, and rollback artifacts.
 

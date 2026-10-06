@@ -46,7 +46,7 @@ async fn run_cycle(state: &AppState) {
     let batch_size = i64::from(state.config.workers.device_heartbeat_batch_size);
     let stale_devices = match sqlx::query_as::<_, StaleDevice>(
         r#"SELECT device."deviceId" AS device_id,
-                  device.state::text AS previous_state,
+              COALESCE(device.state::text, 'unknown') AS previous_state,
                   target.target_state,
                   floor(extract(epoch FROM now() - seen.last_seen))::integer AS timeout
            FROM devices device
@@ -71,7 +71,7 @@ async fn run_cycle(state: &AppState) {
              AND device.status::text = 'approved'
              AND seen.last_seen < now() -
                  (GREATEST(COALESCE(device."heartbeatTimer", 5), 1) * 6 * interval '1 second')
-             AND device.state::text <> target.target_state
+             AND COALESCE(device.state::text, 'unknown') <> target.target_state
              AND NOT EXISTS (
                  SELECT 1 FROM device_action_queue action
                  WHERE action."targetDeviceId" = device."deviceId"

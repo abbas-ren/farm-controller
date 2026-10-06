@@ -169,7 +169,7 @@ async fn configure_channel(
     );
     save_mappings(transaction, configuration.relay_id, &context.mappings).await?;
     sqlx::query(
-        r#"UPDATE devices SET power = $2, "updatedAt" = now()
+        r#"UPDATE devices SET power = $2::"enum_devices_power", "updatedAt" = now()
            WHERE "deviceId" = $1 AND "deletedAt" IS NULL"#,
     )
     .bind(device_id)
@@ -209,7 +209,8 @@ async fn load_channel(
         r#"SELECT dc."ipAddress" AS controller_address,
              COALESCE(dc.mappings, '{}'::jsonb) AS mappings,
              r."serialNumber" AS relay_serial, rc."deviceId" AS current_device_id,
-             rc."channelNumber" AS channel_number, rc.state::text AS channel_state
+             rc."channelNumber" AS channel_number,
+             COALESCE(rc.state::text, 'off') AS channel_state
            FROM relays r
            JOIN relay_channels rc ON rc."relayId" = r.id AND rc."deletedAt" IS NULL
            JOIN device_controllers dc

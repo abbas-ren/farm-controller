@@ -115,7 +115,7 @@ pub async fn process_case(
     };
     let parsed = parse_output(&output);
     let (title, script_file, suite_name) = sqlx::query_as::<_, (String, String, String)>(
-        r#"SELECT title, "scriptFile", "suiteName" FROM testcase
+        r#"SELECT title, COALESCE("scriptFile", ''), "suiteName" FROM testcase
            WHERE "executionId" = $1 AND "testCaseId" = $2 FOR UPDATE"#,
     )
     .bind(test_id)
@@ -256,7 +256,7 @@ async fn lock_execution(
                   "deviceFamily" AS device_family, "deviceType" AS device_type,
                   "deviceId" AS device_id, "createdBy" AS created_by,
                   NULLIF("testCycleId", '') AS test_cycle_id,
-                  "testPlanName" AS test_plan_name, name
+                  COALESCE("testPlanName", '') AS test_plan_name, name
            FROM test_executions
            WHERE "testId" = $1 AND "deviceId" = $2
              AND status::text NOT IN ('completed', 'failed', 'cancelled')

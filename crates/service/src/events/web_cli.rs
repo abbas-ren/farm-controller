@@ -895,7 +895,8 @@ fn cli_error(error: impl std::fmt::Display) -> String {
 
 async fn list_devices(pool: &sqlx::PgPool, available_only: bool) -> String {
     let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, String)>(
-        r#"SELECT "deviceId", "deviceName", "deviceType", "deviceFamily", state::text
+        r#"SELECT "deviceId", COALESCE("deviceName", "deviceId"),
+              "deviceType", "deviceFamily", COALESCE(state::text, 'unknown')
            FROM devices
            WHERE "deletedAt" IS NULL AND (NOT $1 OR state::text = 'free')
            ORDER BY "deviceName" ASC LIMIT 10000"#,

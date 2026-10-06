@@ -8,14 +8,15 @@ pub(crate) async fn test_completion_target(
     device_id: &str,
 ) -> Result<Option<TestCompletionTarget>, DeviceRepositoryError> {
     Ok(sqlx::query_as::<_, TestCompletionTarget>(
-                r#"SELECT test.status::text AS status, device."deviceFamily" AS device_family,
-                                    device."macAddress" AS mac_address, test."deviceType" AS device_type,
-                                    test."buildVersion" AS build_version, test."buildId"::text AS build_id,
-                                    test."createdBy" AS created_by,
-                                    gen5."ipAddress" AS gen5_controller_ip, gen5.uart_port,
-                                    relay_controller."ipAddress" AS gen4_controller_ip,
-                                    relay."serialNumber" AS relay_serial,
-                                    relay_channel."channelNumber" AS relay_channel
+                r#"SELECT COALESCE(test.status::text, 'not_executed') AS status,
+                         device."deviceFamily" AS device_family,
+                         device."macAddress" AS mac_address, test."deviceType" AS device_type,
+                         test."buildVersion" AS build_version, test."buildId"::text AS build_id,
+                         test."createdBy" AS created_by,
+                         gen5."ipAddress" AS gen5_controller_ip, gen5.uart_port,
+                         relay_controller."ipAddress" AS gen4_controller_ip,
+                         relay."serialNumber" AS relay_serial,
+                         relay_channel."channelNumber" AS relay_channel
                      FROM test_executions test
                      LEFT JOIN devices device
                          ON device."deviceId" = $2 AND device."deletedAt" IS NULL
@@ -56,7 +57,7 @@ pub(crate) async fn store_rtos_log_path(
 ) -> Result<(), DeviceRepositoryError> {
     sqlx::query(
         r#"UPDATE test_executions SET "rtosLogPath" = $2, "updatedAt" = now()
-                     WHERE "testId" = $1"#,
+           WHERE "testId" = $1"#,
     )
     .bind(test_id)
     .bind(path)

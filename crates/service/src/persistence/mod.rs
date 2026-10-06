@@ -150,7 +150,7 @@ impl RetentionTarget {
             ("log_entries", "timestamp") => Ok(Self::LogEntries),
             ("device_action_queue", "updatedAt") => Ok(Self::DeviceActionQueue),
             ("gen5_mapping_queue", "updatedAt") => Ok(Self::Gen5MappingQueue),
-            ("alerts", "createdAt") => Ok(Self::Alerts),
+            ("alerts", "created_at") => Ok(Self::Alerts),
             _ => Err(RetentionError::UnsupportedTarget(
                 policy.table_name.clone(),
                 policy.timestamp_column.clone(),
@@ -221,9 +221,9 @@ impl RetentionTarget {
                 r#"
             WITH expired AS (
                 SELECT ctid FROM alerts
-                WHERE "createdAt" < now() - ($1 * interval '1 day')
+                WHERE created_at < now() - ($1 * interval '1 day')
                   AND status = 'read'
-                ORDER BY "createdAt" LIMIT $2 FOR UPDATE SKIP LOCKED
+                ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED
             )
             DELETE FROM alerts target
             USING expired WHERE target.ctid = expired.ctid

@@ -102,7 +102,8 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sqlx::E
                   test."createdBy" AS created_by
            FROM device_action_queue action
            LEFT JOIN test_executions test ON test."testId" = action."testId"
-           LEFT JOIN releases release ON release.id = COALESCE(action."releaseId", test."buildId")
+                     LEFT JOIN releases release
+                         ON release.id::text = COALESCE(action."releaseId"::text, test."buildId"::text)
            WHERE action.status::text = 'queued'
              AND (lower(action."deviceType") NOT LIKE '%x5h%'
                   OR action."iplFlashConfirm" = true)
@@ -129,6 +130,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sqlx::E
             r#"SELECT "deviceId", "ipAddress" FROM devices
                WHERE "deviceId" = $1 AND "deviceType" = $2
                  AND status::text = 'approved' AND "deletedAt" IS NULL
+                                 AND "ipAddress" IS NOT NULL
                  AND (state::text = 'free' OR $3)
                FOR UPDATE SKIP LOCKED"#,
         )
@@ -141,7 +143,8 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sqlx::E
         sqlx::query_as::<_, (String, String)>(
             r#"SELECT "deviceId", "ipAddress" FROM devices
                WHERE "deviceType" = $1 AND status::text = 'approved'
-                 AND state::text = 'free' AND "deletedAt" IS NULL
+                                 AND state::text = 'free' AND "deletedAt" IS NULL
+                                 AND "ipAddress" IS NOT NULL
                ORDER BY "lastConnectedOn" DESC, "createdAt" ASC
                FOR UPDATE SKIP LOCKED"#,
         )

@@ -28,6 +28,14 @@ fn queue_cleanup_only_targets_terminal_jobs() {
 }
 
 #[test]
+fn alert_cleanup_uses_legacy_snake_case_timestamp() {
+    let target = RetentionTarget::from_policy(&policy("alerts", "created_at")).unwrap();
+    let sql = target.delete_sql();
+    assert!(sql.contains("created_at"));
+    assert!(!sql.contains("\"createdAt\""));
+}
+
+#[test]
 fn embedded_migrations_are_discovered() {
-    assert_eq!(MIGRATOR.iter().count(), 4);
+    assert_eq!(MIGRATOR.iter().count(), 5);
 }

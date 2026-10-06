@@ -15,7 +15,7 @@ pub(crate) async fn register_device(
     let device_id = validate_device_registration(registration)?;
     let mut transaction = pool.begin().await?;
     let existing = sqlx::query_as::<_, (bool, String)>(
-        r#"SELECT "deletedAt" IS NULL, status::text
+        r#"SELECT "deletedAt" IS NULL, COALESCE(status::text, 'requested')
            FROM devices WHERE "deviceId" = $1 FOR UPDATE"#,
     )
     .bind(&device_id)
@@ -145,8 +145,8 @@ pub(crate) async fn register_device(
     ) {
         sqlx::query(
             r#"INSERT INTO device_type_folders
-                   ("deviceType", "folderName", "deviceFamily", "defaultVersion", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, now(), now())
+                   ("deviceType", "folderName", "deviceFamily", "defaultVersion")
+               VALUES ($1, $2, $3, $4)
                ON CONFLICT ("deviceType") DO NOTHING"#,
         )
         .bind(device_type)

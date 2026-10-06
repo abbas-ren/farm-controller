@@ -6,6 +6,8 @@ The Sequelize models are evidence, not the production schema authority. The lega
 
 Migration `0001_persistence_control_plane.sql` is safe to deploy independently. It creates only the `farmcontroller` namespace, an evidence ledger, and disabled retention policies. It does not mutate legacy domain data.
 
+Migration `0005_legacy_schema_compatibility.sql` reconciles two differences confirmed by the PostgreSQL 17 schema dump. It conditionally adds nullable `device_controllers."deletedAt"` for the application's existing soft-delete queries and corrects the disabled alerts retention policy to use the legacy `created_at` column. It does not delete or rewrite domain rows.
+
 ## Decisions and evidence
 
 | Existing object | Decision | Proposed representation | Evidence and prerequisite |
