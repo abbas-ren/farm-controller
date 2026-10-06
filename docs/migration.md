@@ -4,7 +4,7 @@ The legacy Node/Python implementation remains the rollback reference while Rust 
 
 1. Back up PostgreSQL and verify restore procedures.
 2. Run `migrations/preflight/legacy_schema_audit.sql` against a production-shaped clone.
-3. Run ignored migration tests against a disposable legacy-shaped PostgreSQL database.
+3. Implement and run the migration/repository harness against a disposable legacy-shaped PostgreSQL database whose name ends in `_test`.
 4. Start Rust with health/metrics only, then enable API/auth/device/reports/workers/events in staging.
 5. Exercise frontend login, inventory, uploads, tests, reports, Socket.IO, native controller/device/test sockets, and terminal sessions.
 6. Exercise EdgeController registration, mapping, relay, flash, RTOS, reboot, and heartbeat paths.

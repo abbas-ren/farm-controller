@@ -1,6 +1,6 @@
 # API Compatibility Inventory
 
-Last reconciled against route source: 2026-10-02. Detailed request/response/error contracts remain the Step 2 stage gate tracked in `docs/rust-migration-progress.md`.
+Last reconciled against route source: 2026-10-06. Detailed request/response/error contracts remain the Step 2 stage gate tracked in `docs/rust-migration-progress.md`.
 
 Public gateway paths are shown below. Auth service routes mount below `/api/v1/auth`; device service routes mount below `/api/v1/device`. Health, metrics, OpenAPI, and Swagger will also have unprefixed routes on the same Rust listener.
 
@@ -8,11 +8,11 @@ Legend: `public` means the current route has no auth middleware, `user` means an
 
 ## Current checkout status
 
-Source of truth for mounted Rust device routes is `crates/service/src/devices/routes.rs`; auth routes are in `crates/service/src/auth/mod.rs`; report routes are merged from `crates/service/src/reports/mod.rs` when the Reports module is enabled; `/ws`, `/socket.io`, and `/api/v1/device/ws/send/message` are owned by `crates/service/src/events/mod.rs`; operational routes are in `crates/service/src/api/mod.rs`.
+Source of truth for mounted Rust device routes is `crates/service/src/devices/routes.rs`; auth routes are owned by `crates/service/src/auth/handlers.rs`; report routes are owned by `crates/service/src/reports/http.rs` and merged when the Reports module is enabled; `/ws`, `/socket.io`, and `/api/v1/device/ws/send/message` are owned by `crates/service/src/events/mod.rs`; operational routes are in `crates/service/src/api/mod.rs`.
 
 The current checkout is buildable. Retained relay, analytics, notification, and faulty-report route groups are mounted, registered in OpenAPI, and have focused route-contract coverage.
 
-Current validation baseline: format check, all-target/all-feature check, strict Clippy, and all 144 local Rust tests pass through consumer compatibility, IPL lifecycle, generated-contract, system-metrics, pending-user event, HTTP security-policy, direct gateway/TUS routing, and mounted auth route work. Two live PostgreSQL migration tests remain ignored because `TEST_DATABASE_URL` is unavailable.
+Current validation baseline: format check, all-target/all-feature check, strict Clippy, and all 148 local Rust tests pass through consumer compatibility, IPL lifecycle, generated-contract, system-metrics, pending-user event, HTTP security-policy, direct gateway/TUS routing, and mounted auth route work. Live PostgreSQL migration and repository validation remains pending and is not represented by this local total.
 
 ## Source-verified API summary
 

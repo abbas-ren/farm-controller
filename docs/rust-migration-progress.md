@@ -2,7 +2,7 @@
 
 This is the persistent execution checklist for the single-process Rust migration. `prompt.md` is authoritative. This document records verified implementation evidence; it does not prove completion by itself.
 
-Last reconciled: 2026-10-05
+Last reconciled: 2026-10-06
 
 ## Status legend
 
@@ -17,7 +17,7 @@ This is the authoritative implementation ledger. The FarmController root is a Gi
 
 `docs/migration-matrix.md` remains useful as the original component/configuration inventory, but many row statuses predate the current implementation. Use this document and `docs/api-compatibility.md` for current status, and verify both against source before changing code.
 
-Current stage: **Local implementation parity is complete.** Gateway, auth, device, report, worker, and event behavior has been source-audited against the active legacy paths. Remaining work requires live infrastructure, deployment/consumer validation, or is explicitly tracked refactoring and database-modernization debt.
+Current stage: **Local implementation parity and the planned service modularization are complete.** Gateway, auth, device, report, worker, and event behavior has been source-audited against the active legacy paths. Remaining work requires live infrastructure, deployment/consumer validation, or is explicitly tracked operational and database-modernization debt.
 
 Current checkout health (2026-10-05):
 
@@ -32,15 +32,15 @@ Current checkout health (2026-10-05):
 Migration-created/current Rust surfaces include:
 
 - Workspace/runtime: `Cargo.toml`, `crates/app`, `crates/core`, `crates/integrations`, and `crates/service`.
-- Auth/reports/stateful features: `crates/service/src/{auth,reports,api,state,persistence,observability,workers,events}`.
+- Auth/reports/stateful features: `crates/service/src/{auth,reports,api,state,persistence,observability,workers,events}`. Auth and reports expose compatibility facades over focused handler, provider, orchestration, data-source, artifact, and publication modules.
 - External adapters: `crates/integrations/src/{test_catalog,qmetry_catalog,jira.rs}`.
-- Device root and routing: `crates/service/src/devices/{mod,routes,repository,repository_types,types,error,constants,validation}.rs`.
+- Device root and routing: `crates/service/src/devices/{mod,routes,repository,repository_types,error,constants,validation}.rs`, with DTOs under `types/`, capability traits under `repository/`, and PostgreSQL implementations under `postgres/`.
 - Device registration/controller/callback/heartbeat: `device_registration_*`, `registration_store.rs`, `controller_store.rs`, `callback_store.rs`, `heartbeat_store.rs`, `flashing_*`, `test_completion_*`.
 - Builds/uploads/artifacts: `build_handlers.rs`, `build_store.rs`, `build_ingestion.rs`, `tus_handlers.rs`, `tus_store.rs`, `artifact_handlers.rs`, `artifacts.rs`, `csv_export.rs`, `device_export_*`.
-- Tests/reports/catalog: `test_execution_handlers.rs`, `test_export.rs`, `test_export_handlers.rs`, `test_catalog_handlers.rs`.
-- Relays: `relay_handlers.rs`, `relay_store.rs`, `relay_configuration_store.rs`, `legacy_relay_store.rs`.
+- Tests/reports/catalog: `test_execution_handlers/`, `test_export.rs`, `test_export_handlers.rs`, and `test_catalog_handlers.rs`.
+- Relays: `relay_handlers/`, `relay_store.rs`, `relay_configuration_store.rs`, and `legacy_relay_store.rs`.
 - Analytics, notifications, faulty reports, and logs: dedicated `*_handlers.rs`/`*_store.rs` modules with repository methods and focused route tests.
-- Database: `migrations/0001_*`, `0002_*`, `0003_*`, `migrations/preflight/legacy_schema_audit.sql`, `tests/database_migrations.rs`.
+- Database: `migrations/0001_*`, `0002_*`, `0003_*`, `0004_*`, and `migrations/preflight/legacy_schema_audit.sql`; a live migration/repository test harness remains pending.
 
 Rust deployment deliverables are `Dockerfile.rust`, `docker-compose.rust.yml`, `deploy/systemd`, production configuration examples, and `dashboards/farmcontroller.json`. Root legacy deploy/Docker/Nginx assets remain available for rollback.
 
@@ -128,7 +128,7 @@ TUS implementation checkpoint: authenticated create/head/patch/options, durable 
 
 ### Step 3 - Unified Rust architecture design
 
-Status: `[-]` implementation exists ahead of the Step 2 gate; decisions are documented in `docs/architecture-decisions.md`, but the full required architecture/configuration/development documentation set is incomplete.
+Status: `[x]` implemented, modularized, documented, and locally validated.
 
 Implemented:
 
@@ -138,12 +138,15 @@ Implemented:
 - [x] Direct in-process routing replaces gateway-to-service HTTP hops.
 - [x] Cancellation token controls worker and server shutdown.
 - [x] Device domain progressively split into DTO, validation, repository, handler, and focused store modules.
+- [x] Auth split into transport, session policy, provider, Keycloak operation, DTO, error, constant, and focused test modules.
+- [x] Reports split into HTTP, orchestration, data-source, artifact, combined-report, graphing, Confluence, and focused test modules.
+- [x] `DeviceRepository` split into feature capability traits with a composed object-safe facade; PostgreSQL and test adapters implement capabilities directly.
 
 Remaining:
 
 - [x] Record implemented architecture and open decisions in `docs/architecture-decisions.md`.
 - [x] Add the final `docs/architecture.md` developer-facing dependency/ownership guide required by `prompt.md`.
-- [ ] Further split oversized `crates/service/src/auth/mod.rs` (~1,740 lines), `crates/service/src/reports/mod.rs` (~1,630 lines), `crates/service/src/devices/mod.rs` (~3,490 lines), and `crates/service/src/devices/test_execution_handlers.rs` (~1,390 lines) with focused contract tests.
+- [x] Replace the oversized auth, reports, device, and test-execution modules with thin compatibility facades and responsibility-focused submodules while preserving focused contract tests.
 - [x] Define an AppState-owned event transport boundary with bounded observation and lifecycle-owned Socket.IO delivery.
 - [x] Avoid detached tasks without lifecycle ownership; task spawns are owned by startup signal handling, reports, or `WorkerManager`, including bounded relay synchronization.
 
@@ -176,7 +179,7 @@ Database and persistence:
 - [x] Durable pending relay configuration table and indexes (`0003`).
 - [x] Durable Gen5 reboot attempts and indexes (`0004`).
 - [x] Legacy schema preflight audit and database migration strategy documented.
-- [B] Live migration tests require a disposable PostgreSQL database in `TEST_DATABASE_URL`; unavailable locally.
+- [ ] Add a live migration/repository harness guarded by a disposable PostgreSQL database in `TEST_DATABASE_URL`; no test database was available locally.
 - [ ] Execute preflight against a production-shaped clone and capture catalog/query-plan evidence.
 - [ ] Validate duplicate/orphan data before proposed constraints, partitioning, or normalization.
 - [ ] Add repository tests for concurrency, rollback, constraints, timeouts, and partial failures.
@@ -207,7 +210,7 @@ Status: `[x]` locally implemented and documented; live edge deployment validatio
 
 #### 6.2 Authentication service
 
-Status: `[-]` active route set implemented and locally contract-tested; live realm deployment and targeted refactoring remain.
+Status: `[-]` active route set is implemented, modularized, and locally contract-tested; live realm deployment remains.
 
 Implemented routes:
 
@@ -218,7 +221,7 @@ Remaining:
 
 - [x] Mounted handler matrices cover every auth route success plus every protected route's missing-auth and every request body's validation path; provider tests cover Keycloak success/upstream protocol behavior.
 - [ ] Verify confirmation-mail webhook/provider deployment against a live Keycloak realm.
-- [ ] Refactor the oversized module into cohesive DTO/provider/handler/error modules.
+- [x] Refactor the oversized module into cohesive DTO/provider/handler/error/session/Keycloak modules with focused tests.
 
 #### 6.3 Device service
 
@@ -281,7 +284,7 @@ Status: `[x]` locally validated; live Confluence and legacy-shaped PostgreSQL ve
 - [x] Durable `execution_reports` row creation before enqueue, terminal status synchronization, and user/test-room `execution_report_update` events.
 - [x] Preserve legacy process-local queue/status semantics; the Python `ReportQueue` also used an in-memory `asyncio.Queue` and `_job_status` dictionary, while durable execution status remains in PostgreSQL.
 - [x] Verify escaped consolidated text/HTML, fatal sanity analysis, best-effort performance comparison, radar/category PNG, CSV/JSON summaries, combined report links/images, and terminal failure persistence/events with filesystem fixtures.
-- [ ] Refactor oversized reports module.
+- [x] Refactor the reports implementation into cohesive HTTP, service, data-source, artifact, graph, and Confluence modules.
 
 #### 6.5 Workers, events, and background functions
 
@@ -323,7 +326,7 @@ Current automated evidence (2026-10-02):
 - [x] `cargo fmt --all -- --check` passes.
 - [x] `cargo check --workspace --all-targets --all-features` passes.
 - [x] Strict Clippy passes with `-D warnings`.
-- [x] Full tests pass: 146 passed, 0 failed, 2 PostgreSQL integration tests ignored for missing `TEST_DATABASE_URL`.
+- [x] Full local tests pass: 148 passed, 0 failed. The pending live PostgreSQL harness is not included in this total.
 - [x] Unit tests cover configuration, parsers, retention safety, auth provider flows, device wire contracts, relay validation/mapping, analytics, notification, faulty-report, Socket.IO producer contracts, reports, and worker shutdown.
 - [x] Device registration has focused validation and anonymous HTTP contract tests; live create/update/restore transaction coverage is environment-blocked.
 - [ ] API tests for every route/method/auth/error/malformed/oversized input.
@@ -369,7 +372,7 @@ No speculative extension should displace missing legacy behavior. Any later exte
 | `0003_pending_relay_configuration.sql` | Applied by SQLx; unit-discovered | Additive pending relay state and indexes |
 | `0004_gen5_reboot_attempts.sql` | Applied by SQLx; unit-discovered | Durable bounded Gen5 reboot recovery state and indexes |
 | Legacy schema preflight | Script/document ready | Must run against production clone |
-| Live empty/legacy migration tests | `[B]` | Require disposable PostgreSQL database ending in `_test` via `TEST_DATABASE_URL` |
+| Live empty/legacy migration tests | Not started | Harness implementation and a disposable database ending in `_test` via `TEST_DATABASE_URL` are required |
 | High-growth heartbeat/metric partitioning | Not started | Requires production-shaped sizes/plans |
 | Constraint/deduplication work | Not started | Requires duplicate/orphan evidence and rollback artifacts |
 | Retention execution | Implemented but disabled by default | Enable only after restore/retention approval |
@@ -389,15 +392,14 @@ No speculative extension should displace missing legacy behavior. Any later exte
 
 ## Architecture and refactoring debt
 
-- `crates/service/src/devices/mod.rs` still combines the PostgreSQL repository implementation, compatibility handlers, and private helpers.
-- `crates/service/src/auth/mod.rs` and `crates/service/src/reports/mod.rs` remain oversized mixed-responsibility modules.
+- Auth, reports, and devices now use thin compatibility facades over responsibility-focused modules; no known mixed-responsibility module hotspot remains in those domains.
+- `DeviceRepository` is a composed object-safe facade over feature capability traits, with matching PostgreSQL and test implementations.
 - Relay hardware synchronization is lifecycle-owned by a bounded cancellable worker; durable retry policy remains open.
 - Transient report queue/status state remains in memory by legacy design; durable execution report state is synchronized to PostgreSQL.
 - The log API is mounted and tested, but live legacy-shaped PostgreSQL enum/table compatibility remains blocked by the unavailable test database.
 - Analytics SQL is mounted and route-tested, but runtime compatibility with the legacy PostgreSQL schema remains blocked by the unavailable test database.
 - Notification SQL is mounted and route-tested, but runtime compatibility with the legacy PostgreSQL enum/table schema remains blocked by the unavailable test database.
 - Faulty-report SQL and filesystem behavior are mounted and route-tested; live legacy PostgreSQL and browser alert-emission validation remain blocked/deferred.
-- Refactoring must remain targeted to the stage being implemented; no unrelated repository-wide cosmetic pass should interrupt parity work.
 
 ## Definition-of-done checkpoint
 
@@ -411,7 +413,7 @@ The local implementation is **complete**. The overall migration remains operatio
 - [-] Central configuration/auth/database/security controls: core exists; hardening and live validation remain.
 - [x] Cancellable workers and graceful shutdown: all currently required worker families are lifecycle-owned and bounded.
 - [-] Unit/integration/API/edge-case coverage: meaningful suite exists but full route and infrastructure matrix remains.
-- [x] Current format/check/strict-Clippy/full-test gates pass through consumer fixtures, scanner storage, Jira synchronization, observability, build preparation, the IPL lifecycle, system metrics, pending-user events, HTTP security policy, direct gateway/TUS routing, every mounted auth route, and native report artifacts/failure lifecycle; 146 tests pass and 2 PostgreSQL tests remain environment-blocked and ignored.
+- [x] Current format/check/strict-Clippy/full-test gates pass through consumer fixtures, scanner storage, Jira synchronization, observability, build preparation, the IPL lifecycle, system metrics, pending-user events, HTTP security policy, direct gateway/TUS routing, every mounted auth route, and native report artifacts/failure lifecycle; 148 local tests pass. Live PostgreSQL coverage still requires a harness and disposable database.
 - [B] Dependency security audit unavailable (`cargo-audit` not installed) and live PostgreSQL validation unavailable.
 - [x] Linux deployment artifacts and the required documentation set exist. Docker Compose rendering/build remains environment-blocked because Docker is unavailable locally.
 

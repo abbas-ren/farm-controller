@@ -19,14 +19,12 @@ cargo test -p farmcontroller-integrations
 cargo test -p farmcontroller
 ```
 
-Database migration tests require a disposable database whose name ends in `_test`:
-
-```bash
-TEST_DATABASE_URL=postgresql://user:password@localhost/farmcontroller_test \
-	cargo test -p farmcontroller persistence::tests -- --ignored
-```
-
-Do not point that variable at a production or shared database. Use the mock-backed unit tests for Keycloak, TestRail, Qmetry, and Confluence during normal development. Preserve event publication after commit, bounded workers, cancellation ownership, static parameterized SQL, and traversal-safe file paths when adding behavior.
+The live PostgreSQL migration/repository harness is still pending. It must accept
+only a disposable `TEST_DATABASE_URL` whose database name ends in `_test`; never
+point that variable at a production or shared database. Use the mock-backed unit
+tests for Keycloak, TestRail, Qmetry, and Confluence during normal development.
+Preserve event publication after commit, bounded workers, cancellation ownership,
+static parameterized SQL, and traversal-safe file paths when adding behavior.
 
 Crate dependency direction is enforced by manifests: `core` has no internal
 dependencies, `integrations` depends on `core`, `service` depends on both, and

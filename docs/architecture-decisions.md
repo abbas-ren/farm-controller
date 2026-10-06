@@ -2,7 +2,7 @@
 
 This document records decisions already reflected in the current Rust migration. It is descriptive, not proof of completion. `prompt.md` remains authoritative, and implementation status is tracked in `docs/rust-migration-progress.md` and `docs/api-compatibility.md`.
 
-Last reconciled against source: 2026-10-05
+Last reconciled against source: 2026-10-06
 
 ## Status vocabulary
 
@@ -24,17 +24,17 @@ Consequences:
 
 ## Module and package organization
 
-**Decision: Accepted with debt.** `farmcontroller-core` owns configuration, CLI types, shared startup errors, and outbound HTTP policy. `farmcontroller-integrations` owns TestRail/GitLab, Qmetry, and Jira adapters. `farmcontroller` owns the stateful API, auth, devices, reports, events, workers, persistence, and observability. `farmcontroller-app` owns process composition. Device work is progressively split into handlers, DTOs, validation, stores, repository types, and routes under `crates/service/src/devices/`.
+**Decision: Accepted.** `farmcontroller-core` owns configuration, CLI types, shared startup errors, and outbound HTTP policy. `farmcontroller-integrations` owns TestRail/GitLab, Qmetry, and Jira adapters. `farmcontroller` owns the stateful API, auth, devices, reports, events, workers, persistence, and observability. `farmcontroller-app` owns process composition.
 
-**Debt:** `crates/service/src/devices/mod.rs` (~3,490 lines), `crates/service/src/auth/mod.rs` (~1,740), `crates/service/src/reports/mod.rs` (~1,630), and `crates/service/src/devices/test_execution_handlers.rs` (~1,390) remain mixed-responsibility hotspots. Their private helpers cross repository and compatibility-handler boundaries, so further splitting must preserve wire contracts and occur with focused behavior tests.
+Within the service crate, `auth`, `reports`, and `devices` use thin compatibility facades over responsibility-focused modules. Auth separates transport, session policy, provider contracts, DTOs, errors, constants, and Keycloak operations. Reports separates HTTP transport, orchestration, data access, artifact writing, graphing, and Confluence publication. Devices separates DTO families, handler families, validation, stores, repository capabilities, PostgreSQL implementations, and focused tests. The facades preserve established Rust paths without retaining duplicate implementations.
 
 ## Dependency injection and external boundaries
 
 **Decision: Accepted.** `AppState` owns optional trait-backed providers for identity, device persistence, TestRail, Qmetry, reports, database, metrics, and configuration. Traits are used at genuine external boundaries rather than for every helper.
 
-Evidence: `crates/service/src/state.rs`, `crates/service/src/auth/mod.rs`, `crates/service/src/devices/repository.rs`, `crates/integrations/src/test_catalog/mod.rs`, `crates/integrations/src/qmetry_catalog/mod.rs`, `crates/service/src/reports/mod.rs`.
+Evidence: `crates/service/src/state.rs`, `crates/service/src/auth/provider.rs`, `crates/service/src/devices/repository.rs`, `crates/service/src/devices/postgres/`, `crates/integrations/src/test_catalog/mod.rs`, `crates/integrations/src/qmetry_catalog/mod.rs`, `crates/service/src/reports/data_source.rs`.
 
-**Provisional:** the device repository trait is very broad. It currently centralizes legacy PostgreSQL behavior but may later split by domain once route parity and live-schema validation are complete.
+**Decision: Accepted.** `DeviceRepository` remains the object-safe dependency stored by `AppState`, but it composes feature-sized capability traits for execution, build, inventory, user-device, controller, relay, analytics, alerts, and related persistence. PostgreSQL and test implementations satisfy those capabilities directly, avoiding a forwarding implementation while preserving `Arc<dyn DeviceRepository>` compatibility.
 
 ## Database and schema decisions
 

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     config::Module,
-    devices::{EDGE_CONTROLLER_PORT, RelayControllerAction},
+    devices::{EDGE_CONTROLLER_PORT, RELAY_CONTROLLER_TIMEOUT, RelayControllerAction},
     events::{EventHub, ServerEvent},
     state::AppState,
 };
@@ -243,7 +243,7 @@ async fn dispatch_relay_actions(job: RelaySyncJob, event_publisher: &EventHub) {
                     "serial": relay_serial,
                     "channel": channel_number,
                 }),
-                Duration::from_secs(10),
+                RELAY_CONTROLLER_TIMEOUT,
             ),
             RelayControllerAction::Configure {
                 controller_address,

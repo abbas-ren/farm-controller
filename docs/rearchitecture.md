@@ -1,6 +1,6 @@
 # Rearchitecture Report
 
-Date: 2026-10-05
+Date: 2026-10-06
 
 ## 1. Executive summary
 
@@ -13,6 +13,11 @@ The refactor preserved the `farmcontroller` service library name and re-exports
 the moved core and integration modules. Existing Rust paths, HTTP routes, payloads,
 database behavior, workers, event protocols, and CLI behavior therefore remain
 compatible.
+
+The stateful service was also decomposed internally. Auth and reports now use thin
+compatibility facades over focused transport, policy, provider, orchestration, and
+artifact modules. Device handlers, DTOs, repository capabilities, PostgreSQL
+implementations, stores, validation, and tests are grouped by feature ownership.
 
 ## 2. Before and after
 
@@ -130,8 +135,8 @@ No schema or SQL behavior changed. Root migrations remain in `migrations/` and a
 embedded by the service crate through the adjusted relative path. Existing
 additive migration and preflight policies remain in force.
 
-Live PostgreSQL tests remain environment-gated by `TEST_DATABASE_URL`; they were
-not run because no disposable PostgreSQL URL was supplied.
+No live PostgreSQL harness was added or run. It remains blocked on both a
+dedicated integration-test implementation and a disposable `TEST_DATABASE_URL`.
 
 ## 10. Observability and tracing
 
@@ -152,9 +157,6 @@ Completed during this refactor:
 
 ## 12. Known limitations
 
-- `devices/mod.rs`, `auth/mod.rs`, `reports/mod.rs`, and
-  `devices/test_execution_handlers.rs` remain oversized.
-- `DeviceRepository` remains a broad compatibility trait over the legacy schema.
 - Report job snapshots remain in memory and are lost on restart.
 - Live PostgreSQL, Keycloak, controller, frontend, Confluence, TestRail, Qmetry,
   Jira, Docker, and deployment smoke tests require external infrastructure.
@@ -162,16 +164,12 @@ Completed during this refactor:
 
 ## 13. Remaining technical debt
 
-The next low-risk internal slices are:
+The remaining internal and operational slices are:
 
-1. Split `DeviceRepository` into capability traits after adding contract tests for
-   each handler group; keep a composed trait for `AppState` during transition.
-2. Separate auth transport handlers from the Keycloak adapter and auth DTOs.
-3. Separate report HTTP transport, job orchestration, artifact generation, and
-   Confluence publication.
-4. Persist report job state and make queue recovery explicit.
-5. Move request metrics middleware behind a state-independent metrics handle,
+1. Persist report job state and make queue recovery explicit.
+2. Move request metrics middleware behind a state-independent metrics handle,
    allowing observability and database pool ownership to move below `service`.
+3. Add durable retry policy to relay hardware synchronization.
 
 ## 14. Recommended future improvements
 
@@ -188,9 +186,8 @@ The next low-risk internal slices are:
 ## 15. Status summary
 
 - **Completed:** workspace conversion, app/core/integration extraction, dependency
-  centralization, compatibility facade, moved tests, documentation rewrite.
-- **Partially completed:** fine-grained modularization inside the stateful service
-  crate; major hotspots are documented and behavior remains tested.
+  centralization, compatibility facades, stateful service modularization, moved
+  tests, and documentation rewrite.
 - **Not applicable:** separate deployable services for each crate.
 - **Blocked/unverified:** checks requiring live databases, identity providers,
   device/controller consumers, external SaaS systems, Docker, or production

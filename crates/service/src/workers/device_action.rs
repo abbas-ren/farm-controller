@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    devices::EDGE_CONTROLLER_PORT,
+    devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
     events::{ServerEvent, build_performance_events},
     state::AppState,
 };
@@ -288,8 +288,11 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
             }),
         )
     };
-    let url = reqwest::Url::parse(&format!("http://{}:8888/{path}", assigned.ip_address))
-        .map_err(|error| error.to_string())?;
+    let url = reqwest::Url::parse(&format!(
+        "http://{}:{EDGE_CONTROLLER_PORT}/{path}",
+        assigned.ip_address
+    ))
+    .map_err(|error| error.to_string())?;
     let client = crate::external_http::client(Duration::from_secs(
         state.config.device.request_timeout_seconds,
     ))
@@ -316,7 +319,7 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
             Ok(response) => last_error = format!("device returned {}", response.status()),
             Err(error) => last_error = error.to_string(),
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(DEVICE_COMMAND_RETRY_DELAY).await;
     }
     Err(last_error)
 }
@@ -398,8 +401,8 @@ async fn request_gen4_ipl(
         "channel": target.channel_number,
     });
     let base = format!("http://{}:{EDGE_CONTROLLER_PORT}", target.controller_ip);
-    let client =
-        crate::external_http::client(Duration::from_secs(55)).map_err(|error| error.to_string())?;
+    let client = crate::external_http::client(DEVICE_ACTION_HTTP_TIMEOUT)
+        .map_err(|error| error.to_string())?;
     let mode_response = client
         .post(format!("{base}/ipl-mode"))
         .json(&mode_payload)

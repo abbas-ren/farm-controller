@@ -70,4 +70,7 @@ Additive migrations roll back by disabling new code and leaving the new objects 
 - Performance tests: representative row counts, query plans, pool saturation, migration lock duration, and cleanup impact.
 - Recovery tests: failed migration, interrupted backfill, point-in-time restore, and old-binary compatibility during the rollout window.
 
-Live PostgreSQL tests use `TEST_DATABASE_URL` and refuse database names without an `_test` suffix. They are ignored by default so unit tests do not accidentally touch a developer or production database.
+The live PostgreSQL harness remains to be implemented. It must use
+`TEST_DATABASE_URL`, refuse database names without an `_test` suffix, and stay
+outside the default unit-test path so local checks cannot touch a developer or
+production database accidentally.

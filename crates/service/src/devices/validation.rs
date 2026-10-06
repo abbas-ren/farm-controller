@@ -14,6 +14,7 @@ pub(crate) struct DeviceInterfaceInput {
     pub interface_id: String,
 }
 
+/// Validates a device registration and returns its normalized MAC identifier.
 pub(crate) fn validate_device_registration(
     registration: &DeviceRegistration,
 ) -> Result<String, DeviceRepositoryError> {
@@ -56,6 +57,7 @@ pub(crate) fn validate_device_registration(
     Ok(octets.concat().to_lowercase())
 }
 
+/// Flattens grouped interface IDs into rows suitable for persistence.
 pub(crate) fn device_interfaces(registration: &DeviceRegistration) -> Vec<DeviceInterfaceInput> {
     registration
         .interfaces
@@ -71,6 +73,7 @@ pub(crate) fn device_interfaces(registration: &DeviceRegistration) -> Vec<Device
         .collect()
 }
 
+/// Compares dotted firmware versions using the legacy upgrade direction.
 pub(crate) fn compare_versions(current: &str, target: &str) -> i8 {
     let normalize = |version: &str| {
         version
@@ -100,6 +103,7 @@ pub(crate) fn compare_versions(current: &str, target: &str) -> i8 {
     0
 }
 
+/// Validates single or batch relay assignments and reports whether input was batched.
 pub(crate) fn relay_configurations(
     request: RelayConfigurationRequest,
 ) -> Result<(Vec<RelayChannelConfiguration>, bool), DeviceRepositoryError> {
@@ -147,6 +151,7 @@ pub(crate) fn relay_configurations(
     Ok((configurations, is_batch))
 }
 
+/// Normalizes explicit or legacy state-map relay channels for persistence.
 pub(crate) fn relay_channels(
     relay: &RelayRegistration,
 ) -> Result<Vec<RelayChannelRegistration>, DeviceRepositoryError> {
@@ -191,6 +196,7 @@ pub(crate) fn relay_channels(
         .collect()
 }
 
+/// Validates the controller fields required before registration.
 pub(crate) fn validate_registration(
     registration: &ControllerRegistration,
 ) -> Result<(), DeviceRepositoryError> {
@@ -202,6 +208,7 @@ pub(crate) fn validate_registration(
     normalized_controller_id(&registration.mac_address).map(|_| ())
 }
 
+/// Removes supported MAC separators and validates a hexadecimal controller ID.
 pub(crate) fn normalized_controller_id(mac_address: &str) -> Result<String, DeviceRepositoryError> {
     let controller_id = mac_address.trim().replace([':', '-'], "").to_lowercase();
     if controller_id.is_empty()
@@ -216,6 +223,7 @@ pub(crate) fn normalized_controller_id(mac_address: &str) -> Result<String, Devi
     Ok(controller_id)
 }
 
+/// Normalizes a mapping callback MAC with the controller identity rules.
 pub(crate) fn normalize_mapping_mac(mac_address: &str) -> Result<String, DeviceRepositoryError> {
     normalized_controller_id(mac_address)
 }

@@ -2,7 +2,10 @@ use std::{sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::state::AppState;
+use crate::{
+    devices::{DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
+    state::AppState,
+};
 
 #[derive(Debug, sqlx::FromRow)]
 struct FallbackFlash {
@@ -98,8 +101,11 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sqlx::Err
 async fn dispatch(state: &AppState, fallback: &FallbackFlash) -> Result<(), String> {
     let tftp_path = format!("{}/{}", fallback.device_type, fallback.version);
     let payload = flash_payload(fallback, &state.config.device.server_ip, &tftp_path);
-    let url = reqwest::Url::parse(&format!("http://{}:8888/flash", fallback.ip_address))
-        .map_err(|error| error.to_string())?;
+    let url = reqwest::Url::parse(&format!(
+        "http://{}:{EDGE_CONTROLLER_PORT}/flash",
+        fallback.ip_address
+    ))
+    .map_err(|error| error.to_string())?;
     let client = crate::external_http::client(Duration::from_secs(
         state.config.device.request_timeout_seconds,
     ))
@@ -111,7 +117,7 @@ async fn dispatch(state: &AppState, fallback: &FallbackFlash) -> Result<(), Stri
             Ok(response) => last_error = format!("device returned {}", response.status()),
             Err(error) => last_error = error.to_string(),
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(DEVICE_COMMAND_RETRY_DELAY).await;
     }
     Err(last_error)
 }

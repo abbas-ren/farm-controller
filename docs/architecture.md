@@ -60,13 +60,17 @@ Frontend / EdgeController
 
 - `api` owns router composition, transport middleware, operations endpoints, and
   the generated OpenAPI document.
-- `auth` owns authorization policy and the Keycloak identity adapter used by the
-  service. Stable response strings live in its local constants module.
-- `devices` owns device/build/test/relay/upload contracts, handlers, repository
-  traits, PostgreSQL implementations, validation, and compatibility behavior.
+- `auth` is a compatibility facade over transport handlers, session policy,
+  models, errors, provider contracts, and the operation-focused Keycloak adapter.
+  Stable response strings live in its local constants module.
+- `devices` is a routing and re-export facade over device/build/test/relay/upload
+  contracts and handlers. A composed object-safe repository facade is built from
+  feature capability traits; PostgreSQL implementations, DTOs, validation, stores,
+  and handler families remain in their owning submodules.
 - `persistence` owns pool lifecycle, migrations, readiness, and retention policy.
 - `events` owns native WebSocket protocol dispatch and browser Socket.IO delivery.
-- `reports` owns report jobs, artifacts, graphs, and Confluence publication.
+- `reports` is a compatibility facade over HTTP transport, job orchestration,
+  data-source contracts, artifact writers, graphing, and Confluence publication.
 - `workers` owns cancellable background task startup and shutdown.
 - `state` is the service composition container; feature crates do not depend on it.
 
@@ -74,6 +78,10 @@ HTTP handlers authorize and validate input, stores own transaction boundaries, a
 events are published only after durable commits. Native `/ws` protocols dispatch
 controller identity, frontend terminal, WebCLI, test-result, and heartbeat flows
 without mixing them with browser Socket.IO at `/socket.io`.
+
+Compatibility facades preserve established module paths but do not own feature
+implementations. Device route and repository tests are grouped by capability, so
+changes can be checked at the same boundary that owns the behavior.
 
 ## Persistence boundary
 
