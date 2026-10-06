@@ -16,7 +16,7 @@ fn test_state(arguments: &[&str]) -> Arc<AppState> {
 
 #[tokio::test]
 async fn configured_cors_and_security_headers_are_enforced() {
-    let mut state = match Arc::try_unwrap(test_state(&["farmcontroller"])) {
+    let mut state = match Arc::try_unwrap(test_state(&["farmcontroller", "--enable", "events"])) {
         Ok(state) => state,
         Err(_) => panic!("test state must be uniquely owned"),
     };
@@ -46,6 +46,22 @@ async fn configured_cors_and_security_headers_are_enforced() {
             expected
         );
     }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/socket.io/?EIO=4&transport=polling")
+                .header("origin", "https://farm.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["access-control-allow-origin"],
+        "https://farm.example"
+    );
 
     let response = app
         .oneshot(Request::get("/health").body(Body::empty()).unwrap())

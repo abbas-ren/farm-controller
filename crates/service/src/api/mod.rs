@@ -377,10 +377,13 @@ pub fn router(state: Arc<AppState>) -> Router {
             )
             .merge(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()));
     }
+    router = router.fallback(not_found);
+    if let Some(layer) = socket_io_layer {
+        router = router.layer(layer);
+    }
 
     let body_limit = state.config.server.request_body_limit_bytes;
-    let router = router
-        .fallback(not_found)
+    router
         .layer(DefaultBodyLimit::max(body_limit))
         .layer(CatchPanicLayer::new())
         .layer(cors)
@@ -392,11 +395,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
         .layer(middleware::from_fn_with_state(state.clone(), track_request))
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
-        .with_state(state);
-    match socket_io_layer {
-        Some(layer) => router.layer(layer),
-        None => router,
-    }
+        .with_state(state)
 }
 
 fn cors_layer(allowed_origins: &[String]) -> CorsLayer {

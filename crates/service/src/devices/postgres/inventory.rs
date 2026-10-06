@@ -200,7 +200,7 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
                       AND rc."deletedAt" IS NULL AND r."deletedAt" IS NULL
                     LIMIT 1
                 ), d."controllerId"),
-                'usage', jsonb_build_object('totalHours', 0, 'states', '{{}}'::jsonb)
+                'usage', jsonb_build_object('totalHours', 0, 'states', '{}'::jsonb)
             )
             FROM devices d WHERE
                 d."deletedAt" IS NULL
