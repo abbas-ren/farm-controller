@@ -43,6 +43,13 @@ async fn relay_sync_worker_is_bounded_and_cancellable() {
     assert_eq!(failed.payload["status"], "failed");
     assert_eq!(failed.payload["total"], 1);
     assert_eq!(failed.payload["completed"], 0);
+    assert_eq!(failed.payload["errors"].as_array().unwrap().len(), 1);
+    assert!(
+        failed.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid controller address")
+    );
     cancellation.cancel();
     handle.await.unwrap();
 }

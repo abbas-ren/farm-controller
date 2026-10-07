@@ -282,11 +282,23 @@ async fn dispatch_relay_actions(job: RelaySyncJob, event_publisher: &EventHub) {
         match client.post(url).json(&payload).send().await {
             Ok(response) if response.status().is_success() => completed += 1,
             Ok(response) => {
-                tracing::warn!(status = %response.status(), path, "controller rejected relay synchronization");
-                errors.push(format!(
-                    "Controller rejected {path} with {}",
-                    response.status()
-                ));
+                let status = response.status();
+                let detail = response
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|body| {
+                        body.get("error")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    });
+                tracing::warn!(%status, path, error = ?detail, "controller rejected relay synchronization");
+                errors.push(match detail {
+                    Some(detail) => {
+                        format!("Controller rejected {path} with {status}: {detail}")
+                    }
+                    None => format!("Controller rejected {path} with {status}"),
+                });
             }
             Err(error) => {
                 tracing::warn!(%error, path, "relay synchronization request did not complete");
@@ -328,7 +340,10 @@ fn publish_relay_status(
     errors: &[String],
 ) {
     let message = match status {
-        "failed" => Some("Relay hardware synchronization failed"),
+        "failed" => errors
+            .first()
+            .map(String::as_str)
+            .or(Some("Relay hardware synchronization failed")),
         "completed_with_errors" => Some("Relay hardware synchronization completed with errors"),
         _ => None,
     };
