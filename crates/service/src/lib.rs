@@ -5,6 +5,7 @@ pub mod events;
 pub mod observability;
 pub mod persistence;
 pub mod reports;
+pub mod runtime_log_handlers;
 pub mod state;
 pub mod test_results;
 pub mod workers;

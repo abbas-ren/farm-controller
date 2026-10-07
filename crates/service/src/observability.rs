@@ -31,6 +31,12 @@ use crate::{
     state::AppState,
 };
 
+mod runtime_logging;
+
+pub use runtime_logging::{
+    RuntimeLogEntry, recent_runtime_logs, runtime_log_level, set_runtime_log_level,
+};
+
 #[derive(Clone)]
 pub struct Metrics {
     registry: Registry,
@@ -402,6 +408,7 @@ fn network_writer(address: std::net::SocketAddr) -> Result<Arc<UdpSocket>, AppEr
 pub fn init_logging(config: &LoggingConfig) -> Result<Option<WorkerGuard>, AppError> {
     let filter = EnvFilter::try_new(&config.level)
         .map_err(|error| AppError::Telemetry(format!("invalid log filter: {error}")))?;
+    let (filter, capture, runtime_control) = runtime_logging::prepare(filter, &config.level);
     let (file, guard) = match &config.file {
         Some(path) => {
             let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -428,16 +435,19 @@ pub fn init_logging(config: &LoggingConfig) -> Result<Option<WorkerGuard>, AppEr
     if config.json {
         tracing_subscriber::registry()
             .with(filter)
+            .with(capture)
             .with(tracing_subscriber::fmt::layer().json().with_writer(writer))
             .try_init()
             .map_err(|error| AppError::Telemetry(error.to_string()))?;
     } else {
         tracing_subscriber::registry()
             .with(filter)
+            .with(capture)
             .with(tracing_subscriber::fmt::layer().with_writer(writer))
             .try_init()
             .map_err(|error| AppError::Telemetry(error.to_string()))?;
     }
+    runtime_logging::install(runtime_control)?;
     Ok(guard)
 }
 

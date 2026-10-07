@@ -59,6 +59,7 @@ pub mod tests;
 pub(crate) mod tus_handlers;
 mod tus_store;
 mod types;
+pub(crate) mod uart_handlers;
 mod upload_events;
 mod validation;
 
@@ -74,6 +75,7 @@ mod relay_inventory_handlers;
 pub(crate) use constants::{
     DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_CALLBACK_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY,
     EDGE_CONTROLLER_PORT, MAX_PAGE_SIZE, RELAY_CONTROLLER_TIMEOUT, TEST_CANCELLATION_TIMEOUT,
+    UART_CONFIGURATION_TIMEOUT,
 };
 pub(crate) use error::DeviceRepositoryError;
 #[cfg(test)]
@@ -108,7 +110,8 @@ pub use types::{
     RelayConfigurationRequest, RelayConfirmationResponse, RelayConflictResponse,
     RelayConflictState, RelayIdentityUpdateRequest, RelayIdentityUpdateResponse, RelayRecord,
     RelayRegistration, SuccessResponse, TestCompletionQuery, TestCompletionResponse,
-    UpdateExecutionRequest, UserDeviceListQuery, VoltageLevel,
+    UartConfigurationRequest, UartConfigurationResponse, UpdateExecutionRequest,
+    UserDeviceListQuery, VoltageLevel,
 };
 
 pub use artifact_inventory_handlers::*;
@@ -120,3 +123,4 @@ pub use inventory_handlers::*;
 pub(crate) use postgres::PostgresDeviceRepository;
 pub use power_handlers::*;
 pub use relay_inventory_handlers::*;
+pub use uart_handlers::*;

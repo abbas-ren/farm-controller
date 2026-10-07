@@ -45,6 +45,7 @@ use super::test_execution_handlers::{
 };
 use super::test_export_handlers::export_tests;
 use super::tus_handlers;
+use super::uart_handlers::configure_uart;
 use super::{
     active_devices, available_relay_devices, builds_for_device, builds_for_device_type,
     channels_for_relay, configure_artifacts, delete_controller, delete_device, device_action,
@@ -212,6 +213,7 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/relay/devices/available", get(available_relay_devices))
         .route("/relay/state/{id}", get(relay_device_state))
         .route("/relay/configure", post(configure_relay_channels))
+        .route("/uart/configure", post(configure_uart))
         .route("/relay/config", post(configure_legacy_relay))
         .route("/relay/config/fresh", post(fresh_legacy_relay))
         .route("/relay/config/remap", post(remap_legacy_relay))

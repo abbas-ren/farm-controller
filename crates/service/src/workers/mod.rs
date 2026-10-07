@@ -260,7 +260,7 @@ async fn dispatch_relay_actions(job: RelaySyncJob, event_publisher: &EventHub) {
                     "channel": channel_number,
                     "gen": device_generation.as_deref().and_then(device_generation_number),
                 }),
-                Duration::from_secs(1),
+                RELAY_CONTROLLER_TIMEOUT,
             ),
         };
         let Ok(url) = reqwest::Url::parse(&format!(

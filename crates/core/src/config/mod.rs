@@ -226,6 +226,8 @@ pub struct DeviceConfig {
     pub request_timeout_seconds: u64,
     #[serde(default = "default_terminal_username")]
     pub terminal_username: String,
+    #[serde(default = "default_terminal_connect_timeout")]
+    pub terminal_connect_timeout_seconds: u64,
     #[serde(default)]
     pub terminal_password: String,
     #[serde(default = "default_rtos_username")]
@@ -275,6 +277,7 @@ impl Default for DeviceConfig {
             server_ip: default_device_server_ip(),
             request_timeout_seconds: default_device_request_timeout(),
             terminal_username: default_terminal_username(),
+            terminal_connect_timeout_seconds: default_terminal_connect_timeout(),
             terminal_password: String::new(),
             rtos_username: default_rtos_username(),
             rtos_password: String::new(),
@@ -337,6 +340,10 @@ fn default_device_request_timeout() -> u64 {
 
 fn default_terminal_username() -> String {
     "root".to_owned()
+}
+
+fn default_terminal_connect_timeout() -> u64 {
+    20
 }
 
 fn default_rtos_username() -> String {
@@ -805,6 +812,11 @@ impl AppConfig {
             ));
         }
         if self.module_enabled(Module::Events) {
+            if !(1..=120).contains(&self.device.terminal_connect_timeout_seconds) {
+                return Err(AppError::Configuration(
+                    "device.terminal_connect_timeout_seconds must be between 1 and 120".to_owned(),
+                ));
+            }
             if self.device.terminal_username.trim().is_empty()
                 || self.device.rtos_username.trim().is_empty()
             {

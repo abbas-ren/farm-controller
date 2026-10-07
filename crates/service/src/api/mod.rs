@@ -24,7 +24,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
     auth, config::Module, devices, error::ErrorResponse, events, observability::track_request,
-    reports, state::AppState,
+    reports, runtime_log_handlers, state::AppState,
 };
 
 #[derive(OpenApi)]
@@ -153,6 +153,7 @@ use crate::{
         devices::relay_handlers::update_relay_identity,
         devices::relay_handlers::configure_relay_channels,
         devices::relay_handlers::confirm_relay_configuration,
+        devices::uart_handlers::configure_uart,
         devices::relay_handlers::configure_legacy_relay,
         devices::relay_handlers::fresh_legacy_relay,
         devices::relay_handlers::remap_legacy_relay,
@@ -282,6 +283,8 @@ use crate::{
         devices::RelayConfigurationConfirmation,
         devices::RelayConfigurationAccepted,
         devices::RelayConfirmationResponse,
+        devices::UartConfigurationRequest,
+        devices::UartConfigurationResponse,
         devices::LegacyRelayConfiguration,
         devices::LegacyRelayRemapRequest,
         devices::RelayConflictState,
@@ -369,6 +372,12 @@ pub fn router(state: Arc<AppState>) -> Router {
     if state.config.module_enabled(Module::Metrics) {
         router = router.route("/metrics", get(metrics));
     }
+    router = router
+        .route("/api/v1/operations/logs", get(runtime_log_handlers::logs))
+        .route(
+            "/api/v1/operations/logs/level",
+            axum::routing::put(runtime_log_handlers::update_level),
+        );
     if state.config.module_enabled(Module::Swagger) {
         router = router
             .route(

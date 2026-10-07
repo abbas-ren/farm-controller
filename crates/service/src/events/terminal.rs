@@ -50,11 +50,25 @@ struct TerminalTarget {
     startup_command: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalAuthMethod {
+    None,
+    Password,
+}
+
+fn terminal_auth_method(password: &str) -> TerminalAuthMethod {
+    if password.is_empty() {
+        TerminalAuthMethod::None
+    } else {
+        TerminalAuthMethod::Password
+    }
+}
+
 pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket) {
     let Some(target) = receive_target(&state, &mut socket).await else {
         return;
     };
-    let timeout = Duration::from_secs(state.config.device.request_timeout_seconds);
+    let timeout = Duration::from_secs(state.config.device.terminal_connect_timeout_seconds);
     let config = Arc::new(client::Config::default());
     let ssh_client = SshClient {
         host: target.host.clone(),
@@ -62,6 +76,7 @@ pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket) {
         known_hosts_file: state.config.device.terminal_known_hosts_file.clone().into(),
         accept_unknown_host_keys: state.config.device.terminal_accept_unknown_host_keys,
     };
+    tracing::debug!(host = %target.host, port = target.port, username = %target.username, timeout_seconds = timeout.as_secs(), "opening SSH terminal connection");
     let connection = tokio::time::timeout(
         timeout,
         client::connect(config, (target.host.as_str(), target.port), ssh_client),
@@ -70,31 +85,42 @@ pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket) {
     let mut ssh = match connection {
         Ok(Ok(ssh)) => ssh,
         Ok(Err(error)) => {
+            tracing::error!(host = %target.host, port = target.port, %error, "SSH connection failed");
             send_error(&mut socket, format!("SSH error: {error}")).await;
             return;
         }
         Err(_) => {
+            tracing::warn!(host = %target.host, port = target.port, timeout_seconds = timeout.as_secs(), "SSH connection timed out");
             send_error(&mut socket, "SSH error: connection timed out").await;
             return;
         }
     };
-    let authenticated = match ssh
-        .authenticate_password(&target.username, &target.password)
-        .await
-    {
+    let auth_method = terminal_auth_method(&target.password);
+    let authentication = match auth_method {
+        TerminalAuthMethod::None => ssh.authenticate_none(&target.username).await,
+        TerminalAuthMethod::Password => {
+            ssh.authenticate_password(&target.username, &target.password)
+                .await
+        }
+    };
+    let authenticated = match authentication {
         Ok(result) => result.success(),
         Err(error) => {
+            tracing::error!(host = %target.host, username = %target.username, ?auth_method, %error, "SSH authentication request failed");
             send_error(&mut socket, format!("SSH error: {error}")).await;
             return;
         }
     };
     if !authenticated {
+        tracing::warn!(host = %target.host, username = %target.username, ?auth_method, "SSH authentication was rejected");
         send_error(&mut socket, "SSH error: authentication failed").await;
         return;
     }
+    tracing::info!(host = %target.host, username = %target.username, ?auth_method, "SSH terminal authenticated");
     let mut channel = match ssh.channel_open_session().await {
         Ok(channel) => channel,
         Err(error) => {
+            tracing::error!(host = %target.host, %error, "SSH session channel failed to open");
             send_error(&mut socket, format!("Shell error: {error}")).await;
             return;
         }
@@ -103,13 +129,16 @@ pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket) {
         .request_pty(false, "xterm", 120, 40, 0, 0, &[])
         .await
     {
+        tracing::error!(host = %target.host, %error, "SSH pseudo-terminal request failed");
         send_error(&mut socket, format!("Shell error: {error}")).await;
         return;
     }
     if let Err(error) = channel.request_shell(true).await {
+        tracing::error!(host = %target.host, %error, "SSH interactive shell request failed");
         send_error(&mut socket, format!("Shell error: {error}")).await;
         return;
     }
+    tracing::info!(host = %target.host, username = %target.username, "SSH interactive terminal opened");
     if let Some(command) = target.startup_command {
         let command = if command.ends_with('\n') {
             command
@@ -360,7 +389,18 @@ async fn send_output(
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_uart, default_rtos_command, message_port};
+    use super::{
+        TerminalAuthMethod, adjacent_uart, default_rtos_command, message_port, terminal_auth_method,
+    };
+
+    #[test]
+    fn empty_terminal_password_uses_ssh_none_authentication() {
+        assert_eq!(terminal_auth_method(""), TerminalAuthMethod::None);
+        assert_eq!(
+            terminal_auth_method("configured-secret"),
+            TerminalAuthMethod::Password
+        );
+    }
 
     #[test]
     fn rtos_command_uses_adjacent_uart() {

@@ -10,8 +10,12 @@ The service generates OpenAPI from Rust route definitions:
 - Prometheus: `/metrics`
 - Browser Socket.IO: `/socket.io`
 - Native protocols: `/ws`
+- Runtime logs: `/api/v1/operations/logs`
+- Runtime log level: `/api/v1/operations/logs/level`
 
 Most application APIs retain `/api/v1/auth` and `/api/v1/device`. Use `Authorization: Bearer <token>` unless a route is explicitly documented as a deployed device/controller callback. Refresh compatibility accepts `refreshtoken`, `x-refresh-token`, and the `refreshToken` cookie.
+
+The administrator-only runtime log endpoints accept `farmcontroller` or `edgecontroller` as the source. Edge requests require a stored controller ID and are proxied by FarmController; browsers never connect to EdgeController directly.
 
 The detailed path, access, payload, historical error, file, upload, and event inventory is [api-compatibility.md](api-compatibility.md). Swagger is the executable reference for mounted routes; the compatibility inventory records legacy behavior and remaining external validation.
 

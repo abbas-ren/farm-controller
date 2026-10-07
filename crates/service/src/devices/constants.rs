@@ -7,5 +7,6 @@ pub(crate) const RELAY_IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const TEST_CANCELLATION_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const DEVICE_ACTION_HTTP_TIMEOUT: Duration = Duration::from_secs(55);
 pub(crate) const DEVICE_COMMAND_RETRY_DELAY: Duration = Duration::from_millis(200);
-pub(crate) const RELAY_CONTROLLER_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const RELAY_CONTROLLER_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const UART_CONFIGURATION_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const MAX_PAGE_SIZE: u32 = 100;

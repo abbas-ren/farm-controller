@@ -10,6 +10,7 @@ mod pagination;
 mod registration;
 mod relay_configuration;
 mod relays;
+mod uart_configuration;
 
 pub use alerts::*;
 pub use analytics::*;
@@ -23,3 +24,4 @@ pub use pagination::*;
 pub use registration::*;
 pub use relay_configuration::*;
 pub use relays::*;
+pub use uart_configuration::*;

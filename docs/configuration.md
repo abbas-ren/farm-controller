@@ -12,6 +12,8 @@ Production starts from `config/production.toml.example`. Keep secrets out of TOM
 FARMCONTROLLER__DATABASE__URL=postgresql://user:password@db:5432/farmcontroller
 FARMCONTROLLER__AUTH__CLIENT_SECRET=replace-me
 FARMCONTROLLER__DEVICE__SERVER_IP=192.0.2.10
+# Required only when EdgeController uses DEV_CONTROLLER_TOKEN.
+EDGE_CONTROLLER_TOKEN=replace-with-the-edge-token
 ```
 
 Runtime modules are `api`, `auth`, `device`, `reports`, `workers`, `events`, `metrics`, `swagger`, and `health`. Repeated and comma-separated forms are accepted:
