@@ -6,16 +6,22 @@ use crate::error::ErrorResponse;
 use crate::{auth, events::ServerEvent, state::AppState};
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 
-#[utoipa::path(delete, path = "/api/v1/device/{id}", tag = "Devices", summary = "Delete a device", description = "Requests remote device cleanup when reachable, then applies the retained database deletion and committed inventory event behavior.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Device deleted"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Device not found", body = ErrorResponse), (status = 500, description = "Device deletion failed", body = ErrorResponse), (status = 502, description = "Device did not acknowledge deletion", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct DeleteDeviceQuery {
+    force: Option<bool>,
+}
+
+#[utoipa::path(delete, path = "/api/v1/device/{id}", tag = "Devices", summary = "Delete a device", description = "Requests remote device cleanup when reachable, then applies the retained database deletion and committed inventory event behavior. Set force=true to skip EdgeAgent acknowledgement for an offline device.", params(("id" = String, Path), ("force" = Option<bool>, Query, description = "Skip EdgeAgent acknowledgement and remove the persisted device")), security(("bearer_auth" = [])), responses((status = 200, description = "Device deleted"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Device not found", body = ErrorResponse), (status = 500, description = "Device deletion failed", body = ErrorResponse), (status = 502, description = "Device did not acknowledge deletion", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn delete_device(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(device_id): Path<String>,
+    Query(query): Query<DeleteDeviceQuery>,
 ) -> axum::response::Response {
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
@@ -33,41 +39,48 @@ pub async fn delete_device(
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "not_found", "Device not found"),
         Err(error) => return repository_error(error, "Failed to load device"),
     };
-    let url = match reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/delete",
-        target.ip_address
-    )) {
-        Ok(url) => url,
-        Err(_) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_device_address",
-                "Device IP address is invalid",
-            );
-        }
-    };
-    match callback_client()
-        .post(url)
-        .json(&serde_json::json!({"UID": device_id}))
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => {}
-        Ok(response) => {
-            tracing::warn!(status = %response.status(), device_id, "device deletion was rejected");
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                "device_callback_failed",
-                "Device did not acknowledge deletion",
-            );
-        }
-        Err(error) => {
-            tracing::warn!(%error, device_id, "device deletion callback failed");
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                "device_unreachable",
-                "Device delete endpoint is unavailable",
-            );
+    if query.force.unwrap_or(false) {
+        tracing::warn!(
+            device_id,
+            "forced device deletion is skipping EdgeAgent acknowledgement"
+        );
+    } else {
+        let url = match reqwest::Url::parse(&format!(
+            "http://{}:{EDGE_CONTROLLER_PORT}/delete",
+            target.ip_address
+        )) {
+            Ok(url) => url,
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_device_address",
+                    "Device IP address is invalid",
+                );
+            }
+        };
+        match callback_client()
+            .post(url)
+            .json(&serde_json::json!({"UID": device_id}))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                tracing::warn!(status = %response.status(), device_id, "device deletion was rejected");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "device_callback_failed",
+                    "Device did not acknowledge deletion",
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, device_id, "device deletion callback failed");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "device_unreachable",
+                    "Device delete endpoint is unavailable",
+                );
+            }
         }
     }
     let normalized_family = target

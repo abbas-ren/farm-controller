@@ -40,6 +40,7 @@ pub struct ControlDocument {
 pub struct ControlQuery {
     source: ControlSource,
     controller_id: Option<String>,
+    device_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -47,6 +48,7 @@ pub struct ControlQuery {
 enum ControlSource {
     FarmController,
     EdgeController,
+    EdgeAgent,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,10 +103,11 @@ pub fn edge_token(controller_id: &str) -> Option<String> {
     path = "/api/v1/admin/control",
     tag = "Operations",
     summary = "Read controller administration settings",
-    description = "Returns redacted active and staged FarmController settings or proxies an approved EdgeController through FarmController.",
+    description = "Returns redacted FarmController settings or proxies an approved EdgeController or EdgeAgent through FarmController.",
     params(
-        ("source" = String, Query, description = "farmcontroller or edgecontroller"),
-        ("controllerId" = Option<String>, Query, description = "Required for EdgeController")
+        ("source" = String, Query, description = "farmcontroller, edgecontroller, or edgeagent"),
+        ("controllerId" = Option<String>, Query, description = "Required for EdgeController"),
+        ("deviceId" = Option<String>, Query, description = "Required for EdgeAgent")
     ),
     security(("bearer_auth" = [])),
     responses(
@@ -135,6 +138,16 @@ pub async fn get(
             )
             .await
         }
+        ControlSource::EdgeAgent => {
+            proxy_agent(
+                &state,
+                response_headers,
+                query.device_id.as_deref(),
+                Method::GET,
+                None,
+            )
+            .await
+        }
     }
 }
 
@@ -146,8 +159,9 @@ pub async fn get(
     description = "Validates and persists a typed FarmController patch or proxies a validated EdgeController patch. Secret fields are write-only.",
     request_body = Object,
     params(
-        ("source" = String, Query, description = "farmcontroller or edgecontroller"),
-        ("controllerId" = Option<String>, Query, description = "Required for EdgeController")
+        ("source" = String, Query, description = "farmcontroller, edgecontroller, or edgeagent"),
+        ("controllerId" = Option<String>, Query, description = "Required for EdgeController"),
+        ("deviceId" = Option<String>, Query, description = "Required for EdgeAgent")
     ),
     security(("bearer_auth" = [])),
     responses(
@@ -187,6 +201,16 @@ pub async fn patch(
             )
             .await
         }
+        ControlSource::EdgeAgent => {
+            proxy_agent(
+                &state,
+                response_headers,
+                query.device_id.as_deref(),
+                Method::PATCH,
+                Some(payload),
+            )
+            .await
+        }
     }
 }
 
@@ -198,8 +222,9 @@ pub async fn patch(
     description = "Runs only allowlisted restart, staged-configuration, or EdgeController mapping-maintenance actions.",
     request_body = Object,
     params(
-        ("source" = String, Query, description = "farmcontroller or edgecontroller"),
-        ("controllerId" = Option<String>, Query, description = "Required for EdgeController")
+        ("source" = String, Query, description = "farmcontroller, edgecontroller, or edgeagent"),
+        ("controllerId" = Option<String>, Query, description = "Required for EdgeController"),
+        ("deviceId" = Option<String>, Query, description = "Required for EdgeAgent")
     ),
     security(("bearer_auth" = [])),
     responses(
@@ -251,6 +276,16 @@ pub async fn action(
                 &state,
                 response_headers,
                 query.controller_id.as_deref(),
+                Method::POST,
+                Some(payload),
+            )
+            .await
+        }
+        ControlSource::EdgeAgent => {
+            proxy_agent(
+                &state,
+                response_headers,
+                query.device_id.as_deref(),
                 Method::POST,
                 Some(payload),
             )
@@ -513,6 +548,116 @@ async fn proxy_edge(
     (status, response_headers, Json(body)).into_response()
 }
 
+async fn proxy_agent(
+    state: &AppState,
+    response_headers: HeaderMap,
+    device_id: Option<&str>,
+    method: Method,
+    payload: Option<serde_json::Value>,
+) -> Response {
+    let device_id = match canonical_device_id(device_id) {
+        Ok(device_id) => device_id,
+        Err(message) => return bad_request(message),
+    };
+    let address = match approved_device_address(state, &device_id).await {
+        Ok(Some(address)) => address,
+        Ok(None) => {
+            return error(
+                StatusCode::NOT_FOUND,
+                "device_not_found",
+                "Approved device not found",
+            );
+        }
+        Err(message) => return internal_error(message),
+    };
+    let url = match reqwest::Url::parse(&format!(
+        "http://{address}:{EDGE_CONTROLLER_PORT}/admin/control"
+    )) {
+        Ok(url) => url,
+        Err(_) => {
+            return error(
+                StatusCode::BAD_GATEWAY,
+                "device_address",
+                "Invalid EdgeAgent address",
+            );
+        }
+    };
+    let client = match reqwest::Client::builder().timeout(EDGE_TIMEOUT).build() {
+        Ok(client) => client,
+        Err(error) => return internal_error(format!("cannot create EdgeAgent client: {error}")),
+    };
+    let mut request = client.request(
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+        url,
+    );
+    if let Some(token) = std::env::var("EDGE_AGENT_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+    {
+        request = request.bearer_auth(token);
+    }
+    if let Some(payload) = payload {
+        request = request.json(&payload);
+    }
+    let agent_response = match request.send().await {
+        Ok(response) => response,
+        Err(request_error) => {
+            tracing::warn!(error = %request_error, device_id, "EdgeAgent control request failed");
+            return error(
+                StatusCode::BAD_GATEWAY,
+                "agent_unavailable",
+                "EdgeAgent control request failed",
+            );
+        }
+    };
+    let status =
+        StatusCode::from_u16(agent_response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let body = agent_response
+        .json::<serde_json::Value>()
+        .await
+        .unwrap_or_else(|_| serde_json::json!({"error": "EdgeAgent returned invalid JSON"}));
+    (status, response_headers, Json(body)).into_response()
+}
+
+fn canonical_device_id(device_id: Option<&str>) -> Result<String, &'static str> {
+    let Some(device_id) = device_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Err("deviceId is required for EdgeAgent control");
+    };
+    if device_id.len() != 12 || !device_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("deviceId must be a MAC address without separators");
+    }
+    Ok(device_id.to_ascii_lowercase())
+}
+
+async fn approved_device_address(
+    state: &AppState,
+    device_id: &str,
+) -> Result<Option<std::net::Ipv4Addr>, String> {
+    let repository = state
+        .device_repository
+        .as_ref()
+        .ok_or_else(|| "Device persistence is unavailable".to_owned())?;
+    let device = repository
+        .device_by_id(device_id)
+        .await
+        .map_err(|error| format!("Failed to load device: {error}"))?;
+    let Some(device) = device else {
+        return Ok(None);
+    };
+    if device.get("status").and_then(serde_json::Value::as_str) != Some("approved")
+        || device.get("deviceId").and_then(serde_json::Value::as_str) != Some(device_id)
+    {
+        return Ok(None);
+    }
+    let address = device
+        .get("ipAddress")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Approved device has no IP address".to_owned())?
+        .parse::<std::net::Ipv4Addr>()
+        .map_err(|_| "Approved device has an invalid IPv4 address".to_owned())?;
+    Ok(Some(address))
+}
+
 fn update_edge_token(controller_id: &str, payload: Option<&serde_json::Value>) {
     let Some(control) = CONTROL.get() else {
         return;
@@ -548,7 +693,7 @@ async fn controller_address(
     let controllers = repository
         .list_controllers(&ControllerListQuery {
             search: Some(controller_id.to_owned()),
-            status: None,
+            status: Some("approved".to_owned()),
             state: None,
             sort_by: None,
             desc: None,
@@ -680,5 +825,16 @@ mod tests {
         );
         assert_eq!(value["logging"]["level"], "debug");
         assert_eq!(value["logging"]["json"], false);
+    }
+
+    #[test]
+    fn edge_agent_control_requires_canonical_device_identity() {
+        assert_eq!(
+            canonical_device_id(Some("AABBCCDDEEFF")).unwrap(),
+            "aabbccddeeff"
+        );
+        assert!(canonical_device_id(Some("aa:bb:cc:dd:ee:ff")).is_err());
+        assert!(canonical_device_id(Some("../../admin")).is_err());
+        assert!(canonical_device_id(None).is_err());
     }
 }

@@ -258,11 +258,39 @@ async fn receive_target(
                     send_error(socket, "SSH error: target is required.").await;
                     continue;
                 };
-                let host = if allow_farm_host && host.eq_ignore_ascii_case("farmcontroller") {
-                    "127.0.0.1".to_owned()
+                let (host, username, password) = if allow_farm_host {
+                    let host = if host.eq_ignore_ascii_case("farmcontroller") {
+                        "127.0.0.1".to_owned()
+                    } else {
+                        match approved_controller_host(state, host).await {
+                            Ok(host) => host,
+                            Err(error) => {
+                                send_error(socket, format!("SSH error: {error}")).await;
+                                continue;
+                            }
+                        }
+                    };
+                    let Some(username) = message
+                        .get("username")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|username| valid_username(username))
+                    else {
+                        send_error(socket, "SSH error: a valid username is required.").await;
+                        continue;
+                    };
+                    let Some(password) = message
+                        .get("password")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|password| password.len() <= 1_024)
+                    else {
+                        send_error(socket, "SSH error: password is required.").await;
+                        continue;
+                    };
+                    (host, username.to_owned(), password.to_owned())
                 } else {
-                    match approved_terminal_host(state, host).await {
-                        Ok(host) => host,
+                    match approved_device_host(state, host).await {
+                        Ok(host) => (host, "root".to_owned(), String::new()),
                         Err(error) => {
                             send_error(socket, format!("SSH error: {error}")).await;
                             continue;
@@ -272,8 +300,8 @@ async fn receive_target(
                 return Some(TerminalTarget {
                     host,
                     port: message_port(&message),
-                    username: state.config.device.terminal_username.clone(),
-                    password: state.config.device.terminal_password.clone(),
+                    username,
+                    password,
                     startup_command: None,
                 });
             }
@@ -287,29 +315,40 @@ async fn receive_target(
     None
 }
 
-async fn approved_terminal_host(state: &AppState, requested: &str) -> Result<String, String> {
+async fn approved_device_host(state: &AppState, requested: &str) -> Result<String, String> {
     let pool = state
         .database
         .as_ref()
         .map(|database| database.pool())
         .ok_or_else(|| "device persistence is unavailable".to_owned())?;
     sqlx::query_scalar::<_, String>(
-        r#"SELECT target."ipAddress"
-           FROM (
-               SELECT "ipAddress" FROM devices
-               WHERE "deletedAt" IS NULL AND status::text = 'approved'
-               UNION ALL
-               SELECT "ipAddress" FROM device_controllers
-               WHERE "deletedAt" IS NULL AND status::text = 'approved'
-           ) target
-           WHERE target."ipAddress" = $1
-           LIMIT 1"#,
+        r#"SELECT "ipAddress" FROM devices
+           WHERE "deletedAt" IS NULL AND status::text = 'approved'
+             AND "ipAddress" = $1 LIMIT 1"#,
     )
     .bind(requested)
     .fetch_optional(pool)
     .await
     .map_err(|error| error.to_string())?
-    .ok_or_else(|| "target is not an approved device or controller".to_owned())
+    .ok_or_else(|| "target is not an approved device".to_owned())
+}
+
+async fn approved_controller_host(state: &AppState, requested: &str) -> Result<String, String> {
+    let pool = state
+        .database
+        .as_ref()
+        .map(|database| database.pool())
+        .ok_or_else(|| "device persistence is unavailable".to_owned())?;
+    sqlx::query_scalar::<_, String>(
+        r#"SELECT "ipAddress" FROM device_controllers
+           WHERE "deletedAt" IS NULL AND status::text = 'approved'
+             AND "ipAddress" = $1 LIMIT 1"#,
+    )
+    .bind(requested)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| "target is not an approved device controller".to_owned())
 }
 
 async fn resolve_rtos_target(
@@ -327,31 +366,23 @@ async fn resolve_rtos_target(
         .as_ref()
         .map(|database| database.pool())
         .ok_or_else(|| "device persistence is unavailable".to_owned())?;
-    let target = sqlx::query_as::<_, (String, Option<String>)>(
-        r#"SELECT controller."ipAddress",
-                  controller.mappings -> regexp_replace(lower(device."macAddress"), '[:-]', '', 'g') ->> 'uart'
-           FROM devices device
-           JOIN device_controllers controller
-             ON controller."deletedAt" IS NULL
-            AND controller."ipAddress" IS NOT NULL
-            AND controller.mappings ? regexp_replace(lower(device."macAddress"), '[:-]', '', 'g')
-           WHERE device."deviceId" = $1 AND device."deletedAt" IS NULL
-           ORDER BY (controller."deviceControllerId" = device."controllerId") DESC,
-                    controller."updatedAt" DESC
-           LIMIT 1"#,
+    let target = sqlx::query_as::<_, (String, String, i16)>(
+        r#"SELECT controller."ipAddress", mapping.tty, mapping.generation
+                     FROM device_uart_mappings mapping
+                     JOIN devices device ON device."deviceId" = mapping."deviceId"
+                     JOIN device_controllers controller
+                         ON controller."deviceControllerId" = mapping."controllerId"
+                     WHERE mapping."deviceId" = $1 AND mapping.verified = true
+                         AND device."deletedAt" IS NULL AND device.status::text = 'approved'
+                         AND controller."deletedAt" IS NULL AND controller.status::text = 'approved'
+                     LIMIT 1"#,
     )
     .bind(device_id)
     .fetch_optional(pool)
     .await
     .map_err(|error| error.to_string())?
     .ok_or_else(|| format!("No mapped device controller found for device {device_id}"))?;
-    let startup_command = message
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| default_rtos_command(target.1.as_deref()));
+    let startup_command = rtos_command(&target.1, target.2)?;
     Ok(TerminalTarget {
         host: target.0,
         port: message_port(message),
@@ -369,29 +400,35 @@ fn message_port(message: &serde_json::Value) -> u16 {
         .unwrap_or(22)
 }
 
+fn valid_username(username: &str) -> bool {
+    !username.is_empty()
+        && username.len() <= 64
+        && username
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
 fn message_dimensions(message: &serde_json::Value) -> Option<(u32, u32)> {
     let columns = u32::try_from(message.get("cols")?.as_u64()?).ok()?;
     let rows = u32::try_from(message.get("rows")?.as_u64()?).ok()?;
     ((1..=1_000).contains(&columns) && (1..=1_000).contains(&rows)).then_some((columns, rows))
 }
 
-fn default_rtos_command(uart: Option<&str>) -> String {
-    let uart = uart.map_or_else(|| "ttyUSB1".to_owned(), adjacent_uart);
-    let uart = uart.trim_start_matches("/dev/");
-    format!("picocom /dev/{uart} -b 115200")
-}
-
-fn adjacent_uart(port: &str) -> String {
-    let split = port
-        .char_indices()
-        .rev()
-        .find(|(_, character)| !character.is_ascii_digit())
-        .map_or(0, |(index, character)| index + character.len_utf8());
-    let (prefix, suffix) = port.split_at(split);
-    suffix.parse::<u32>().map_or_else(
-        |_| port.trim_start_matches("/dev/").to_owned(),
-        |number| format!("{}{}", prefix.trim_start_matches("/dev/"), number + 1),
-    )
+fn rtos_command(tty: &str, generation: i16) -> Result<String, String> {
+    let tty = tty.trim();
+    let suffix = tty
+        .strip_prefix("/dev/ttyUSB")
+        .or_else(|| tty.strip_prefix("/dev/ttyACM"))
+        .ok_or_else(|| "verified UART path is unsupported".to_owned())?;
+    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("verified UART path is invalid".to_owned());
+    }
+    let baud = match generation {
+        3 | 5 => 115_200,
+        4 => 921_600,
+        _ => return Err("verified UART generation is invalid".to_owned()),
+    };
+    Ok(format!("picocom {tty} -b {baud}"))
 }
 
 async fn send_error(socket: &mut WebSocket, error: impl Into<String>) {
@@ -415,8 +452,8 @@ async fn send_output(
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalAuthMethod, adjacent_uart, default_rtos_command, message_dimensions, message_port,
-        terminal_auth_method,
+        TerminalAuthMethod, message_dimensions, message_port, rtos_command, terminal_auth_method,
+        valid_username,
     };
 
     #[test]
@@ -429,12 +466,23 @@ mod tests {
     }
 
     #[test]
-    fn rtos_command_uses_adjacent_uart() {
+    fn rtos_command_uses_verified_uart_and_generation_baud() {
         assert_eq!(
-            default_rtos_command(Some("/dev/ttyUSB1")),
-            "picocom /dev/ttyUSB2 -b 115200"
+            rtos_command("/dev/ttyUSB1", 3).unwrap(),
+            "picocom /dev/ttyUSB1 -b 115200"
         );
-        assert_eq!(adjacent_uart("2"), "3");
+        assert_eq!(
+            rtos_command("/dev/ttyACM2", 4).unwrap(),
+            "picocom /dev/ttyACM2 -b 921600"
+        );
+        assert!(rtos_command("/dev/ttyUSB1;reboot", 5).is_err());
+    }
+
+    #[test]
+    fn host_terminal_username_is_bounded_and_shell_safe() {
+        assert!(valid_username("farm-admin"));
+        assert!(!valid_username(""));
+        assert!(!valid_username("root;reboot"));
     }
 
     #[test]
