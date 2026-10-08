@@ -24,6 +24,24 @@ fn admin_terminal_mode_requires_the_frontend_client() {
     assert!(browser_authorization(&query(Some("cli"), true)).is_err());
 }
 
+#[test]
+fn browser_websocket_subprotocol_supplies_bearer_authentication() {
+    use axum::http::{HeaderMap, HeaderValue, header};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::SEC_WEBSOCKET_PROTOCOL,
+        HeaderValue::from_static("farm-browser-v1, bearer.header.payload.signature"),
+    );
+    let authorized = super::browser_auth_headers(&headers);
+    assert_eq!(
+        authorized
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer header.payload.signature")
+    );
+}
+
 use axum::{body::Body, http::Request, routing::post};
 use clap::Parser;
 use http_body_util::BodyExt;

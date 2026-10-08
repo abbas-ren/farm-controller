@@ -12,7 +12,7 @@ use axum::{
         Query, State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket, close_code},
     },
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -30,6 +30,8 @@ use crate::{
 };
 
 const EDGE_SUBPROTOCOL: &str = "web-cli-protocol";
+const BROWSER_SUBPROTOCOL: &str = "farm-browser-v1";
+const BROWSER_BEARER_PREFIX: &str = "bearer.";
 const ROOM_REGISTRATIONS: [(&str, &str, &str); 5] = [
     ("join:build", "leave:build", "build"),
     ("join:test", "leave:test", "test"),
@@ -168,6 +170,29 @@ fn browser_authorization(query: &NativeSocketQuery) -> Result<BrowserAuthorizati
     }
 }
 
+fn browser_auth_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut authorized = headers.clone();
+    if authorized.contains_key(header::AUTHORIZATION) {
+        return authorized;
+    }
+    let token = headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|protocols| {
+            protocols
+                .split(',')
+                .map(str::trim)
+                .find_map(|protocol| protocol.strip_prefix(BROWSER_BEARER_PREFIX))
+        })
+        .filter(|token| !token.is_empty());
+    if let Some(token) = token
+        && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        authorized.insert(header::AUTHORIZATION, value);
+    }
+    authorized
+}
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/ws", get(upgrade))
@@ -294,19 +319,21 @@ pub(crate) async fn upgrade(
     }
     let browser_client = browser_authorization != BrowserAuthorization::None;
     let required_role = (browser_authorization == BrowserAuthorization::Admin).then_some("admin");
+    let browser_headers = browser_auth_headers(&headers);
     if browser_client
-        && crate::auth::authorize_request(&state, &headers, required_role)
+        && crate::auth::authorize_request(&state, &browser_headers, required_role)
             .await
             .is_err()
     {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let authenticated_user_id = browser_client
-        .then(|| crate::auth::token_subject(&headers))
+        .then(|| crate::auth::token_subject(&browser_headers))
         .flatten();
     if query.client.as_deref() == Some("frontend") {
         let allow_farm_host = browser_authorization == BrowserAuthorization::Admin;
         return websocket
+            .protocols([BROWSER_SUBPROTOCOL])
             .on_upgrade(move |socket| terminal::session(state, socket, allow_farm_host));
     }
     if query.client.as_deref() == Some("cli")
@@ -315,6 +342,7 @@ pub(crate) async fn upgrade(
         && !user_name.trim().is_empty()
     {
         return websocket
+            .protocols([BROWSER_SUBPROTOCOL])
             .on_upgrade(move |socket| web_cli::session(state, user_id, user_name, socket));
     }
     if let (Some(test_id), Some(device_id)) = (query.test_id, query.device_id.clone()) {
