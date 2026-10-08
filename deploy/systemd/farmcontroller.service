@@ -1,0 +1,34 @@
+[Unit]
+Description=FarmController service
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=farmcontroller
+Group=farmcontroller
+EnvironmentFile=-/etc/farmcontroller/farmcontroller.env
+ExecStart=/usr/local/bin/farmcontroller --config /etc/farmcontroller/config.toml
+WorkingDirectory=/var/lib/farmcontroller
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+StateDirectory=farmcontroller
+StateDirectoryMode=0750
+LogsDirectory=farmcontroller
+LogsDirectoryMode=0750
+ReadWritePaths=/var/lib/farmcontroller /var/log/farmcontroller -/nfs_share -/tftp_data -/artifacts -/test-results -/Racer_IPL_flash
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

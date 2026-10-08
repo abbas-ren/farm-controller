@@ -1,3 +1,29 @@
+#[test]
+fn admin_terminal_mode_requires_the_frontend_client() {
+    use super::{BrowserAuthorization, NativeSocketQuery, browser_authorization};
+
+    let query = |client: Option<&str>, admin_terminal| NativeSocketQuery {
+        device_controller_id: None,
+        controller_id: None,
+        device_id: None,
+        test_id: None,
+        client: client.map(str::to_owned),
+        user_name: None,
+        admin_terminal: Some(admin_terminal),
+    };
+
+    assert_eq!(
+        browser_authorization(&query(Some("frontend"), true)),
+        Ok(BrowserAuthorization::Admin)
+    );
+    assert_eq!(
+        browser_authorization(&query(Some("frontend"), false)),
+        Ok(BrowserAuthorization::Authenticated)
+    );
+    assert!(browser_authorization(&query(None, true)).is_err());
+    assert!(browser_authorization(&query(Some("cli"), true)).is_err());
+}
+
 use axum::{body::Body, http::Request, routing::post};
 use clap::Parser;
 use http_body_util::BodyExt;

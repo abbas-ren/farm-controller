@@ -146,6 +146,26 @@ pub(crate) struct NativeSocketQuery {
     test_id: Option<String>,
     client: Option<String>,
     user_name: Option<String>,
+    admin_terminal: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BrowserAuthorization {
+    None,
+    Authenticated,
+    Admin,
+}
+
+fn browser_authorization(query: &NativeSocketQuery) -> Result<BrowserAuthorization, ()> {
+    match (
+        query.client.as_deref(),
+        query.admin_terminal.unwrap_or(false),
+    ) {
+        (Some("frontend"), true) => Ok(BrowserAuthorization::Admin),
+        (Some("frontend" | "cli"), false) => Ok(BrowserAuthorization::Authenticated),
+        (_, true) => Err(()),
+        _ => Ok(BrowserAuthorization::None),
+    }
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -243,7 +263,8 @@ pub(crate) async fn send_user_message(
         ("deviceId" = Option<String>, Query, description = "Device identity; pair with testId for native results"),
         ("testId" = Option<String>, Query, description = "Active native test execution identity"),
         ("client" = Option<String>, Query, description = "Authenticated browser mode: frontend or cli"),
-        ("userName" = Option<String>, Query, description = "Required display name for cli mode")
+        ("userName" = Option<String>, Query, description = "Required display name for cli mode"),
+        ("adminTerminal" = Option<bool>, Query, description = "Require the admin role and permit the FarmController host terminal")
     ),
     responses(
         (status = 101, description = "WebSocket protocol upgraded"),
@@ -258,6 +279,10 @@ pub(crate) async fn upgrade(
     headers: HeaderMap,
     websocket: WebSocketUpgrade,
 ) -> Response {
+    let browser_authorization = match browser_authorization(&query) {
+        Ok(authorization) => authorization,
+        Err(()) => return StatusCode::BAD_REQUEST.into_response(),
+    };
     let controller_id = query
         .device_controller_id
         .or(query.controller_id)
@@ -267,9 +292,10 @@ pub(crate) async fn upgrade(
             .protocols([EDGE_SUBPROTOCOL])
             .on_upgrade(move |socket| controller_session(state, controller_id, socket));
     }
-    let browser_client = matches!(query.client.as_deref(), Some("frontend" | "cli"));
+    let browser_client = browser_authorization != BrowserAuthorization::None;
+    let required_role = (browser_authorization == BrowserAuthorization::Admin).then_some("admin");
     if browser_client
-        && crate::auth::authorize_request(&state, &headers, None)
+        && crate::auth::authorize_request(&state, &headers, required_role)
             .await
             .is_err()
     {
@@ -279,7 +305,9 @@ pub(crate) async fn upgrade(
         .then(|| crate::auth::token_subject(&headers))
         .flatten();
     if query.client.as_deref() == Some("frontend") {
-        return websocket.on_upgrade(move |socket| terminal::session(state, socket));
+        let allow_farm_host = browser_authorization == BrowserAuthorization::Admin;
+        return websocket
+            .on_upgrade(move |socket| terminal::session(state, socket, allow_farm_host));
     }
     if query.client.as_deref() == Some("cli")
         && let (Some(user_id), Some(user_name)) = (authenticated_user_id, query.user_name)

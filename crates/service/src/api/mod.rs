@@ -23,8 +23,8 @@ use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
-    auth, config::Module, devices, error::ErrorResponse, events, observability::track_request,
-    reports, runtime_log_handlers, state::AppState,
+    admin_control, auth, config::Module, devices, error::ErrorResponse, events,
+    observability::track_request, reports, runtime_log_handlers, state::AppState,
 };
 
 #[derive(OpenApi)]
@@ -33,6 +33,11 @@ use crate::{
         health,
         ready,
         metrics,
+        admin_control::get,
+        admin_control::patch,
+        admin_control::action,
+        runtime_log_handlers::logs,
+        runtime_log_handlers::update_level,
         auth::signin,
         auth::request_registration,
         auth::registration_action,
@@ -377,6 +382,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/operations/logs/level",
             axum::routing::put(runtime_log_handlers::update_level),
+        )
+        .route(
+            "/api/v1/admin/control",
+            get(admin_control::get)
+                .patch(admin_control::patch)
+                .post(admin_control::action),
         );
     if state.config.module_enabled(Module::Swagger) {
         router = router

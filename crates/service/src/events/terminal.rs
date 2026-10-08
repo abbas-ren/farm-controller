@@ -64,8 +64,8 @@ fn terminal_auth_method(password: &str) -> TerminalAuthMethod {
     }
 }
 
-pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket) {
-    let Some(target) = receive_target(&state, &mut socket).await else {
+pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket, allow_farm_host: bool) {
+    let Some(target) = receive_target(&state, &mut socket, allow_farm_host).await else {
         return;
     };
     let timeout = Duration::from_secs(state.config.device.terminal_connect_timeout_seconds);
@@ -164,11 +164,22 @@ pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket) {
                                 continue;
                             }
                         };
-                        if value.get("type").and_then(serde_json::Value::as_str) == Some("ssh_input")
-                            && let Some(chunk) = value.get("chunk").and_then(serde_json::Value::as_str)
-                            && channel.data(chunk.as_bytes()).await.is_err()
-                        {
-                            break;
+                        match value.get("type").and_then(serde_json::Value::as_str) {
+                            Some("ssh_input") => {
+                                if let Some(chunk) = value.get("chunk").and_then(serde_json::Value::as_str)
+                                    && channel.data(chunk.as_bytes()).await.is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            Some("ssh_resize") => {
+                                if let Some((columns, rows)) = message_dimensions(&value)
+                                    && channel.window_change(columns, rows, 0, 0).await.is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            _ => send_error(&mut socket, "Invalid SSH message.").await,
                         }
                     }
                     Ok(Message::Binary(bytes)) => {
@@ -209,7 +220,11 @@ pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket) {
         .await;
 }
 
-async fn receive_target(state: &AppState, socket: &mut WebSocket) -> Option<TerminalTarget> {
+async fn receive_target(
+    state: &AppState,
+    socket: &mut WebSocket,
+    allow_farm_host: bool,
+) -> Option<TerminalTarget> {
     while let Some(message) = socket.recv().await {
         let text = match message {
             Ok(Message::Text(text)) => text,
@@ -243,11 +258,15 @@ async fn receive_target(state: &AppState, socket: &mut WebSocket) -> Option<Term
                     send_error(socket, "SSH error: target is required.").await;
                     continue;
                 };
-                let host = match approved_terminal_host(state, host).await {
-                    Ok(host) => host,
-                    Err(error) => {
-                        send_error(socket, format!("SSH error: {error}")).await;
-                        continue;
+                let host = if allow_farm_host && host.eq_ignore_ascii_case("farmcontroller") {
+                    "127.0.0.1".to_owned()
+                } else {
+                    match approved_terminal_host(state, host).await {
+                        Ok(host) => host,
+                        Err(error) => {
+                            send_error(socket, format!("SSH error: {error}")).await;
+                            continue;
+                        }
                     }
                 };
                 return Some(TerminalTarget {
@@ -350,6 +369,12 @@ fn message_port(message: &serde_json::Value) -> u16 {
         .unwrap_or(22)
 }
 
+fn message_dimensions(message: &serde_json::Value) -> Option<(u32, u32)> {
+    let columns = u32::try_from(message.get("cols")?.as_u64()?).ok()?;
+    let rows = u32::try_from(message.get("rows")?.as_u64()?).ok()?;
+    ((1..=1_000).contains(&columns) && (1..=1_000).contains(&rows)).then_some((columns, rows))
+}
+
 fn default_rtos_command(uart: Option<&str>) -> String {
     let uart = uart.map_or_else(|| "ttyUSB1".to_owned(), adjacent_uart);
     let uart = uart.trim_start_matches("/dev/");
@@ -390,7 +415,8 @@ async fn send_output(
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalAuthMethod, adjacent_uart, default_rtos_command, message_port, terminal_auth_method,
+        TerminalAuthMethod, adjacent_uart, default_rtos_command, message_dimensions, message_port,
+        terminal_auth_method,
     };
 
     #[test]
@@ -415,5 +441,21 @@ mod tests {
     fn terminal_port_is_bounded_to_u16() {
         assert_eq!(message_port(&serde_json::json!({"port": 2222})), 2222);
         assert_eq!(message_port(&serde_json::json!({"port": 70000})), 22);
+    }
+
+    #[test]
+    fn terminal_dimensions_are_positive_and_bounded() {
+        assert_eq!(
+            message_dimensions(&serde_json::json!({"cols": 120, "rows": 40})),
+            Some((120, 40))
+        );
+        assert_eq!(
+            message_dimensions(&serde_json::json!({"cols": 0, "rows": 40})),
+            None
+        );
+        assert_eq!(
+            message_dimensions(&serde_json::json!({"cols": 120, "rows": 1001})),
+            None
+        );
     }
 }

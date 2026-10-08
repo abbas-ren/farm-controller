@@ -67,7 +67,7 @@ impl ModuleSelection {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerConfig,
@@ -89,7 +89,7 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TestsConfig {
     #[serde(default)]
     pub test_rail_base_url: String,
@@ -200,7 +200,7 @@ fn default_test_script_max_bytes() -> usize {
     10 * 1024 * 1024
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DeviceConfig {
     #[serde(default)]
     pub artifacts_base_url: String,
@@ -378,7 +378,7 @@ fn default_gen5_ipl_remote_path() -> String {
     "/home/racer/RACER_IPL".to_owned()
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
     pub request_body_limit_bytes: usize,
@@ -397,7 +397,7 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ModulesConfig {
     #[serde(default = "all_modules", rename = "enable")]
     pub enabled: BTreeSet<Module>,
@@ -429,7 +429,7 @@ impl Default for ModulesConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuthConfig {
     pub keycloak_url: String,
     pub realm: String,
@@ -456,7 +456,7 @@ impl Default for AuthConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DatabaseConfig {
     pub url: Option<String>,
     pub max_connections: u32,
@@ -481,7 +481,7 @@ impl Default for DatabaseConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WorkersConfig {
     pub artifact_scan_poll_seconds: u64,
     pub artifact_scan_request_timeout_seconds: u64,
@@ -516,7 +516,7 @@ pub struct WorkersConfig {
     pub gen5_reboot_batch_size: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactCleanup {
     Off,
@@ -563,7 +563,7 @@ impl Default for WorkersConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ReportsConfig {
     pub test_results_dir: PathBuf,
     pub queue_capacity: usize,
@@ -593,7 +593,7 @@ impl Default for ReportsConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
     pub level: String,
@@ -607,7 +607,7 @@ pub struct LoggingConfig {
     pub network: Option<SocketAddr>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum LogStream {
     #[default]
@@ -707,7 +707,7 @@ impl AppConfig {
             .any(|module| self.module_enabled(module))
     }
 
-    fn validate(&self) -> Result<(), AppError> {
+    pub fn validate(&self) -> Result<(), AppError> {
         if self.logging.stream == LogStream::Off
             && self.logging.file.is_none()
             && self.logging.network.is_none()

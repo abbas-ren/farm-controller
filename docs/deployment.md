@@ -10,6 +10,8 @@
 6. Install `deploy/systemd/farmcontroller.service`, then run `systemctl daemon-reload && systemctl enable --now farmcontroller`.
 7. Verify `/health`, `/ready`, and `/metrics` before directing traffic to the process.
 
+The packaged unit creates `/var/lib/farmcontroller` for the mode-`0600` admin control document and uses `Restart=always`. This is required for the Control Center restart action: FarmController returns `202`, terminates itself with SIGTERM, and the supervisor starts it with the persisted staged configuration. EdgeController restart remains allowlisted to `dev-con.service`.
+
 SIGTERM stops intake through Axum graceful shutdown, cancels workers, joins their tasks, and lets nonblocking tracing guards flush during process teardown.
 
 ## Frontend and edge routing

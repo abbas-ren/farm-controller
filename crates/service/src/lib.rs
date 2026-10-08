@@ -1,3 +1,4 @@
+pub mod admin_control;
 pub mod api;
 pub mod auth;
 pub mod devices;

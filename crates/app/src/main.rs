@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use farmcontroller::{
-    build_app,
+    admin_control, build_app,
     cli::Cli,
     config::{AppConfig, Module},
     observability::{Metrics, init_logging},
@@ -18,7 +18,7 @@ use tracing::info;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let config = AppConfig::load(&cli)?;
+    let config = admin_control::activate(AppConfig::load(&cli)?)?;
     let _log_guard = init_logging(&config.logging)?;
 
     let metrics = Metrics::new()?;

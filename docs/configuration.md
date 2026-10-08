@@ -14,6 +14,8 @@ FARMCONTROLLER__AUTH__CLIENT_SECRET=replace-me
 FARMCONTROLLER__DEVICE__SERVER_IP=192.0.2.10
 # Required only when EdgeController uses DEV_CONTROLLER_TOKEN.
 EDGE_CONTROLLER_TOKEN=replace-with-the-edge-token
+# Must match security.api_token on every Rust EdgeAgent whose logs are proxied.
+EDGE_AGENT_TOKEN=replace-with-at-least-32-random-characters
 ```
 
 Runtime modules are `api`, `auth`, `device`, `reports`, `workers`, `events`, `metrics`, `swagger`, and `health`. Repeated and comma-separated forms are accepted:
@@ -24,7 +26,11 @@ farmcontroller --enable api,device --enable workers --disable swagger
 
 Enabling a domain automatically requires its declared dependencies. Startup rejects missing database URLs, auth secrets, invalid sizes, zero timeouts, and incompatible module selections.
 
+The admin Control Center persists validated staged configuration in `/var/lib/farmcontroller/admin-control.json` with mode `0600`. Persisted values become the startup configuration after a supervised restart; runtime tracing level changes apply immediately. Existing secret values are never returned by the API, and an omitted or blank write-only field preserves the configured value. EdgeController bearer tokens are stored per approved controller in the same protected document.
+
 Filesystem paths must be writable by the service account: NFS test staging, TFTP output, artifacts, IPL storage, test results, uploads, temporary artifacts, faulty reports, and an optional log file. External integration credentials for TestRail, Qmetry, GitLab, and Confluence use the corresponding `[tests]` and `[reports]` keys or environment overlays.
+
+The packaged systemd unit uses `StateDirectory=farmcontroller`, `LogsDirectory=farmcontroller`, and `Restart=always`. The admin restart action sends SIGTERM after returning `202`; systemd starts the process with the staged configuration. Keep these supervisor settings when adapting the unit.
 
 Gen4/Gen5 build uploads store validated `ipl/` payloads below `device.ipl_artifacts_dir`. Gen5 additionally requires `device.gen5_ipl_script`. Configure family-scoped `gen4_ipl_*` or `gen5_ipl_*` username, password, port, and absolute remote path fields to enable native SFTP distribution to approved active controllers. Empty usernames disable remote distribution for that family while retaining local payload storage. Transfers use `terminal_known_hosts_file` and `terminal_accept_unknown_host_keys`; production should reject unknown keys and provision the known-hosts file.
 
