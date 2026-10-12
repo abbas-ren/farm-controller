@@ -125,6 +125,14 @@ pub(crate) struct BuildFlagResult {
     pub alert: serde_json::Value,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct BuildStatusResult {
+    pub version: String,
+    pub device_type: String,
+    pub is_faulty: bool,
+    pub alert: serde_json::Value,
+}
+
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub(crate) struct TestExportRow {
     pub test_plan_name: String,

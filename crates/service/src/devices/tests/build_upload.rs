@@ -48,6 +48,42 @@ async fn build_list_requires_auth_and_preserves_frontend_shape() {
     assert_eq!(body["totalPages"], 1);
     assert_eq!(body["requestedCount"], 1);
 
+    for (build_id, status, expected) in [
+        ("build-1", "testing", StatusCode::OK),
+        ("build-1", "unknown", StatusCode::BAD_REQUEST),
+        ("missing", "passed", StatusCode::NOT_FOUND),
+    ] {
+        let response = authenticated
+            .clone()
+            .oneshot(
+                Request::put(format!("/api/v1/device/build/{build_id}/status"))
+                    .header("authorization", "Bearer access")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"status": status}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let body: serde_json::Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(
+                body,
+                serde_json::json!({"id": "build-1", "status": "testing", "isFaulty": false})
+            );
+            let event = events.recv().await.unwrap();
+            assert_eq!(event.event, "build_status_changed");
+            assert_eq!(event.payload["releaseId"], "build-1");
+            assert_eq!(event.payload["status"], "testing");
+            let alert = events.recv().await.unwrap();
+            assert_eq!(alert.event, "alert");
+        }
+    }
+
     for (build_id, expected) in [
         ("build-1", StatusCode::OK),
         ("missing", StatusCode::NOT_FOUND),
@@ -393,6 +429,43 @@ async fn tus_upload_preserves_offsets_and_protocol_headers() {
         }
         if event == "build_uploaded" {
             assert_eq!(received.payload["buildType"], "custom");
+        }
+    }
+
+    let response = app
+        .clone()
+        .oneshot(create_final(
+            "filename eDVoX18xLjIuMy56aXA=,uploadId MDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAw,buildType b2ZmaWNpYWw=",
+        ))
+        .await
+        .unwrap();
+    let official_location = response.headers()["location"].to_str().unwrap().to_owned();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::patch(&official_location)
+                .header("authorization", "Bearer access")
+                .header("x-user-id", "user-1")
+                .header("tus-resumable", "1.0.0")
+                .header("content-type", "application/offset+octet-stream")
+                .header("upload-offset", "0")
+                .body(Body::from("zip"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    for event in [
+        "upload_progress",
+        "upload_progress",
+        "upload_complete",
+        "build_uploaded",
+        "alert",
+    ] {
+        let received = events.recv().await.unwrap();
+        assert_eq!(received.event, event);
+        if event == "build_uploaded" {
+            assert_eq!(received.payload["buildType"], "official");
         }
     }
 

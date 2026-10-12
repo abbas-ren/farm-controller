@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::*;
+use crate::devices::repository_types::BuildStatusResult;
 
 /// Owns build records, filtering, uploads, and build lifecycle operations.
 #[async_trait]
@@ -11,6 +12,11 @@ pub(crate) trait BuildRepository: Send + Sync {
         build_id: &str,
         request: &BuildFlagRequest,
     ) -> Result<Option<BuildFlagResult>, DeviceRepositoryError>;
+    async fn update_build_status(
+        &self,
+        build_id: &str,
+        status: &str,
+    ) -> Result<Option<BuildStatusResult>, DeviceRepositoryError>;
     async fn delete_build(
         &self,
         build_id: &str,

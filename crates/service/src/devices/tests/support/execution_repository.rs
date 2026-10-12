@@ -1,6 +1,14 @@
 use super::*;
 #[async_trait]
 impl ExecutionLifecycleRepository for RegistrationRepository {
+    async fn update_execution_status(
+        &self,
+        test_id: &str,
+        _status: &str,
+    ) -> Result<bool, DeviceRepositoryError> {
+        Ok(test_id == "42")
+    }
+
     async fn create_test_execution(
         &self,
         execution: &ExecutionCreation,
@@ -295,6 +303,21 @@ impl BuildRepository for RegistrationRepository {
                 "title": "Build Flagged", "type": if request.is_faulty { "warning" } else { "success" }
             }),
         }))
+    }
+
+    async fn update_build_status(
+        &self,
+        build_id: &str,
+        status: &str,
+    ) -> Result<Option<repository_types::BuildStatusResult>, DeviceRepositoryError> {
+        Ok(
+            (build_id == "build-1").then(|| repository_types::BuildStatusResult {
+                version: "v1.2.3".to_owned(),
+                device_type: "x5h".to_owned(),
+                is_faulty: status == "failed",
+                alert: serde_json::json!({"title": "Build Status Updated", "type": "info"}),
+            }),
+        )
     }
 
     async fn delete_build(

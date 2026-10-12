@@ -1,7 +1,7 @@
 //! Create and update test execution commands.
 
 use super::*;
-use crate::{auth, error::ErrorResponse, state::AppState};
+use crate::{auth, error::ErrorResponse, events::ServerEvent, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
@@ -9,6 +9,66 @@ use axum::{
     response::IntoResponse,
 };
 use std::sync::Arc;
+
+const EXECUTION_STATUSES: [&str; 6] = [
+    "not_executed",
+    "queued",
+    "in_progress",
+    "completed",
+    "cancelled",
+    "failed",
+];
+
+#[utoipa::path(put, path = "/api/v1/device/test/execution/{id}/status", tag = "Tests", summary = "Set test execution status", description = "Allows an administrator to override a persisted test execution status and publishes the standard execution update event.", params(("id" = String, Path)), security(("bearer_auth" = [])), request_body = ExecutionStatusRequest, responses((status = 200, description = "Execution status updated", body = ExecutionStatusResponse), (status = 400, description = "Invalid execution status", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Execution not found", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
+pub async fn update_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(test_id): Path<String>,
+    Json(request): Json<ExecutionStatusRequest>,
+) -> axum::response::Response {
+    let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
+        Ok(headers) => headers,
+        Err(error) => return error.into_response(),
+    };
+    let status = request.status.trim().to_lowercase();
+    if !EXECUTION_STATUSES.contains(&status.as_str()) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "validation",
+            "invalid test execution status",
+        );
+    }
+    let Some(repository) = &state.device_repository else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "device_unavailable",
+            "Device persistence is unavailable",
+        );
+    };
+    match repository.update_execution_status(&test_id, &status).await {
+        Ok(true) => {
+            let event = ServerEvent {
+                event: "test_execution_update".to_owned(),
+                payload: serde_json::json!({"testId": test_id, "update": {"type": "status", "data": {"status": status}}}),
+                room: None,
+            };
+            if let Err(error) = state.event_publisher.publish(event) {
+                tracing::warn!(%error, %test_id, "failed to publish admin execution status update");
+            }
+            (
+                response_headers,
+                Json(ExecutionStatusResponse { test_id, status }),
+            )
+                .into_response()
+        }
+        Ok(false) => error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Test execution not found",
+        ),
+        Err(error) => repository_error(error, "Failed to update test execution status"),
+    }
+}
 
 #[utoipa::path(post, path = "/api/v1/device/test/execution", tag = "Tests", summary = "Create a test execution", description = "Expands the requested TestRail selection, atomically persists the execution and cases, and queues artifact preparation after commit.", security(("bearer_auth" = [])), request_body = CreateExecutionRequest, responses((status = 201, description = "Complete legacy test-execution row", body = Object), (status = 400, description = "Invalid execution selection", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Build not found", body = ErrorResponse), (status = 500, description = "Execution creation failed", body = ErrorResponse)))]
 pub async fn create(

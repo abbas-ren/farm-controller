@@ -17,7 +17,7 @@ use super::analytics_handlers::{
 use super::artifact_handlers::copy_default_artifacts;
 use super::build_handlers::{
     build_by_id, build_filters, delete_build, flag_build, init_upload,
-    list_builds as list_build_inventory, upload_custom, upload_official,
+    list_builds as list_build_inventory, update_build_status, upload_custom, upload_official,
 };
 use super::device_export_handlers::export_devices;
 use super::device_registration_handlers::register_device;
@@ -41,7 +41,8 @@ use super::test_execution_handlers::{
     create_report, execution as test_execution, list as execution_list, logs as execution_logs,
     progress as execution_progress, report as execution_report,
     report_html as execution_report_html, results as execution_results, single as single_execution,
-    testcase as single_testcase, testcase_log, update as update_execution, upload_report,
+    testcase as single_testcase, testcase_log, update as update_execution,
+    update_status as update_execution_status, upload_report,
 };
 use super::test_export_handlers::export_tests;
 use super::tus_handlers;
@@ -157,6 +158,10 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         )
         .route("/build/{id}", get(build_by_id))
         .route("/build/{id}/flag", axum::routing::put(flag_build))
+        .route(
+            "/build/{id}/status",
+            axum::routing::put(update_build_status),
+        )
         .route("/build/{id}", axum::routing::delete(delete_build))
         .route("/test/export", get(export_tests))
         .route("/test/plan", get(test_plans))
@@ -192,6 +197,10 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         )
         .route("/test/execution/build/{buildId}", get(executions_by_build))
         .route("/test/execution/results/{id}", get(execution_results))
+        .route(
+            "/test/execution/{id}/status",
+            axum::routing::put(update_execution_status),
+        )
         .route("/test/cancel/{id}", axum::routing::put(cancel_execution))
         .route("/test/testcase/{testCaseId}/log", get(testcase_log))
         .route("/test/plan/{planID}/testcase", get(qmetry_plan_cases))

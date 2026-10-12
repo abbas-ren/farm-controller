@@ -1,5 +1,56 @@
 use super::*;
 #[tokio::test]
+async fn admin_can_update_test_execution_status() {
+    let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
+    let config = AppConfig::load(&cli).unwrap();
+    let state = AppState::with_identity_provider(
+        config,
+        Metrics::new().unwrap(),
+        Arc::new(AcceptingIdentityProvider),
+    )
+    .with_device_repository(Arc::new(RegistrationRepository {
+        calls: AtomicUsize::new(0),
+        callbacks: Mutex::new(Vec::new()),
+    }));
+    let mut events = state.event_publisher.subscribe();
+    let app = api::router(Arc::new(state));
+
+    for (test_id, status, expected) in [
+        ("42", "in_progress", StatusCode::OK),
+        ("42", "unknown", StatusCode::BAD_REQUEST),
+        ("missing", "completed", StatusCode::NOT_FOUND),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::put(format!("/api/v1/device/test/execution/{test_id}/status"))
+                    .header("authorization", "Bearer access")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"status": status}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let body: serde_json::Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(
+                body,
+                serde_json::json!({"testId": "42", "status": "in_progress"})
+            );
+            let event = events.recv().await.unwrap();
+            assert_eq!(event.event, "test_execution_update");
+            assert_eq!(event.payload["testId"], "42");
+            assert_eq!(event.payload["update"]["data"]["status"], "in_progress");
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_execution_detail_supports_latest_and_configured_logs() {
     let directory = tempfile::tempdir().unwrap();
     tokio::fs::write(directory.path().join("test-1.json"), br#"["started"]"#)

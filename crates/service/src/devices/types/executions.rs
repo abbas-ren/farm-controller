@@ -167,3 +167,16 @@ pub struct UpdateExecutionRequest {
     pub log: bool,
     pub result: String,
 }
+
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionStatusRequest {
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionStatusResponse {
+    pub test_id: String,
+    pub status: String,
+}

@@ -10,6 +10,14 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::flag_build(&self.pool, build_id, request.is_faulty).await
     }
 
+    async fn update_build_status(
+        &self,
+        build_id: &str,
+        status: &str,
+    ) -> Result<Option<repository_types::BuildStatusResult>, DeviceRepositoryError> {
+        build_store::update_build_status(&self.pool, build_id, status).await
+    }
+
     async fn delete_build(
         &self,
         build_id: &str,

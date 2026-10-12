@@ -127,6 +127,23 @@ pub async fn patch(
                         "Missing required metadata: filename, uploadId",
                     );
                 };
+                let is_custom = match upload.metadata.get("buildType").map(String::as_str) {
+                    None | Some("custom") => true,
+                    Some("official") => false,
+                    Some(_) => {
+                        let _ = tus_store::rollback(
+                            Path::new(&state.config.device.build_upload_dir),
+                            id,
+                            offset,
+                        )
+                        .await;
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            "validation",
+                            "buildType must be official or custom",
+                        );
+                    }
+                };
                 let request = BuildUploadFinalization {
                     source_path: tus_store::data_path(
                         Path::new(&state.config.device.build_upload_dir),
@@ -135,8 +152,10 @@ pub async fn patch(
                     artifacts_root: state.config.device.build_artifacts_dir.clone().into(),
                     upload_id,
                     filename,
-                    tag: upload.metadata.get("tag").cloned(),
-                    is_custom: true,
+                    tag: is_custom
+                        .then(|| upload.metadata.get("tag").cloned())
+                        .flatten(),
+                    is_custom,
                     user_id: user_id.clone(),
                     max_expanded_bytes: state
                         .config

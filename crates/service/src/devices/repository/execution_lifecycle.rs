@@ -32,6 +32,11 @@ pub(crate) trait ExecutionLifecycleRepository: Send + Sync {
         &self,
         test_id: &str,
     ) -> Result<Option<serde_json::Value>, DeviceRepositoryError>;
+    async fn update_execution_status(
+        &self,
+        test_id: &str,
+        status: &str,
+    ) -> Result<bool, DeviceRepositoryError>;
     async fn request_test_cancellation(
         &self,
         test_id: &str,

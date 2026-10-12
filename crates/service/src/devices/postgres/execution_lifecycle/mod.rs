@@ -52,6 +52,24 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         self.test_results_inner(test_id).await
     }
 
+    async fn update_execution_status(
+        &self,
+        test_id: &str,
+        status: &str,
+    ) -> Result<bool, DeviceRepositoryError> {
+        let result = sqlx::query(
+            r#"UPDATE test_executions SET status = $2::"enum_test_executions_status",
+                   "startedAt" = CASE WHEN $2 = 'in_progress' THEN COALESCE("startedAt", now()) ELSE "startedAt" END,
+                   "endedAt" = CASE WHEN $2 IN ('completed', 'cancelled', 'failed') THEN now() ELSE NULL END,
+                   "updatedAt" = now() WHERE "testId" = $1"#,
+        )
+        .bind(test_id)
+        .bind(status)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn request_test_cancellation(
         &self,
         test_id: &str,

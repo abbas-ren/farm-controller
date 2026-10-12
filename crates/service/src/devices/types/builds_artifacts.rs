@@ -77,6 +77,20 @@ pub struct BuildFlagRequest {
     pub is_faulty: bool,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildStatusRequest {
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildStatusResponse {
+    pub id: String,
+    pub status: String,
+    pub is_faulty: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceTypeFolder {
