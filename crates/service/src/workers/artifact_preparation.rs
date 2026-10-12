@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     fs::File,
     io,
     path::{Component, Path, PathBuf},
@@ -43,7 +44,7 @@ pub(crate) fn prepare_artifacts(
         std::fs::create_dir_all(&staging)?;
         let result = (|| {
             let decoder = BzDecoder::new(File::open(&paths[2])?);
-            tar::Archive::new(decoder).unpack(&staging)?;
+            unpack_rootfs(tar::Archive::new(decoder), &staging)?;
             std::fs::write(staging.join(".prep-done"), chrono::Utc::now().to_rfc3339())?;
             std::fs::rename(&staging, nfs_path)
         })();
@@ -55,6 +56,56 @@ pub(crate) fn prepare_artifacts(
     std::fs::create_dir_all(tftp_path)?;
     std::fs::copy(&paths[0], tftp_path.join("Image"))?;
     std::fs::copy(&paths[1], tftp_path.join("board.dtb"))?;
+    Ok(())
+}
+
+fn unpack_rootfs<R: io::Read>(mut archive: tar::Archive<R>, destination: &Path) -> io::Result<()> {
+    let mut directories = Vec::new();
+    let mut hard_links = Vec::new();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            directories.push(entry);
+        } else if entry_type.is_hard_link() {
+            hard_links.push(entry);
+        } else {
+            entry.unpack_in(destination)?;
+        }
+    }
+
+    while !hard_links.is_empty() {
+        let previous_count = hard_links.len();
+        let mut pending = Vec::new();
+        let mut first_missing_target = None;
+        for mut entry in hard_links {
+            match entry.unpack_in(destination) {
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    first_missing_target.get_or_insert(error);
+                    pending.push(entry);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if pending.len() == previous_count {
+            return Err(first_missing_target
+                .unwrap_or_else(|| io::Error::other("rootfs contains an unresolved hard link")));
+        }
+        hard_links = pending;
+    }
+
+    directories.sort_by_key(|entry| {
+        Reverse(
+            entry
+                .path()
+                .map(|path| path.components().count())
+                .unwrap_or_default(),
+        )
+    });
+    for mut directory in directories {
+        directory.unpack_in(destination)?;
+    }
     Ok(())
 }
 
@@ -71,6 +122,7 @@ mod tests {
     use std::io::Write;
 
     use bzip2::{Compression, write::BzEncoder};
+    use tar::EntryType;
 
     use super::*;
 
@@ -107,6 +159,45 @@ mod tests {
         assert!(nfs.join(".prep-done").is_file());
         assert_eq!(std::fs::read(tftp.join("Image")).unwrap(), b"image");
         assert_eq!(std::fs::read(tftp.join("board.dtb")).unwrap(), b"dtb");
+    }
+
+    #[test]
+    fn stages_rootfs_with_hard_link_before_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let image = directory.path().join("source-image");
+        let dtb = directory.path().join("source.dtb");
+        let rootfs = directory.path().join("root.tar.bz2");
+        std::fs::write(&image, b"image").unwrap();
+        std::fs::write(&dtb, b"dtb").unwrap();
+        let encoder = BzEncoder::new(File::create(&rootfs).unwrap(), Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(EntryType::Link);
+        link.set_size(0);
+        link.set_mode(0o755);
+        archive
+            .append_link(&mut link, "bin/bash.bash", "bin/bash")
+            .unwrap();
+        let mut target = tar::Header::new_gnu();
+        target.set_size(4);
+        target.set_mode(0o755);
+        target.set_cksum();
+        archive
+            .append_data(&mut target, "bin/bash", &b"bash"[..])
+            .unwrap();
+        archive
+            .into_inner()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .flush()
+            .unwrap();
+
+        let nfs = directory.path().join("nfs/v4h/v1.2.3");
+        let tftp = directory.path().join("tftp/v4h/v1.2.3");
+        prepare_artifacts(&[image, dtb, rootfs], &nfs, &tftp).unwrap();
+
+        assert_eq!(std::fs::read(nfs.join("bin/bash.bash")).unwrap(), b"bash");
     }
 
     #[test]
