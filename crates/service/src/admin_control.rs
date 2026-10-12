@@ -29,6 +29,8 @@ const EDGE_TIMEOUT: Duration = Duration::from_secs(15);
 #[serde(rename_all = "camelCase")]
 pub struct ControlDocument {
     pub config: AppConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config_overrides: Option<serde_json::Value>,
     #[serde(default)]
     pub restart_pending: bool,
     #[serde(default)]
@@ -73,13 +75,43 @@ pub struct FarmActionRequest {
 static CONTROL: OnceLock<RwLock<ControlDocument>> = OnceLock::new();
 
 pub fn activate(base: AppConfig) -> Result<AppConfig, crate::error::AppError> {
-    let mut document = load(Path::new(CONTROL_FILE))?.unwrap_or(ControlDocument {
-        config: base,
-        restart_pending: false,
-        edge_tokens: BTreeMap::new(),
-    });
+    let path = Path::new(CONTROL_FILE);
+    let stored = load(path)?;
+    let mut migrated = false;
+    let mut document = match stored {
+        Some(mut document) => {
+            let overrides = match document.config_overrides.take() {
+                Some(overrides) => overrides,
+                None => {
+                    migrated = true;
+                    if document.restart_pending {
+                        config_diff(&base, &document.config)?
+                    } else {
+                        empty_config_overrides()
+                    }
+                }
+            };
+            document.config = apply_config_overrides(&base, &overrides)?;
+            document.config_overrides = Some(overrides);
+            document
+        }
+        None => ControlDocument {
+            config: base,
+            config_overrides: Some(empty_config_overrides()),
+            restart_pending: false,
+            edge_tokens: BTreeMap::new(),
+        },
+    };
     document.config.validate()?;
+    let clear_pending = document.restart_pending;
     document.restart_pending = false;
+    if migrated || clear_pending {
+        persist(path, &document).map_err(|error| {
+            crate::error::AppError::Configuration(format!(
+                "cannot update admin control configuration: {error}"
+            ))
+        })?;
+    }
     let active = document.config.clone();
     CONTROL.set(RwLock::new(document)).map_err(|_| {
         crate::error::AppError::Configuration("admin control was already initialized".into())
@@ -309,7 +341,7 @@ fn patch_farm(state: &AppState, request: FarmControlPatch) -> Result<serde_json:
     let previous_level = document.config.logging.level.clone();
     let mut candidate =
         serde_json::to_value(&document.config).map_err(|error| error.to_string())?;
-    deep_merge(&mut candidate, request.config);
+    deep_merge(&mut candidate, request.config.clone());
     let next = serde_json::from_value::<AppConfig>(candidate)
         .map_err(|error| format!("invalid configuration: {error}"))?;
     next.validate().map_err(|error| error.to_string())?;
@@ -321,6 +353,12 @@ fn patch_farm(state: &AppState, request: FarmControlPatch) -> Result<serde_json:
 
     document.restart_pending =
         serde_json::to_value(&state.config).ok() != serde_json::to_value(&next).ok();
+    deep_merge(
+        document
+            .config_overrides
+            .get_or_insert_with(empty_config_overrides),
+        request.config,
+    );
     document.config = next;
     persist(Path::new(CONTROL_FILE), &document).map_err(|error| error.to_string())?;
     *control.write().unwrap_or_else(|error| error.into_inner()) = document;
@@ -335,6 +373,7 @@ fn discard_staged(state: &AppState) -> Result<serde_json::Value, String> {
         .unwrap_or_else(|error| error.into_inner())
         .clone();
     document.config = state.config.clone();
+    document.config_overrides = Some(empty_config_overrides());
     document.restart_pending = false;
     persist(Path::new(CONTROL_FILE), &document).map_err(|error| error.to_string())?;
     *control.write().unwrap_or_else(|error| error.into_inner()) = document;
@@ -345,6 +384,7 @@ fn ensure_control(state: &AppState) -> Result<&'static RwLock<ControlDocument>, 
     if CONTROL.get().is_none() {
         let _ = CONTROL.set(RwLock::new(ControlDocument {
             config: state.config.clone(),
+            config_overrides: Some(empty_config_overrides()),
             restart_pending: false,
             edge_tokens: BTreeMap::new(),
         }));
@@ -365,6 +405,7 @@ fn farm_snapshot(state: &AppState) -> serde_json::Value {
         })
         .unwrap_or(ControlDocument {
             config: state.config.clone(),
+            config_overrides: Some(empty_config_overrides()),
             restart_pending: false,
             edge_tokens: BTreeMap::new(),
         });
@@ -468,6 +509,57 @@ fn deep_merge(target: &mut serde_json::Value, patch: serde_json::Value) {
             }
         }
         (target, patch) => *target = patch,
+    }
+}
+
+fn empty_config_overrides() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+fn apply_config_overrides(
+    base: &AppConfig,
+    overrides: &serde_json::Value,
+) -> Result<AppConfig, crate::error::AppError> {
+    let mut candidate = serde_json::to_value(base)
+        .map_err(|error| crate::error::AppError::Configuration(error.to_string()))?;
+    deep_merge(&mut candidate, overrides.clone());
+    serde_json::from_value(candidate)
+        .map_err(|error| crate::error::AppError::Configuration(error.to_string()))
+}
+
+fn config_diff(
+    base: &AppConfig,
+    configured: &AppConfig,
+) -> Result<serde_json::Value, crate::error::AppError> {
+    let base = serde_json::to_value(base)
+        .map_err(|error| crate::error::AppError::Configuration(error.to_string()))?;
+    let configured = serde_json::to_value(configured)
+        .map_err(|error| crate::error::AppError::Configuration(error.to_string()))?;
+    Ok(value_diff(&base, &configured).unwrap_or_else(empty_config_overrides))
+}
+
+fn value_diff(
+    base: &serde_json::Value,
+    configured: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    if base == configured {
+        return None;
+    }
+    match (base, configured) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(configured)) => {
+            let difference = configured
+                .iter()
+                .filter_map(|(key, configured)| {
+                    let difference = base
+                        .get(key)
+                        .and_then(|base| value_diff(base, configured))
+                        .or_else(|| (!base.contains_key(key)).then(|| configured.clone()));
+                    difference.map(|value| (key.clone(), value))
+                })
+                .collect::<serde_json::Map<_, _>>();
+            (!difference.is_empty()).then_some(serde_json::Value::Object(difference))
+        }
+        _ => Some(configured.clone()),
     }
 }
 
@@ -825,6 +917,34 @@ mod tests {
         );
         assert_eq!(value["logging"]["level"], "debug");
         assert_eq!(value["logging"]["json"], false);
+    }
+
+    #[test]
+    fn admin_overrides_preserve_new_base_configuration_values() {
+        let mut base = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
+        base.device.server_ip = "192.0.2.10".into();
+
+        let active =
+            apply_config_overrides(&base, &serde_json::json!({"logging": {"level": "debug"}}))
+                .unwrap();
+
+        assert_eq!(active.device.server_ip, "192.0.2.10");
+        assert_eq!(active.logging.level, "debug");
+    }
+
+    #[test]
+    fn legacy_staged_configuration_migrates_as_partial_overrides() {
+        let base = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
+        let mut staged = base.clone();
+        staged.logging.level = "debug".into();
+        let overrides = config_diff(&base, &staged).unwrap();
+
+        let mut updated_base = base;
+        updated_base.device.server_ip = "192.0.2.10".into();
+        let active = apply_config_overrides(&updated_base, &overrides).unwrap();
+
+        assert_eq!(active.device.server_ip, "192.0.2.10");
+        assert_eq!(active.logging.level, "debug");
     }
 
     #[test]

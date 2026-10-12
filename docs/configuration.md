@@ -1,6 +1,6 @@
 # Configuration
 
-Precedence is defaults, TOML file, environment, then CLI. Use `--config <path>`, `FARMCONTROLLER__SECTION__FIELD`, and the CLI overrides shown by `farmcontroller --help`.
+Precedence is defaults, TOML file, environment, CLI, then fields explicitly changed through the admin Control Center. Use `--config <path>`, `FARMCONTROLLER__SECTION__FIELD`, and the CLI overrides shown by `farmcontroller --help`.
 
 `server.cors_allowed_origins` accepts exact HTTP(S) browser origins without paths. An empty list preserves the legacy permissive CORS behavior; production deployments should set a comma-separated `FARMCONTROLLER__SERVER__CORS_ALLOWED_ORIGINS` allowlist such as `https://farm.example`. Responses include `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin`.
 
@@ -26,7 +26,7 @@ farmcontroller --enable api,device --enable workers --disable swagger
 
 Enabling a domain automatically requires its declared dependencies. Startup rejects missing database URLs, auth secrets, invalid sizes, zero timeouts, and incompatible module selections.
 
-The admin Control Center persists validated staged configuration in `/var/lib/farmcontroller/admin-control.json` with mode `0600`. Persisted values become the startup configuration after a supervised restart; runtime tracing level changes apply immediately. Existing secret values are never returned by the API, and an omitted or blank write-only field preserves the configured value. EdgeController bearer tokens are stored per approved controller in the same protected document.
+The admin Control Center persists validated staged overrides in `/var/lib/farmcontroller/admin-control.json` with mode `0600`. On startup, FarmController reloads the selected TOML, environment, and CLI values before applying only fields explicitly changed in the Control Center. This means later TOML edits remain effective for fields that have no admin override. Runtime tracing level changes apply immediately. Existing secret values are never returned by the API, and an omitted or blank write-only field preserves the configured value. EdgeController bearer tokens are stored per approved controller in the same protected document.
 
 Filesystem paths must be writable by the service account: NFS test staging, TFTP output, artifacts, IPL storage, test results, uploads, temporary artifacts, faulty reports, and an optional log file. External integration credentials for TestRail, Qmetry, GitLab, and Confluence use the corresponding `[tests]` and `[reports]` keys or environment overlays.
 
