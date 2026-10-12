@@ -23,6 +23,7 @@ pub(crate) async fn prepare_uploaded_build(
         release
             .get("artifacts")
             .ok_or_else(|| "release artifacts are missing".to_owned())?,
+        &state.config.device.rootfs_archive_extension,
     )?;
     let nfs_path = PathBuf::from(&state.config.device.nfs_host_path)
         .join(&device_type)

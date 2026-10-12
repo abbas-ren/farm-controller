@@ -217,6 +217,7 @@ async fn upload_multipart(
         is_custom,
         user_id: user_id.clone(),
         max_expanded_bytes: state.config.device.build_upload_max_bytes.saturating_mul(4),
+        rootfs_archive_extension: state.config.device.rootfs_archive_extension.clone(),
     };
     if let Err(error) = repository
         .mark_build_upload_started(&upload_id, &user_id)

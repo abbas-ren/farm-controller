@@ -1,5 +1,6 @@
 use std::{
     cmp::Reverse,
+    error::Error,
     fs::File,
     io,
     path::{Component, Path, PathBuf},
@@ -8,7 +9,10 @@ use std::{
 use bzip2::read::BzDecoder;
 use uuid::Uuid;
 
-pub(crate) fn artifact_paths(value: &serde_json::Value) -> Result<[PathBuf; 3], String> {
+pub(crate) fn artifact_paths(
+    value: &serde_json::Value,
+    rootfs_archive_extension: &str,
+) -> Result<[PathBuf; 3], String> {
     let artifacts = value
         .as_array()
         .ok_or_else(|| "release artifacts are not an array".to_owned())?;
@@ -22,8 +26,11 @@ pub(crate) fn artifact_paths(value: &serde_json::Value) -> Result<[PathBuf; 3], 
         .ok_or_else(|| "release Image artifact is missing".to_owned())?;
     let dtb = find(&|name| name.to_ascii_lowercase().ends_with(".dtb"))
         .ok_or_else(|| "release DTB artifact is missing".to_owned())?;
-    let rootfs = find(&|name| name.to_ascii_lowercase().ends_with(".tar.bz2"))
-        .ok_or_else(|| "release rootfs artifact is missing".to_owned())?;
+    let rootfs = find(&|name| {
+        name.to_ascii_lowercase()
+            .ends_with(&rootfs_archive_extension.to_ascii_lowercase())
+    })
+    .ok_or_else(|| "release rootfs artifact is missing".to_owned())?;
     Ok([image, dtb, rootfs])
 }
 
@@ -70,7 +77,7 @@ fn unpack_rootfs<R: io::Read>(mut archive: tar::Archive<R>, destination: &Path) 
         } else if entry_type.is_hard_link() {
             hard_links.push(entry);
         } else {
-            entry.unpack_in(destination)?;
+            entry.unpack_in(destination).map_err(expand_io_error)?;
         }
     }
 
@@ -84,6 +91,16 @@ fn unpack_rootfs<R: io::Read>(mut archive: tar::Archive<R>, destination: &Path) 
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     first_missing_target.get_or_insert(error);
                     pending.push(entry);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::PermissionDenied
+                            | io::ErrorKind::Unsupported
+                            | io::ErrorKind::CrossesDevices
+                    ) =>
+                {
+                    copy_hard_link_target(&entry, destination).map_err(expand_io_error)?;
                 }
                 Err(error) => return Err(error),
             }
@@ -104,9 +121,69 @@ fn unpack_rootfs<R: io::Read>(mut archive: tar::Archive<R>, destination: &Path) 
         )
     });
     for mut directory in directories {
-        directory.unpack_in(destination)?;
+        directory.unpack_in(destination).map_err(expand_io_error)?;
     }
     Ok(())
+}
+
+fn copy_hard_link_target<R: io::Read>(
+    entry: &tar::Entry<'_, R>,
+    destination: &Path,
+) -> io::Result<()> {
+    let relative_path = safe_archive_path(entry.path()?.as_ref())?;
+    let link_name = entry
+        .link_name()?
+        .ok_or_else(|| io::Error::other("rootfs hard link has no target"))?;
+    let relative_target = safe_archive_path(link_name.as_ref())?;
+    let destination = destination.canonicalize()?;
+    let source = destination.join(relative_target).canonicalize()?;
+    if !source.starts_with(&destination) {
+        return Err(io::Error::other(
+            "rootfs hard link target escapes extraction root",
+        ));
+    }
+    let output = destination.join(relative_path);
+    let parent = output
+        .parent()
+        .ok_or_else(|| io::Error::other("rootfs hard link has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    if !parent.canonicalize()?.starts_with(&destination) {
+        return Err(io::Error::other(
+            "rootfs hard link path escapes extraction root",
+        ));
+    }
+    std::fs::copy(source, output)?;
+    Ok(())
+}
+
+fn safe_archive_path(path: &Path) -> io::Result<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => normalized.push(value),
+            Component::CurDir => {}
+            _ => return Err(io::Error::other("rootfs link contains an unsafe path")),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(io::Error::other("rootfs link contains an empty path"));
+    }
+    Ok(normalized)
+}
+
+fn expand_io_error(error: io::Error) -> io::Error {
+    let kind = error.kind();
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_message = cause.to_string();
+        if !message.contains(&cause_message) {
+            message.push_str(": ");
+            message.push_str(&cause_message);
+        }
+        source = cause.source();
+    }
+    io::Error::new(kind, message)
 }
 
 pub(crate) fn safe_segment(value: &str) -> Result<&str, String> {

@@ -162,6 +162,7 @@ pub async fn patch(
                         .device
                         .build_upload_max_bytes
                         .saturating_mul(4),
+                    rootfs_archive_extension: state.config.device.rootfs_archive_extension.clone(),
                 };
                 match repository.finalize_build_upload(&request).await {
                     Ok(result) => upload_events::completed(&state, &request, result).await,

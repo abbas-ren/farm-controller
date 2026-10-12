@@ -84,7 +84,10 @@ pub(crate) async fn copy_defaults(
         let files = html_files(&get_text(&client, version_url.clone()).await?);
         let image = files.iter().find(|file| file.as_str() == "Image");
         let dtb = files.iter().find(|file| file.ends_with(".dtb"));
-        let archive = files.iter().find(|file| file.ends_with(".tar.bz2"));
+        let rootfs_extension = config.rootfs_archive_extension.to_ascii_lowercase();
+        let archive = files
+            .iter()
+            .find(|file| file.to_ascii_lowercase().ends_with(&rootfs_extension));
         let (Some(image), Some(dtb), Some(archive)) = (image, dtb, archive) else {
             tracing::warn!(folder = %entry.folder_name, version = %entry.default_version, "default artifact set is incomplete");
             continue;

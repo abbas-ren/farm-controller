@@ -388,7 +388,10 @@ async fn persist_results(
             .map_err(|error| error.to_string())?;
             if uploaded_by != "system"
                 || (!artifact_metadata_changed(&existing_artifacts, &result.artifacts)
-                    && required_local_artifacts_exist(&existing_artifacts))
+                    && required_local_artifacts_exist(
+                        &existing_artifacts,
+                        &state.config.device.rootfs_archive_extension,
+                    ))
             {
                 continue;
             }
@@ -499,7 +502,9 @@ async fn prepare_scanned_build(
     device_family: &str,
     official: bool,
 ) -> Result<serde_json::Value, String> {
-    let required = required_artifacts(&result.artifacts)?;
+    let rootfs_extension = &state.config.device.rootfs_archive_extension;
+    let rootfs_name = format!("root{rootfs_extension}");
+    let required = required_artifacts(&result.artifacts, rootfs_extension)?;
     let folder_name = safe_segment(&result.folder_name)?.to_owned();
     let version = safe_segment(&result.version)?.to_owned();
     let destination = PathBuf::from(&state.config.device.build_artifacts_dir)
@@ -532,7 +537,7 @@ async fn prepare_scanned_build(
             download(
                 &scanner.client,
                 &required[2].source_url,
-                temporary.join("root.tar.bz2"),
+                temporary.join(&rootfs_name),
             )
             .await?,
         ];
@@ -571,7 +576,7 @@ async fn prepare_scanned_build(
         let paths = [
             destination.join("Image"),
             destination.join("board.dtb"),
-            destination.join("root.tar.bz2"),
+            destination.join(&rootfs_name),
         ];
         let device_type = safe_segment(device_type)?.to_owned();
         let nfs = PathBuf::from(&state.config.device.nfs_host_path)
@@ -600,7 +605,11 @@ async fn prepare_scanned_build(
         }
         let mut local_artifacts = result.artifacts.clone();
         for artifact in &mut local_artifacts {
-            if let Some(path) = local_artifact_path(&destination, &artifact.name) {
+            if let Some(path) = local_artifact_path(
+                &destination,
+                &artifact.name,
+                rootfs_extension,
+            ) {
                 artifact.path = path.to_string_lossy().into_owned();
             }
         }
@@ -611,13 +620,20 @@ async fn prepare_scanned_build(
     outcome
 }
 
-fn local_artifact_path(destination: &std::path::Path, name: &str) -> Option<PathBuf> {
+fn local_artifact_path(
+    destination: &std::path::Path,
+    name: &str,
+    rootfs_archive_extension: &str,
+) -> Option<PathBuf> {
     if name.eq_ignore_ascii_case("Image") {
         Some(destination.join("Image"))
     } else if name.to_ascii_lowercase().ends_with(".dtb") {
         Some(destination.join("board.dtb"))
-    } else if name.to_ascii_lowercase().ends_with(".tar.bz2") {
-        Some(destination.join("root.tar.bz2"))
+    } else if name
+        .to_ascii_lowercase()
+        .ends_with(&rootfs_archive_extension.to_ascii_lowercase())
+    {
+        Some(destination.join(format!("root{rootfs_archive_extension}")))
     } else if name.starts_with("ipl/") {
         safe_relative_artifact_path(name)
             .ok()
@@ -639,7 +655,10 @@ fn safe_relative_artifact_path(name: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
-fn required_local_artifacts_exist(artifacts: &serde_json::Value) -> bool {
+fn required_local_artifacts_exist(
+    artifacts: &serde_json::Value,
+    rootfs_archive_extension: &str,
+) -> bool {
     let Some(artifacts) = artifacts.as_array() else {
         return false;
     };
@@ -652,7 +671,10 @@ fn required_local_artifacts_exist(artifacts: &serde_json::Value) -> bool {
     let required_boot_artifacts_exist = [
         path_for(&|name| name.eq_ignore_ascii_case("Image")),
         path_for(&|name| name.to_ascii_lowercase().ends_with(".dtb")),
-        path_for(&|name| name.to_ascii_lowercase().ends_with(".tar.bz2")),
+        path_for(&|name| {
+            name.to_ascii_lowercase()
+                .ends_with(&rootfs_archive_extension.to_ascii_lowercase())
+        }),
     ]
     .into_iter()
     .all(|path| path.is_some_and(|path| std::path::Path::new(path).is_file()));
@@ -753,7 +775,10 @@ async fn cleanup_removed(state: &AppState, seen: &HashSet<(String, String)>) -> 
     Ok(())
 }
 
-fn required_artifacts(artifacts: &[ArtifactInfo]) -> Result<[&ArtifactInfo; 3], String> {
+fn required_artifacts<'a>(
+    artifacts: &'a [ArtifactInfo],
+    rootfs_archive_extension: &str,
+) -> Result<[&'a ArtifactInfo; 3], String> {
     let image = artifacts
         .iter()
         .find(|artifact| artifact.name.eq_ignore_ascii_case("Image"))
@@ -764,7 +789,12 @@ fn required_artifacts(artifacts: &[ArtifactInfo]) -> Result<[&ArtifactInfo; 3], 
         .ok_or_else(|| "release DTB artifact is missing".to_owned())?;
     let rootfs = artifacts
         .iter()
-        .find(|artifact| artifact.name.to_ascii_lowercase().ends_with(".tar.bz2"))
+        .find(|artifact| {
+            artifact
+                .name
+                .to_ascii_lowercase()
+                .ends_with(&rootfs_archive_extension.to_ascii_lowercase())
+        })
         .ok_or_else(|| "release rootfs artifact is missing".to_owned())?;
     Ok([image, dtb, rootfs])
 }
@@ -929,11 +959,11 @@ mod tests {
             {"name": "root.tar.bz2", "size": 4, "path": directory.path().join("root.tar.bz2")},
             {"name": "ipl/boot.tar.gz", "size": 3, "path": directory.path().join("ipl/boot.tar.gz")}
         ]);
-        assert!(required_local_artifacts_exist(&existing));
+        assert!(required_local_artifacts_exist(&existing, ".tar.bz2"));
         std::fs::remove_file(directory.path().join("ipl/boot.tar.gz")).unwrap();
-        assert!(!required_local_artifacts_exist(&existing));
+        assert!(!required_local_artifacts_exist(&existing, ".tar.bz2"));
         std::fs::write(directory.path().join("ipl/boot.tar.gz"), b"ipl").unwrap();
         std::fs::remove_file(directory.path().join("Image")).unwrap();
-        assert!(!required_local_artifacts_exist(&existing));
+        assert!(!required_local_artifacts_exist(&existing, ".tar.bz2"));
     }
 }

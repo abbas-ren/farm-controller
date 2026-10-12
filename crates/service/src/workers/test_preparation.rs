@@ -132,7 +132,10 @@ async fn prepare(state: &AppState, mut preparation: Preparation) -> Result<Serve
     .fetch_all(database.pool())
     .await
     .map_err(|error| error.to_string())?;
-    let paths = artifact_paths(&preparation.artifacts)?;
+    let paths = artifact_paths(
+        &preparation.artifacts,
+        &state.config.device.rootfs_archive_extension,
+    )?;
     let nfs_root = PathBuf::from(&state.config.device.nfs_host_path);
     let tftp_root = PathBuf::from(&state.config.device.tftp_output_dir);
     let device_type = safe_segment(&preparation.device_type)?;

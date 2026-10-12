@@ -92,12 +92,16 @@ pub(crate) async fn finalize_upload(
     let expected_root = base_name.to_owned();
     let family = folder.1.clone();
     let max_expanded = request.max_expanded_bytes;
+    let rootfs_archive_extension = request.rootfs_archive_extension.clone();
+    let stored_archive_name = format!("{base_name}.zip");
     let mut artifacts = tokio::task::spawn_blocking(move || {
         build_ingestion::extract_zip(
             &source,
             &staging_for_extract,
             &expected_root,
             Some(&family),
+            &rootfs_archive_extension,
+            &stored_archive_name,
             max_expanded,
         )
     })

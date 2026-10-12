@@ -9,6 +9,8 @@ pub(crate) fn extract_zip(
     target: &Path,
     expected_root: &str,
     device_family: Option<&str>,
+    rootfs_archive_extension: &str,
+    stored_archive_name: &str,
     max_expanded_bytes: u64,
 ) -> io::Result<Vec<serde_json::Value>> {
     let file = File::open(archive_path)?;
@@ -60,6 +62,7 @@ pub(crate) fn extract_zip(
                 &mut tar_count,
                 &mut gen4_ipl_count,
                 &mut gen5_ipl_count,
+                rootfs_archive_extension,
             )?;
         }
         let output = target.join(&relative);
@@ -84,9 +87,9 @@ pub(crate) fn extract_zip(
     }
 
     if image_count != 1 || dtb_count != 1 || tar_count != 1 {
-        return Err(invalid(
-            "Zip must contain root Image, board.dtb, and exactly one root .tar.bz2",
-        ));
+        return Err(invalid(&format!(
+            "Zip must contain root Image, board.dtb, and exactly one root {rootfs_archive_extension}"
+        )));
     }
     if family == "gen5" && gen5_ipl_count != 1 {
         return Err(invalid(
@@ -98,6 +101,14 @@ pub(crate) fn extract_zip(
             "Gen4 zip must contain at least one file directly under ipl/",
         ));
     }
+    let stored_archive = target.join(stored_archive_name);
+    std::fs::copy(archive_path, &stored_archive)?;
+    artifacts.push(serde_json::json!({
+        "name": stored_archive_name,
+        "size": std::fs::metadata(&stored_archive)?.len(),
+        "path": stored_archive.to_string_lossy(),
+        "mtime": chrono::Utc::now(),
+    }));
     Ok(artifacts)
 }
 
@@ -148,6 +159,7 @@ fn validate_layout(
     tar_count: &mut usize,
     gen4_ipl_count: &mut usize,
     gen5_ipl_count: &mut usize,
+    rootfs_archive_extension: &str,
 ) -> io::Result<()> {
     let lower = relative.to_lowercase();
     let base = Path::new(relative)
@@ -159,7 +171,7 @@ fn validate_layout(
             *image_count += 1;
         } else if lower.ends_with(".dtb") {
             *dtb_count += 1;
-        } else if lower.ends_with(".tar.bz2") {
+        } else if lower.ends_with(&rootfs_archive_extension.to_ascii_lowercase()) {
             *tar_count += 1;
         } else {
             return Err(invalid(&format!("Unexpected file: {relative}")));
@@ -221,9 +233,22 @@ mod tests {
             ],
         );
         let output = directory.path().join("output");
-        let artifacts = extract_zip(&zip, &output, "x5h__1.2.3", Some("Gen5"), 1024).unwrap();
-        assert_eq!(artifacts.len(), 3);
+        let artifacts = extract_zip(
+            &zip,
+            &output,
+            "x5h__1.2.3",
+            Some("Gen5"),
+            ".tar.bz2",
+            "x5h__1.2.3.zip",
+            1024,
+        )
+        .unwrap();
+        assert_eq!(artifacts.len(), 4);
         assert!(output.join("Image").is_file());
+        assert_eq!(
+            std::fs::read(output.join("x5h__1.2.3.zip")).unwrap(),
+            std::fs::read(zip).unwrap()
+        );
     }
 
     #[test]
@@ -231,10 +256,66 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let zip = directory.path().join("unsafe.zip");
         archive(&zip, &[("../Image", b"image")]);
-        assert!(extract_zip(&zip, &directory.path().join("out"), "unsafe", None, 1024).is_err());
+        assert!(
+            extract_zip(
+                &zip,
+                &directory.path().join("out"),
+                "unsafe",
+                None,
+                ".tar.bz2",
+                "unsafe.zip",
+                1024,
+            )
+            .is_err()
+        );
 
         let zip = directory.path().join("large.zip");
         archive(&zip, &[("Image", b"too large")]);
-        assert!(extract_zip(&zip, &directory.path().join("out2"), "large", None, 2).is_err());
+        assert!(
+            extract_zip(
+                &zip,
+                &directory.path().join("out2"),
+                "large",
+                None,
+                ".tar.bz2",
+                "large.zip",
+                2,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_configured_rootfs_archive_extension() {
+        let directory = tempfile::tempdir().unwrap();
+        let zip = directory.path().join("v4h__1.2.3.zip");
+        archive(
+            &zip,
+            &[
+                ("Image", b"image"),
+                ("board.dtb", b"dtb"),
+                ("root.rootfs", b"root"),
+                ("ipl/firmware.bin", b"ipl"),
+            ],
+        );
+
+        let output = directory.path().join("output");
+        let artifacts = extract_zip(
+            &zip,
+            &output,
+            "v4h__1.2.3",
+            Some("Gen4"),
+            ".rootfs",
+            "v4h__1.2.3.zip",
+            1024,
+        )
+        .unwrap();
+
+        assert!(
+            artifacts
+                .iter()
+                .any(|artifact| artifact["name"] == "root.rootfs")
+        );
+        assert!(output.join("v4h__1.2.3.zip").is_file());
     }
 }

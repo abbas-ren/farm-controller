@@ -71,3 +71,14 @@ fn configured_external_urls_reject_embedded_credentials() {
             .contains("must not contain embedded credentials")
     );
 }
+
+#[test]
+fn rootfs_archive_extension_defaults_and_rejects_paths() {
+    let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
+    let mut config = AppConfig::load(&cli).unwrap();
+    assert_eq!(config.device.rootfs_archive_extension, ".tar.bz2");
+
+    config.device.rootfs_archive_extension = "../rootfs".into();
+    let error = config.validate().unwrap_err();
+    assert!(error.to_string().contains("rootfs_archive_extension"));
+}

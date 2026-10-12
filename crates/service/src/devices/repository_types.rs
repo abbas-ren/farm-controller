@@ -101,6 +101,7 @@ pub(crate) struct BuildUploadFinalization {
     pub is_custom: bool,
     pub user_id: String,
     pub max_expanded_bytes: u64,
+    pub rootfs_archive_extension: String,
 }
 
 #[derive(Clone, Debug)]

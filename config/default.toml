@@ -61,6 +61,8 @@ build_upload_dir = "./tmp/uploads"
 build_upload_max_bytes = 524288000
 # Possible: readable/writable released-build root; example: "/srv/farm/artifacts".
 build_artifacts_dir = "/artifacts"
+# Possible: filename suffix identifying the bzip2-compressed rootfs tar archive; example: ".tar.bz2".
+rootfs_archive_extension = ".tar.bz2"
 # Possible: writable directory for faulty-report attachments; example: "/var/lib/farmcontroller/faulty-reports".
 faulty_report_upload_dir = "./uploads/faulty-reports"
 # Possible: any integer greater than 0, in bytes; example: 52428800 for 50 MiB.

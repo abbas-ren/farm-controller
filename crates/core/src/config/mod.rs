@@ -216,6 +216,8 @@ pub struct DeviceConfig {
     pub build_upload_max_bytes: u64,
     #[serde(default = "default_build_artifacts_dir")]
     pub build_artifacts_dir: String,
+    #[serde(default = "default_rootfs_archive_extension")]
+    pub rootfs_archive_extension: String,
     #[serde(default = "default_faulty_report_upload_dir")]
     pub faulty_report_upload_dir: String,
     #[serde(default = "default_faulty_report_max_bytes")]
@@ -272,6 +274,7 @@ impl Default for DeviceConfig {
             build_upload_dir: default_build_upload_dir(),
             build_upload_max_bytes: default_build_upload_max_bytes(),
             build_artifacts_dir: default_build_artifacts_dir(),
+            rootfs_archive_extension: default_rootfs_archive_extension(),
             faulty_report_upload_dir: default_faulty_report_upload_dir(),
             faulty_report_max_bytes: default_faulty_report_max_bytes(),
             server_ip: default_device_server_ip(),
@@ -320,6 +323,10 @@ fn default_build_upload_max_bytes() -> u64 {
 
 fn default_build_artifacts_dir() -> String {
     "/artifacts".to_owned()
+}
+
+fn default_rootfs_archive_extension() -> String {
+    ".tar.bz2".to_owned()
 }
 
 fn default_faulty_report_upload_dir() -> String {
@@ -769,6 +776,18 @@ impl AppConfig {
         if self.device.faulty_report_max_bytes == 0 {
             return Err(AppError::Configuration(
                 "device.faulty_report_max_bytes must be greater than zero".to_owned(),
+            ));
+        }
+        let rootfs_extension = self.device.rootfs_archive_extension.as_str();
+        if !rootfs_extension.starts_with('.')
+            || rootfs_extension.len() < 2
+            || !rootfs_extension
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        {
+            return Err(AppError::Configuration(
+                "device.rootfs_archive_extension must be a safe extension beginning with '.'"
+                    .to_owned(),
             ));
         }
         if self.device.ipl_transfer_timeout_seconds == 0

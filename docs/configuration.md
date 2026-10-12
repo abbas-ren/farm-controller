@@ -30,6 +30,8 @@ The admin Control Center persists validated staged overrides in `/var/lib/farmco
 
 Filesystem paths must be writable by the service account: NFS test staging, TFTP output, artifacts, IPL storage, test results, uploads, temporary artifacts, faulty reports, and an optional log file. External integration credentials for TestRail, Qmetry, GitLab, and Confluence use the corresponding `[tests]` and `[reports]` keys or environment overlays.
 
+`device.rootfs_archive_extension` selects the rootfs filename suffix expected inside uploaded ZIPs and scanned artifact directories; it defaults to `.tar.bz2`. Rootfs content remains a bzip2-compressed tar archive. Successful uploads retain the original archive as a lowercase `.zip` file alongside the extracted release artifacts.
+
 The packaged systemd unit uses `StateDirectory=farmcontroller`, `LogsDirectory=farmcontroller`, and `Restart=always`. The admin restart action sends SIGTERM after returning `202`; systemd starts the process with the staged configuration. Keep these supervisor settings when adapting the unit.
 
 Gen4/Gen5 build uploads store validated `ipl/` payloads below `device.ipl_artifacts_dir`. Gen5 additionally requires `device.gen5_ipl_script`. Configure family-scoped `gen4_ipl_*` or `gen5_ipl_*` username, password, port, and absolute remote path fields to enable native SFTP distribution to approved active controllers. Empty usernames disable remote distribution for that family while retaining local payload storage. Transfers use `terminal_known_hosts_file` and `terminal_accept_unknown_host_keys`; production should reject unknown keys and provision the known-hosts file.
