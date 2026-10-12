@@ -1,132 +1,253 @@
 [server]
+# Possible: any valid IPv4/IPv6 socket address; example: "127.0.0.1:3000" or "[::]:3000".
 bind = "0.0.0.0:3000"
+# Possible: any integer greater than 0, in bytes; example: 52428800 for 50 MiB.
 request_body_limit_bytes = 10485760
-# Empty preserves the legacy permissive policy. Set exact browser origins in production.
+# Possible: [] to allow any origin, or exact HTTP(S) origins without paths/queries; example: ["https://farm.example.com"].
 cors_allowed_origins = []
 
 [modules]
+# Possible: any combination of "api", "auth", "device", "reports", "workers", "events", "metrics", "swagger", and "health"; example: ["api", "auth", "device", "workers", "events", "health"]. Domain modules require "api"; reports requires workers; workers requires device or reports.
 enable = ["api", "metrics", "swagger", "health"]
+# Possible: any subset of the same module names; example: ["swagger"]. Disabled modules override enabled modules.
 disable = []
 
 [auth]
+# Possible: HTTP(S) Keycloak root URL without embedded credentials; example: "https://keycloak.example.com/".
 keycloak_url = "http://127.0.0.1:9000"
+# Possible: a nonempty existing Keycloak realm when auth is enabled; example: "farm-prod".
 realm = "dev-realm"
+# Possible: a nonempty confidential Keycloak client ID when auth is enabled; example: "farmcontroller-api".
 client_id = "dev-auth"
+# Possible: a nonempty confidential-client secret when auth is enabled; example: "replace-with-secret". Prefer FARMCONTROLLER__AUTH__CLIENT_SECRET instead of committing it.
+# client_secret = "replace-with-secret"
+# Possible: an existing Keycloak realm role name; example: "operator".
 user_role = "user"
+# Possible: any initial password accepted by the Keycloak password policy; example: "ChangeMe-2026!". Prefer a protected override in production.
 default_user_password = "Renesas123"
+# Possible: any integer greater than 0, in seconds; example: 30.
 request_timeout_seconds = 10
+# Possible: true or false; example: true for HTTPS production, false only for local HTTP development.
 secure_cookies = true
 
 [database]
+# Possible: a PostgreSQL URI; example: "postgresql://farm:password@postgres:5432/farmcontroller". Required when device, reports, or workers is enabled; prefer FARMCONTROLLER__DATABASE__URL.
+# url = "postgresql://farm:password@127.0.0.1:5432/farmcontroller"
+# Possible: integer greater than 0 and at least min_connections; example: 50.
 max_connections = 20
+# Possible: integer from 0 through max_connections; example: 5.
 min_connections = 2
+# Possible: any integer greater than 0, in seconds; example: 30.
 acquire_timeout_seconds = 10
+# Possible: any integer greater than 0, in seconds; example: 900.
 idle_timeout_seconds = 600
+# Possible: any integer greater than 0, in seconds; example: 3600.
 max_lifetime_seconds = 1800
+# Possible: true to apply embedded SQL migrations at startup, false when migrations are managed externally; example: true.
 run_migrations = true
 
 [device]
+# Possible: empty to disable remote artifact discovery, or an HTTP(S) auto-index root without credentials; example: "https://files.example.com/artifacts/".
 artifacts_base_url = ""
+# Possible: writable absolute or working-directory-relative path; example: "/var/tmp/farmcontroller/artifacts".
 artifacts_temp_dir = "./tmp/artifacts"
+# Possible: writable mounted NFS path shared with target devices; example: "/srv/farm/nfs".
 nfs_host_path = "/nfs_share"
+# Possible: writable directory exported by the TFTP server; example: "/var/lib/tftpboot".
 tftp_output_dir = "./tftp_data"
+# Possible: writable absolute or relative upload staging directory; example: "/var/lib/farmcontroller/uploads".
 build_upload_dir = "./tmp/uploads"
+# Possible: upload limit in bytes as a positive integer; example: 1073741824 for 1 GiB.
 build_upload_max_bytes = 524288000
+# Possible: readable/writable released-build root; example: "/srv/farm/artifacts".
 build_artifacts_dir = "/artifacts"
+# Possible: writable directory for faulty-report attachments; example: "/var/lib/farmcontroller/faulty-reports".
 faulty_report_upload_dir = "./uploads/faulty-reports"
+# Possible: any integer greater than 0, in bytes; example: 52428800 for 50 MiB.
 faulty_report_max_bytes = 10485760
+# Possible: FarmController IPv4 address reachable by devices for TFTP/callback workflows; example: "192.0.2.10".
 server_ip = "127.0.0.1"
+# Possible: timeout in seconds as an unsigned integer; use a value greater than 0, for example 10.
 request_timeout_seconds = 2
+# Possible: nonempty SSH username when events/terminals are enabled; example: "root".
 terminal_username = "root"
+# Possible: 1 through 120 seconds when events are enabled; example: 30.
 terminal_connect_timeout_seconds = 20
+# Possible: SSH password string, or empty to try SSH "none" authentication; example: "device-password". Prefer a protected environment override.
 terminal_password = ""
+# Possible: nonempty SSH username for RTOS terminal sessions when events are enabled; example: "racer".
 rtos_username = "hpcbdc"
+# Possible: RTOS SSH password string, or empty if the server accepts "none" authentication; example: "rtos-password".
 rtos_password = ""
+# Possible: empty only when unknown host keys are accepted, otherwise a readable known_hosts path; example: "/etc/farmcontroller/ssh_known_hosts".
 terminal_known_hosts_file = ""
+# Possible: true or false; example: false in production to require known_hosts verification.
 terminal_accept_unknown_host_keys = true
+# Possible: writable local root for prepared Gen4/Gen5 IPL payloads; example: "/srv/farm/ipl".
 ipl_artifacts_dir = "/Racer_IPL_flash"
+# Possible: readable Gen5 IPL script path copied into prepared payloads; example: "/opt/farm/gen5_ipl.sh".
 gen5_ipl_script = "/Racer_IPL_flash/gen5_ipl.sh"
+# Possible: any integer greater than 0, in seconds; example: 300.
 ipl_transfer_timeout_seconds = 120
+# Possible: empty to disable Gen4 SFTP distribution, or a valid SSH username; example: "hpcbdc".
 gen4_ipl_username = ""
+# Possible: required nonempty password when gen4_ipl_username is set; example: "gen4-password". Prefer a protected environment override.
 gen4_ipl_password = ""
+# Possible: TCP port 1 through 65535; example: 2222.
 gen4_ipl_port = 22
+# Possible: absolute remote directory when Gen4 distribution is enabled; example: "/opt/racer/ipl".
 gen4_ipl_remote_path = "/home/hpcbdc/RACER_IPL"
+# Possible: empty to disable Gen5 SFTP distribution, or a valid SSH username; example: "racer".
 gen5_ipl_username = ""
+# Possible: required nonempty password when gen5_ipl_username is set; example: "gen5-password". Prefer a protected environment override.
 gen5_ipl_password = ""
+# Possible: TCP port 1 through 65535; example: 2222.
 gen5_ipl_port = 22
+# Possible: absolute remote directory when Gen5 distribution is enabled; example: "/opt/racer/ipl".
 gen5_ipl_remote_path = "/home/racer/RACER_IPL"
 
 [workers]
+# Possible: any integer greater than 0, in seconds between remote artifact scans; example: 300.
 artifact_scan_poll_seconds = 60
+# Possible: any integer greater than 0, in seconds per artifact HTTP request; example: 30.
 artifact_scan_request_timeout_seconds = 10
+# Possible: true to calculate SHA-256 for downloaded artifacts, false to skip hashing; example: true.
 artifact_scan_compute_sha256 = true
+# Possible: "off" (keep missing rows), "soft" (clear lastScannedAt), or "delete" (delete missing system rows); example: "soft".
 artifact_scan_cleanup_removed = "delete"
+# Possible: any integer greater than 0, in seconds between retention cycles; example: 86400.
 retention_interval_seconds = 3600
+# Possible: any integer greater than 0; maximum deletion batches per policy/cycle; example: 20.
 retention_max_batches_per_policy = 10
+# Possible: any integer greater than 0; in-memory relay synchronization queue slots; example: 256.
 relay_sync_queue_capacity = 128
+# Possible: any integer greater than 0, in seconds before pending relay configuration expires; example: 600.
 relay_config_timeout_seconds = 300
+# Possible: any integer greater than 0, in seconds between pending relay checks; example: 15.
 relay_config_poll_seconds = 10
+# Possible: any integer greater than 0; pending relay rows processed per cycle; example: 200.
 relay_config_batch_size = 100
+# Possible: any integer greater than 0, in seconds before a controller heartbeat is stale; example: 60.
 controller_heartbeat_timeout_seconds = 30
+# Possible: any integer greater than 0, in seconds between controller-heartbeat scans; example: 10.
 controller_heartbeat_poll_seconds = 5
+# Possible: any integer greater than 0; controllers processed per heartbeat scan; example: 200.
 controller_heartbeat_batch_size = 100
+# Possible: any integer greater than 0, in seconds between device-heartbeat scans; example: 5.
 device_heartbeat_poll_seconds = 1
+# Possible: any integer greater than 0; devices processed per heartbeat scan; example: 200.
 device_heartbeat_batch_size = 100
+# Possible: any integer greater than 0, in minutes before an action is considered stale; example: 180.
 device_action_stale_timeout_minutes = 120
+# Possible: any integer greater than 0, in seconds between stale-action scans; example: 120.
 device_action_watchdog_poll_seconds = 60
+# Possible: any integer greater than 0; stale actions processed per scan; example: 200.
 device_action_watchdog_batch_size = 100
+# Possible: any integer greater than 0, in seconds between test-preparation polls; example: 10.
 test_preparation_poll_seconds = 5
+# Possible: any integer greater than 0, in seconds before a preparation lease can be reclaimed; example: 900.
 test_preparation_lease_seconds = 600
+# Possible: any integer greater than 0; tests prepared per cycle; example: 8.
 test_preparation_batch_size = 4
+# Possible: any integer greater than 0, in seconds between device-action polls; example: 10.
 device_action_poll_seconds = 5
+# Possible: any integer greater than 0; device actions processed per cycle; example: 16.
 device_action_batch_size = 8
+# Possible: any integer greater than 0, in seconds between Gen5 mapping polls; example: 15.
 gen5_mapping_poll_seconds = 10
+# Possible: any integer greater than 0; Gen5 mappings processed per cycle; example: 20.
 gen5_mapping_batch_size = 10
+# Possible: any integer greater than 0, in seconds per Gen5 mapping HTTP request; example: 20.
 gen5_mapping_request_timeout_seconds = 10
+# Possible: any integer greater than 0, in minutes allowed for Gen5 mapping; example: 60.
 gen5_mapping_max_window_minutes = 30
+# Possible: any integer greater than 0, in seconds between Gen5 reboot checks; example: 60.
 gen5_reboot_poll_seconds = 30
+# Possible: any integer greater than 0, in seconds before a Gen5 reboot times out; example: 300.
 gen5_reboot_timeout_seconds = 120
+# Possible: any integer greater than 0, in seconds per Gen5 reboot HTTP request; example: 20.
 gen5_reboot_request_timeout_seconds = 10
+# Possible: any integer greater than 0; Gen5 reboot rows processed per cycle; example: 50.
 gen5_reboot_batch_size = 20
 
 [reports]
+# Possible: writable absolute or relative report root; example: "/srv/farm/test-results".
 test_results_dir = "/test-results"
+# Possible: any integer greater than 0; queued report jobs retained in memory; example: 128.
 queue_capacity = 64
+# Possible: empty for relative report links, or a public HTTP(S) results base; example: "https://farm.example.com/test-results".
 report_base_url = ""
+# Possible: empty to disable publication, or a Confluence page URL containing /pages/{numeric-id}; example: "https://wiki.example.com/pages/123456/Farm-Reports".
 confluence_url = ""
+# Possible: Confluence personal access token; example: "replace-with-pat". Required for upload and best supplied through FARMCONTROLLER__REPORTS__CONFLUENCE_PAT.
 confluence_pat = ""
+# Possible: Confluence space key; example: "QA". Required for upload.
 confluence_space = ""
+# Possible: empty to use the build version as the parent title, or a page title; example: "Nightly Builds".
 confluence_parent_title = ""
+# Possible: nonempty child-page title for upload; example: "Farm Test Report".
 confluence_subpage_title = ""
+# Possible: any integer greater than 0, in seconds; example: 120.
 confluence_timeout_seconds = 60
 
 [tests]
+# Possible: empty to disable TestRail, or an HTTP(S) TestRail root without credentials; example: "https://company.testrail.io/index.php/".
 test_rail_base_url = ""
+# Possible: API version path segment supported by TestRail; example: "v2".
 test_rail_api_version = ""
+# Possible: TestRail login/email for HTTP Basic authentication; example: "qa@example.com".
 test_rail_username = ""
+# Possible: TestRail API key; example: "replace-with-api-key". Prefer FARMCONTROLLER__TESTS__TEST_RAIL_API_KEY.
 test_rail_api_key = ""
+# Possible: unsigned numeric TestRail project ID; use a positive value when enabled, for example 9.
 test_rail_project_id = 0
+# Possible: timeout in seconds as an unsigned integer; use a value greater than 0, for example 60.
 test_rail_timeout_seconds = 30
+# Possible: empty to disable Qmetry, or an HTTP(S) Qmetry API root; example: "https://qtmcloud.example.com/rest/api/latest/".
 qmetry_base_url = ""
+# Possible: Qmetry API key sent in the apikey header; example: "replace-with-api-key".
 qmetry_api_key = ""
+# Possible: Qmetry/Jira project ID string; example: "10001".
 jira_project_id = ""
+# Possible: empty to disable Jira defects, or an HTTP(S) Jira root; example: "https://jira.example.com/". Must be configured with project key and token.
 jira_base_url = ""
+# Possible: Jira REST path relative to jira_base_url; example: "rest/api/3" or "rest/api/2".
 jira_endpoint = "rest/api/2"
+# Possible: Jira project key; example: "FARM". Must be configured with base URL and token.
 jira_project_key = ""
+# Possible: Jira bearer token; example: "replace-with-token". Must be configured with base URL and project key; prefer an environment override.
 jira_api_token = ""
+# Possible: any integer greater than 0, in seconds; example: 60.
 jira_timeout_seconds = 30
+# Possible: empty to omit script links from defects, or an HTTP(S) browser/download base; example: "https://gitlab.example.com/group/tests/-/blob/main/".
 jira_script_base_url = ""
+# Possible: timeout in seconds as an unsigned integer; use a value greater than 0, for example 60.
 qmetry_timeout_seconds = 30
+# Possible: "gitlab" or "local"; example: "local". Values other than "local" currently follow the GitLab branch.
 test_script_server = "gitlab"
+# Possible: HTTP(S) root serving raw scripts in local mode; example: "http://scripts.internal:8081/".
 local_test_script_server_url = "http://127.0.0.1:8081"
+# Possible: empty until GitLab mode is used, or an HTTP(S) GitLab service root; example: "https://gitlab.example.com/".
 gitlab_base_url = ""
+# Possible: GitLab numeric project ID or URL-encoded project path accepted by API v4; example: "2222" or "group%2Ftests".
 gitlab_project_id = "2222"
+# Possible: GitLab token with repository read access; example: "replace-with-token". Sent as PRIVATE-TOKEN; prefer an environment override.
 gitlab_access_token = ""
+# Possible: branch, tag, or commit ref accepted by GitLab; example: "release/2026.10".
 gitlab_branch = "main"
+# Possible: maximum downloaded script size in bytes; use a positive integer, for example 20971520 for 20 MiB.
 test_script_max_bytes = 10485760
+# Possible: readable/writable absolute or relative execution-log directory; example: "/var/lib/farmcontroller/test-logs".
 test_logs_dir = "../log_data/test/logs"
 
 [logging]
+# Possible: tracing EnvFilter expression; example: "farmcontroller=debug,tower_http=info" or "warn".
 level = "info"
+# Possible: true for newline-delimited JSON logs or false for human-readable text; example: true.
 json = false
+# Possible: "stdout", "stderr", or "off"; example: "stderr". At least one stream, file, or network sink must remain enabled.
 stream = "stdout"
+# Possible: writable log path; example: "/var/log/farmcontroller/farmcontroller.log". Parent directories are created automatically.
+# file = "/var/log/farmcontroller/farmcontroller.log"
+# Possible: UDP collector socket address; example: "192.0.2.50:5514" or "[2001:db8::50]:5514".
+# network = "192.0.2.50:5514"

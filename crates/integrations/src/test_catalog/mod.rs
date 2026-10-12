@@ -106,8 +106,10 @@ impl TestRailCatalog {
         if config.test_rail_base_url.trim().is_empty() {
             return Ok(None);
         }
-        let base = reqwest::Url::parse(&config.test_rail_base_url)
+        let mut base = reqwest::Url::parse(&config.test_rail_base_url)
             .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+        base.set_query(None);
+        base.set_fragment(None);
         let client =
             crate::external_http::client(Duration::from_secs(config.test_rail_timeout_seconds))
                 .map_err(|error| TestCatalogError::Request(error.to_string()))?;
@@ -116,6 +118,37 @@ impl TestRailCatalog {
             client,
             base,
         })))
+    }
+
+    fn api_url(&self, endpoint: &str, query: &[(&str, &str)]) -> reqwest::Url {
+        let mut encoded_query = self.base.clone();
+        encoded_query.set_query(None);
+        encoded_query
+            .query_pairs_mut()
+            .extend_pairs(query.iter().copied());
+
+        let mut route = format!("/{}", endpoint.trim_start_matches('/'));
+        if let Some(query) = encoded_query.query() {
+            route.push('&');
+            route.push_str(query);
+        }
+
+        let mut url = self.base.clone();
+        url.set_query(Some(&route));
+        url
+    }
+
+    fn pagination_url(&self, value: &str) -> Result<reqwest::Url, TestCatalogError> {
+        if let Ok(url) = reqwest::Url::parse(value) {
+            return Ok(url);
+        }
+
+        let route = value
+            .split_once("index.php?")
+            .map_or(value, |(_, route)| route)
+            .trim_start_matches(['?', '/'])
+            .replacen('?', "&", 1);
+        Ok(self.api_url(&route, &[]))
     }
 
     async fn page(&self, url: reqwest::Url) -> Result<PlanPage, TestCatalogError> {
@@ -175,14 +208,10 @@ struct Links {
 impl TestCatalog for TestRailCatalog {
     async fn plans(&self, filter: Option<&str>) -> Result<Vec<TestPlan>, TestCatalogError> {
         let endpoint = format!(
-            "api/{}/get_suites/{}?limit=250&offset=0",
+            "api/{}/get_suites/{}",
             self.config.test_rail_api_version, self.config.test_rail_project_id
         );
-        let mut next = Some(
-            self.base
-                .join(&endpoint)
-                .map_err(|error| TestCatalogError::Request(error.to_string()))?,
-        );
+        let mut next = Some(self.api_url(&endpoint, &[("limit", "250"), ("offset", "0")]));
         let mut plans = Vec::new();
         while let Some(url) = next.take() {
             if url.origin() != self.base.origin() {
@@ -196,9 +225,8 @@ impl TestCatalog for TestRailCatalog {
                 .links
                 .next
                 .as_deref()
-                .map(|value| self.base.join(value))
-                .transpose()
-                .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+                .map(|value| self.pagination_url(value))
+                .transpose()?;
         }
         let filter = filter
             .map(|value| value.trim_matches(['\'', '"']).to_lowercase())
@@ -227,14 +255,18 @@ impl TestCatalog for TestRailCatalog {
 
     async fn suites(&self, plan_id: u64) -> Result<Vec<TestSuite>, TestCatalogError> {
         let endpoint = format!(
-            "api/{}/get_sections/{}?limit=250&offset=0&suite_id={plan_id}",
+            "api/{}/get_sections/{}",
             self.config.test_rail_api_version, self.config.test_rail_project_id
         );
-        let mut next = Some(
-            self.base
-                .join(&endpoint)
-                .map_err(|error| TestCatalogError::Request(error.to_string()))?,
-        );
+        let plan_id_query = plan_id.to_string();
+        let mut next = Some(self.api_url(
+            &endpoint,
+            &[
+                ("limit", "250"),
+                ("offset", "0"),
+                ("suite_id", &plan_id_query),
+            ],
+        ));
         let mut suites = Vec::new();
         while let Some(url) = next.take() {
             if url.origin() != self.base.origin() {
@@ -276,9 +308,8 @@ impl TestCatalog for TestRailCatalog {
             next = value
                 .pointer("/_links/next")
                 .and_then(serde_json::Value::as_str)
-                .map(|value| self.base.join(value))
-                .transpose()
-                .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+                .map(|value| self.pagination_url(value))
+                .transpose()?;
         }
         Ok(suites)
     }
@@ -293,19 +324,18 @@ impl TestCatalog for TestRailCatalog {
             "api/{}/get_cases/{}",
             self.config.test_rail_api_version, self.config.test_rail_project_id
         );
-        let mut first = self
-            .base
-            .join(&endpoint)
-            .map_err(|error| TestCatalogError::Request(error.to_string()))?;
-        first
-            .query_pairs_mut()
-            .append_pair("limit", "250")
-            .append_pair("offset", "0")
-            .append_pair("suite_id", &plan_id.to_string())
-            .append_pair("section_id", &suite_id.to_string());
+        let plan_id = plan_id.to_string();
+        let suite_id = suite_id.to_string();
+        let mut query = vec![
+            ("limit", "250"),
+            ("offset", "0"),
+            ("suite_id", plan_id.as_str()),
+            ("section_id", suite_id.as_str()),
+        ];
         if let Some(filter) = filter {
-            first.query_pairs_mut().append_pair("filter", filter);
+            query.push(("filter", filter));
         }
+        let first = self.api_url(&endpoint, &query);
         let mut next = Some(first);
         let mut cases = Vec::new();
         while let Some(url) = next.take() {
@@ -356,9 +386,8 @@ impl TestCatalog for TestRailCatalog {
             next = value
                 .pointer("/_links/next")
                 .and_then(serde_json::Value::as_str)
-                .map(|value| self.base.join(value))
-                .transpose()
-                .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+                .map(|value| self.pagination_url(value))
+                .transpose()?;
         }
         Ok(cases)
     }
@@ -376,13 +405,10 @@ impl TestCatalog for TestRailCatalog {
                 )));
             }
         };
-        let status_url = self
-            .base
-            .join(&format!(
-                "api/{}/get_statuses",
-                self.config.test_rail_api_version
-            ))
-            .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+        let status_url = self.api_url(
+            &format!("api/{}/get_statuses", self.config.test_rail_api_version),
+            &[],
+        );
         let statuses = self.json(status_url).await?;
         let status_id = statuses
             .as_array()
@@ -396,13 +422,13 @@ impl TestCatalog for TestRailCatalog {
             .ok_or_else(|| {
                 TestCatalogError::Request(format!("invalid result type: {}", update.result))
             })?;
-        let result_url = self
-            .base
-            .join(&format!(
+        let result_url = self.api_url(
+            &format!(
                 "api/{}/add_result_for_case/{}/{}",
                 self.config.test_rail_api_version, update.run_id, update.case_id
-            ))
-            .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+            ),
+            &[],
+        );
         self.client
             .post(result_url)
             .basic_auth(
@@ -424,13 +450,13 @@ impl TestCatalog for TestRailCatalog {
     }
 
     async fn create_run(&self, request: &TestRunCreation) -> Result<u64, TestCatalogError> {
-        let url = self
-            .base
-            .join(&format!(
+        let url = self.api_url(
+            &format!(
                 "api/{}/add_run/{}",
                 self.config.test_rail_api_version, self.config.test_rail_project_id
-            ))
-            .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+            ),
+            &[],
+        );
         let value: serde_json::Value = self
             .client
             .post(url)
@@ -460,13 +486,13 @@ impl TestCatalog for TestRailCatalog {
     }
 
     async fn delete_run(&self, run_id: u64) -> Result<(), TestCatalogError> {
-        let url = self
-            .base
-            .join(&format!(
+        let url = self.api_url(
+            &format!(
                 "api/{}/delete_run/{run_id}",
                 self.config.test_rail_api_version
-            ))
-            .map_err(|error| TestCatalogError::Request(error.to_string()))?;
+            ),
+            &[],
+        );
         self.client
             .post(url)
             .basic_auth(

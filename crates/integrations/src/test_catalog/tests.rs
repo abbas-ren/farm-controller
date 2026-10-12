@@ -9,18 +9,22 @@ use super::*;
 async fn test_rail_plans_follow_pagination_and_filter() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/api/v2/get_suites/9"))
+        .and(path("/index.php"))
+        .and(query_param("/api/v2/get_suites/9", ""))
         .and(query_param("limit", "250"))
         .and(query_param("offset", "0"))
         .and(header("authorization", "Basic dXNlcjprZXk="))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "suites": [{"id": 1, "name": "Other", "description": null}],
-            "_links": {"next": "/api/v2/page2"}
+            "_links": {"next": "/api/v2/page2&limit=250&offset=250"}
         })))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/api/v2/page2"))
+        .and(path("/index.php"))
+        .and(query_param("/api/v2/page2", ""))
+        .and(query_param("limit", "250"))
+        .and(query_param("offset", "250"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "suites": [{"id": 2, "name": "Smoke", "description": "Device plan"}],
             "_links": {"next": null}
@@ -28,7 +32,8 @@ async fn test_rail_plans_follow_pagination_and_filter() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/api/v2/get_sections/9"))
+        .and(path("/index.php"))
+        .and(query_param("/api/v2/get_sections/9", ""))
         .and(query_param("suite_id", "7"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "sections": [{"id": 8, "name": "Core", "suite_id": 7, "display_order": 2, "description": null}],
@@ -37,7 +42,8 @@ async fn test_rail_plans_follow_pagination_and_filter() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/api/v2/get_cases/9"))
+        .and(path("/index.php"))
+        .and(query_param("/api/v2/get_cases/9", ""))
         .and(query_param("suite_id", "7"))
         .and(query_param("section_id", "8"))
         .and(query_param("filter", "Boot"))
@@ -48,7 +54,7 @@ async fn test_rail_plans_follow_pagination_and_filter() {
         .mount(&server)
         .await;
     let catalog = TestRailCatalog::configured(TestsConfig {
-        test_rail_base_url: format!("{}/", server.uri()),
+        test_rail_base_url: format!("{}/index.php", server.uri()),
         test_rail_api_version: "v2".to_owned(),
         test_rail_username: "user".to_owned(),
         test_rail_api_key: "key".to_owned(),
@@ -81,7 +87,8 @@ async fn test_rail_plans_follow_pagination_and_filter() {
 async fn test_rail_creates_runs_and_bounds_script_downloads() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/api/v2/add_run/9"))
+        .and(path("/index.php"))
+        .and(query_param("/api/v2/add_run/9", ""))
         .and(header("authorization", "Basic dXNlcjprZXk="))
         .and(body_json(serde_json::json!({
             "suite_id": 7,
@@ -104,7 +111,7 @@ async fn test_rail_creates_runs_and_bounds_script_downloads() {
         .mount(&server)
         .await;
     let catalog = TestRailCatalog::configured(TestsConfig {
-        test_rail_base_url: format!("{}/", server.uri()),
+        test_rail_base_url: format!("{}/index.php", server.uri()),
         test_rail_api_version: "v2".to_owned(),
         test_rail_username: "user".to_owned(),
         test_rail_api_key: "key".to_owned(),
