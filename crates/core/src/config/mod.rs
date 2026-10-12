@@ -197,7 +197,7 @@ fn default_gitlab_branch() -> String {
 }
 
 fn default_test_script_max_bytes() -> usize {
-    10 * 1024 * 1024
+    500 * 1024 * 1024
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -315,7 +315,7 @@ fn default_build_upload_dir() -> String {
 }
 
 fn default_build_upload_max_bytes() -> u64 {
-    500 * 1024 * 1024
+    100 * 1024 * 1024 * 1024
 }
 
 fn default_build_artifacts_dir() -> String {
@@ -327,7 +327,7 @@ fn default_faulty_report_upload_dir() -> String {
 }
 
 fn default_faulty_report_max_bytes() -> u64 {
-    10 * 1024 * 1024
+    100 * 1024 * 1024
 }
 
 fn default_device_server_ip() -> String {
@@ -391,7 +391,7 @@ impl Default for ServerConfig {
             bind: "0.0.0.0:3000"
                 .parse()
                 .expect("static socket address is valid"),
-            request_body_limit_bytes: 10 * 1024 * 1024,
+            request_body_limit_bytes: 50 * 1024 * 1024,
             cors_allowed_origins: Vec::new(),
         }
     }

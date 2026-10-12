@@ -48,17 +48,26 @@ pub(super) fn parse_metadata(headers: &HeaderMap) -> Result<BTreeMap<String, Str
         .split(',')
         .filter(|entry| !entry.trim().is_empty())
         .map(|entry| {
-            let (key, encoded) = entry
-                .trim()
-                .split_once(' ')
-                .ok_or(StatusCode::BAD_REQUEST)?;
+            let entry = entry.trim();
+
+            let (key, encoded) = match entry.split_once(' ') {
+                Some((key, encoded)) => (key, encoded),
+                None => (entry, ""),
+            };
+
             if key.is_empty() {
                 return Err(StatusCode::BAD_REQUEST);
             }
-            let decoded = STANDARD
-                .decode(encoded)
-                .map_err(|_| StatusCode::BAD_REQUEST)?;
-            let decoded = String::from_utf8(decoded).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+            let decoded = if encoded.is_empty() {
+                String::new()
+            } else {
+                let bytes = STANDARD
+                    .decode(encoded)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?;
+                String::from_utf8(bytes).map_err(|_| StatusCode::BAD_REQUEST)?
+            };
+
             Ok((key.to_owned(), decoded))
         })
         .collect()
