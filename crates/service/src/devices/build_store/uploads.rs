@@ -56,18 +56,13 @@ pub(crate) async fn finalize_upload(
         ));
     }
     let is_custom = request.is_custom;
-    if is_custom && tag.is_none() {
-        return Err(DeviceRepositoryError::Internal(
-            "tag is required for custom builds".to_owned(),
-        ));
-    }
     let generated_tag = format!("build-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
-    let tag = tag.unwrap_or(&generated_tag);
+    let stored_tag = tag.unwrap_or(&generated_tag);
     let version = format!(
         "v{}{}",
         raw_version.trim_start_matches(['v', 'V']),
-        if is_custom {
-            format!("-{tag}")
+        if is_custom && tag.is_some() {
+            format!("-{stored_tag}")
         } else {
             String::new()
         }
@@ -127,22 +122,25 @@ pub(crate) async fn finalize_upload(
     }
     let mut transaction = pool.begin().await?;
     let release_id = uuid::Uuid::new_v4();
+    let status = if is_custom { "passed" } else { "untested" };
     let release = sqlx::query_scalar::<_, serde_json::Value>(
         r#"INSERT INTO releases
                (id, "folderName", version, artifacts, tag, "uploadedBy", "buildType",
-                "deviceFamily", "deviceType", "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, $7::"enum_releases_buildType", $8, $9, now(), now())
+                "deviceFamily", "deviceType", status, "isFaulty", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, $6, $7::"enum_releases_buildType", $8, $9,
+                   $10::"enum_releases_status", false, now(), now())
            RETURNING to_jsonb(releases)"#,
     )
     .bind(release_id)
     .bind(&folder.0)
     .bind(&version)
     .bind(serde_json::Value::Array(artifacts))
-    .bind(tag)
+    .bind(stored_tag)
     .bind(&request.user_id)
     .bind(if is_custom { "custom" } else { "official" })
     .bind(&folder.1)
     .bind(device_type)
+    .bind(status)
     .fetch_one(&mut *transaction)
     .await;
     let release = match release {

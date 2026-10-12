@@ -103,6 +103,12 @@ impl EventHub {
         let _ = self.socket_io.set(socket_io);
     }
 
+    pub async fn shutdown(&self) {
+        if let Some(socket_io) = self.socket_io.get() {
+            socket_io.close().await;
+        }
+    }
+
     pub fn publish(&self, event: ServerEvent) -> Result<(), String> {
         if let Some(socket_io) = self.socket_io.get() {
             for socket in socket_io.sockets() {

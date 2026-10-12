@@ -1,6 +1,6 @@
 //! FarmController process composition and runtime lifecycle.
 
-use std::sync::Arc;
+use std::{future::IntoFuture, sync::Arc, time::Duration};
 
 use clap::Parser;
 use farmcontroller::{
@@ -13,7 +13,9 @@ use farmcontroller::{
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
+
+const SERVER_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = build_app(state.clone());
     let listener = TcpListener::bind(config.server.bind).await?;
     let cancellation = CancellationToken::new();
-    let workers = WorkerManager::start(state, cancellation.child_token());
+    let workers = WorkerManager::start(state.clone(), cancellation.child_token());
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -46,9 +48,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_signal().await;
         signal_cancellation.cancel();
     });
-    let server_result = axum::serve(listener, app)
+    let server = axum::serve(listener, app)
         .with_graceful_shutdown(cancellation.clone().cancelled_owned())
-        .await;
+        .into_future();
+    tokio::pin!(server);
+    let server_result = tokio::select! {
+        result = &mut server => result,
+        _ = cancellation.cancelled() => {
+            state.shutdown_events().await;
+            match tokio::time::timeout(SERVER_SHUTDOWN_GRACE, &mut server).await {
+                Ok(result) => result,
+                Err(_) => {
+                    warn!(grace_seconds = SERVER_SHUTDOWN_GRACE.as_secs(), "forcing server shutdown with connections still open");
+                    Ok(())
+                }
+            }
+        }
+    };
     cancellation.cancel();
     workers.shutdown().await;
     signal_task.abort();

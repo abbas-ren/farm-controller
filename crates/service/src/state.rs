@@ -32,6 +32,10 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub async fn shutdown_events(&self) {
+        self.event_publisher.shutdown().await;
+    }
+
     pub async fn bootstrap(config: AppConfig, metrics: Metrics) -> Result<Self, AppError> {
         let database = if config.database_required() {
             Some(Database::connect(&config.database, metrics.clone()).await?)

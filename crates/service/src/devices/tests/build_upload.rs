@@ -391,6 +391,9 @@ async fn tus_upload_preserves_offsets_and_protocol_headers() {
             assert_eq!(received.payload["percent"], percent);
             assert_eq!(received.room.as_deref(), Some("user:user-1"));
         }
+        if event == "build_uploaded" {
+            assert_eq!(received.payload["buildType"], "custom");
+        }
     }
 
     let response = app

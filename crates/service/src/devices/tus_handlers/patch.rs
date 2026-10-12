@@ -136,10 +136,7 @@ pub async fn patch(
                     upload_id,
                     filename,
                     tag: upload.metadata.get("tag").cloned(),
-                    is_custom: upload
-                        .metadata
-                        .get("tag")
-                        .is_some_and(|tag| !tag.trim().is_empty()),
+                    is_custom: true,
                     user_id: user_id.clone(),
                     max_expanded_bytes: state
                         .config
