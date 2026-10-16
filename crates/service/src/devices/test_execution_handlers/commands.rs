@@ -47,6 +47,11 @@ pub async fn update_status(
     };
     match repository.update_execution_status(&test_id, &status).await {
         Ok(true) => {
+            tracing::info!(
+                "Updated test execution status for test_id: {} status {}",
+                test_id,
+                status
+            );
             let event = ServerEvent {
                 event: "test_execution_update".to_owned(),
                 payload: serde_json::json!({"testId": test_id, "update": {"type": "status", "data": {"status": status}}}),
@@ -95,12 +100,14 @@ pub(crate) async fn create_for_user(
     use super::super::error::DeviceRepositoryError;
 
     let execution = super::selection::resolve_execution(state, request, user_id).await?;
+    tracing::info!("Resolved execution user_id: {}", execution.user_id);
     let repository = state.device_repository.as_ref().ok_or_else(|| {
         DeviceRepositoryError::Internal("Device persistence is unavailable".to_owned())
     })?;
     let created = repository.create_test_execution(&execution).await?;
     if let Some(test_id) = created.get("testId").and_then(serde_json::Value::as_str) {
         let event = super::events::new_execution_event(test_id, &execution.user_id);
+        tracing::info!("Created new test execution event: {:#?}", event);
         if let Err(error) = state.event_publisher.publish(event) {
             tracing::warn!(%error, test_id, "failed to publish new test execution");
         }
@@ -161,6 +168,10 @@ pub async fn update(
             .map_err(|error| error.to_string())
     }
     .await;
+    tracing::info!(
+        "Completed TestRail update operation for test_id: {}",
+        request.test_id
+    );
     if let Err(error) = operation {
         tracing::warn!(%error, test_id = %request.test_id, "failed to update TestRail result");
         if request.log

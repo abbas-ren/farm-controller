@@ -147,7 +147,7 @@ pub(super) async fn prepare_and_distribute(
         );
         match tokio::time::timeout(timeout, transfer).await {
             Ok(Ok(())) => {
-                tracing::info!(host, device_family, version, "distributed IPL payload");
+                tracing::info!(host, device_family, version, artifact_paths = ?artifact_paths, "distributed IPL payload");
             }
             Ok(Err(error)) => failures.push(format!("{host}: {error}")),
             Err(_) => failures.push(format!("{host}: transfer timed out")),

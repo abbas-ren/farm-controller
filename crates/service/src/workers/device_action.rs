@@ -120,6 +120,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sqlx::E
     )
     .fetch_optional(&mut *transaction)
     .await?;
+    tracing::info!("Fetched action from queue");
     let Some(action) = action else {
         transaction.rollback().await?;
         return Ok(None);
@@ -232,9 +233,17 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
         let target = resolve_gen4_ipl_target(state, &assigned.device_id)
             .await?
             .ok_or_else(|| {
-                "Gen4 device requires a relay channel, controller mapping, and GPIO configuration"
-                    .to_owned()
+                format!(
+                    "Gen4 device, {}, requires a relay channel, controller mapping, and GPIO configuration",
+                    &assigned.device_id
+                )
+                .to_owned()
             })?;
+        tracing::info!(
+            "Dispatching Gen4 IPL request for device {} with target {:?}",
+            &assigned.device_id,
+            &target
+        );
         request_gen4_ipl(state, assigned, target).await?;
         return Ok(());
     }

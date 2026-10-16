@@ -80,26 +80,26 @@ async fn configure_channel(
         ));
     }
     let Some(device_id) = normalized_device_id(configuration) else {
-        if let Some(previous_device_id) = context.current_device_id.as_deref() {
-            if let Some(previous_device) = load_device(transaction, previous_device_id).await? {
-                let device_mac = device_mac(&previous_device);
-                actions.push(RelayControllerAction::Remove {
-                    controller_address: context.controller_address.clone(),
-                    device_mac: device_mac.clone(),
-                    relay_serial: context.relay_serial.clone(),
-                    channel_number: context.channel_number,
-                });
-                clear_gpio_mapping(&mut context.mappings, &device_mac);
-                save_mappings(transaction, configuration.relay_id, &context.mappings).await?;
-            }
-            sqlx::query(
-                r#"UPDATE relay_channels SET "deviceId" = NULL, "updatedAt" = now()
-                   WHERE id = $1 AND "deletedAt" IS NULL"#,
-            )
-            .bind(configuration.channel_id)
-            .execute(&mut **transaction)
-            .await?;
-        }
+        // if let Some(previous_device_id) = context.current_device_id.as_deref() {
+        //     if let Some(previous_device) = load_device(transaction, previous_device_id).await? {
+        //         let device_mac = device_mac(&previous_device);
+        //         actions.push(RelayControllerAction::Remove {
+        //             controller_address: context.controller_address.clone(),
+        //             device_mac: device_mac.clone(),
+        //             relay_serial: context.relay_serial.clone(),
+        //             channel_number: context.channel_number,
+        //         });
+        //         clear_gpio_mapping(&mut context.mappings, &device_mac);
+        //         save_mappings(transaction, configuration.relay_id, &context.mappings).await?;
+        //     }
+        //     sqlx::query(
+        //         r#"UPDATE relay_channels SET "deviceId" = NULL, "updatedAt" = now()
+        //            WHERE id = $1 AND "deletedAt" IS NULL"#,
+        //     )
+        //     .bind(configuration.channel_id)
+        //     .execute(&mut **transaction)
+        //     .await?;
+        // }
         return load_channel_json(transaction, configuration.channel_id).await;
     };
 
