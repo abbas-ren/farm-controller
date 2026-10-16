@@ -38,6 +38,16 @@ pub enum CallbackStatus {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub struct IplFlashingStatus {
+    pub status: CallbackStatus,
+    pub percentage: u8,
+    pub completed: bool,
+    pub mac: String,
+    pub generation: u8,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct MappingCallback {
     #[schema(example = "aabbccddeeff")]
     pub mac: String,
@@ -104,5 +114,5 @@ pub struct SuccessResponse {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CallbackResponse {
     pub success: bool,
-    pub message: &'static str,
+    pub message: String,
 }

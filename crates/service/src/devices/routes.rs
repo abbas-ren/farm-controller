@@ -71,8 +71,8 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
             get(list_controllers).post(register_controller),
         )
         .route("/mapping-gen5", post(mapping_gen5))
-        .route("/flash-confirm", get(flash_confirm))
-        .route("/flash-confirm-gen4", get(flash_confirm_gen4))
+        .route("/flash-confirm", post(flash_confirm))
+        .route("/flash-confirm-gen4", post(flash_confirm_gen4))
         .route("/log", get(log_handlers::list).post(log_handlers::create))
         .route("/log/", get(log_handlers::list).post(log_handlers::create))
         .route("/log/search", get(log_handlers::search))

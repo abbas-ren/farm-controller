@@ -138,13 +138,13 @@ impl DeviceRegistrationRepository for RegistrationRepository {
     async fn confirm_flash(
         &self,
         device_type: &str,
-        status: CallbackStatus,
+        status: &IplFlashingStatus,
     ) -> Result<FlashConfirmationResult, DeviceRepositoryError> {
         self.callbacks
             .lock()
             .unwrap()
             .push(format!("flash:{device_type}:{status:?}"));
-        Ok(if status == CallbackStatus::Failure {
+        Ok(if status.status == CallbackStatus::Failure {
             FlashConfirmationResult {
                 cancelled_execution: Some(repository_types::FlashCancelledExecution {
                     test_id: "test-1".to_owned(),
@@ -152,6 +152,7 @@ impl DeviceRegistrationRepository for RegistrationRepository {
                     created_by: "user-1".to_owned(),
                 }),
                 freed_device_id: Some("device-1".to_owned()),
+                progress: None,
             }
         } else {
             FlashConfirmationResult::default()

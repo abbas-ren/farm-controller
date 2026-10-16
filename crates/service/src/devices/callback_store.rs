@@ -1,6 +1,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::devices::{FlashExecutionProgress, IplFlashingStatus};
+
 use super::{
     CallbackStatus, TtyEntry,
     error::DeviceRepositoryError,
@@ -103,7 +105,7 @@ pub(crate) async fn save_gen5_mapping(
 pub(crate) async fn confirm_flash(
     pool: &PgPool,
     device_type: &str,
-    status: CallbackStatus,
+    flashing_status: &IplFlashingStatus,
 ) -> Result<FlashConfirmationResult, DeviceRepositoryError> {
     let mut transaction = pool.begin().await?;
     let mut result = FlashConfirmationResult::default();
@@ -121,32 +123,56 @@ pub(crate) async fn confirm_flash(
     .fetch_optional(&mut *transaction)
     .await?;
     if let Some((job_id, device_id, test_id)) = job {
-        match status {
+        match flashing_status.status {
             CallbackStatus::Success => {
-                sqlx::query(
-                    r#"
-                    UPDATE device_action_queue
-                    SET "iplFlashConfirm" = true, "updatedAt" = now()
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(job_id)
-                .execute(&mut *transaction)
-                .await?;
-                if let Some(test_id) = test_id.as_deref() {
+                if flashing_status.completed {
                     sqlx::query(
-                        r#"INSERT INTO log_entries
-                              (type, "referenceId", data, level, timestamp,
-                               "createdAt", "updatedAt")
-                           VALUES ('test', $1, jsonb_build_object('message', $2::text),
-                                   'info', now(), now(), now())"#,
+                        r#"
+                        UPDATE device_action_queue
+                        SET "iplFlashConfirm" = true, "updatedAt" = now()
+                        WHERE id = $1
+                        "#,
                     )
-                    .bind(test_id)
-                    .bind(
-                        "Got flash confirmation success, waiting for device to come back online...",
-                    )
+                    .bind(job_id)
                     .execute(&mut *transaction)
                     .await?;
+                    if let Some(test_id) = test_id.as_deref() {
+                        sqlx::query(
+                            r#"INSERT INTO log_entries
+                                (type, "referenceId", data, level, timestamp,
+                                "createdAt", "updatedAt")
+                            VALUES ('test', $1, jsonb_build_object('message', $2::text),
+                                    'info', now(), now(), now())"#,
+                        )
+                        .bind(test_id)
+                        .bind(
+                            "Got flash confirmation success, waiting for device to come back online...",
+                        )
+                        .execute(&mut *transaction)
+                        .await?;
+                    }
+                }
+
+                if let Some(test_id) = test_id.as_deref()
+                    && let Some((build_id, created_by)) =
+                        sqlx::query_as::<_, (String, Option<String>)>(
+                            r#"SELECT "buildId"::text, "createdBy" FROM test_executions
+                           WHERE "testId" = $1
+                             AND status::text NOT IN ('cancelled', 'completed', 'failed')
+                           LIMIT 1"#,
+                        )
+                        .bind(test_id)
+                        .fetch_optional(&mut *transaction)
+                        .await?
+                {
+                    result.progress = Some(FlashExecutionProgress {
+                        test_id: test_id.to_owned(),
+                        build_id: build_id.to_owned(),
+                        completed: flashing_status.completed,
+                        percentage: flashing_status.percentage,
+                        message: flashing_status.message.clone(),
+                        created_by: created_by.unwrap_or_else(|| "system".to_owned()),
+                    });
                 }
             }
             CallbackStatus::Failure => {

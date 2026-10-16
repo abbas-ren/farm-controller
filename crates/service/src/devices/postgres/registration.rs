@@ -59,7 +59,7 @@ impl DeviceRegistrationRepository for PostgresDeviceRepository {
     async fn confirm_flash(
         &self,
         device_type: &str,
-        status: CallbackStatus,
+        status: &IplFlashingStatus,
     ) -> Result<FlashConfirmationResult, DeviceRepositoryError> {
         callback_store::confirm_flash(&self.pool, device_type, status).await
     }

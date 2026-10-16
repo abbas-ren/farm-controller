@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use super::types::TtyEntry;
 use super::*;
+use crate::devices::types::IplFlashingStatus;
 use crate::error::ErrorResponse;
 use crate::{events::ServerEvent, state::AppState};
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -165,12 +166,19 @@ pub async fn mapping_gen5(
 }
 
 #[utoipa::path(
-    get,
+    post,
     path = "/api/v1/device/flash-confirm",
     tag = "Devices",
     summary = "Confirm a Gen5 IPL flash",
     description = "Public EdgeController callback that commits the Gen5 IPL flash outcome before downstream worker processing continues.",
-    params(("status" = CallbackStatus, Query, description = "Flash result")),
+    request_body(content = IplFlashingStatus, example = json!({
+        "mac": "aabbccddeeff",
+        "status": "success",
+        "completed": false,
+        "message": "Flash in progress",
+        "percentage": 50,
+        "generation": 5
+    })),
     responses(
         (status = 200, description = "Confirmation processed", body = CallbackResponse),
         (status = 500, description = "Confirmation persistence failed", body = ErrorResponse),
@@ -179,24 +187,25 @@ pub async fn mapping_gen5(
 )]
 pub async fn flash_confirm(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<FlashConfirmationQuery>,
+    Json(flashing_status): Json<IplFlashingStatus>,
 ) -> axum::response::Response {
-    flash_confirmation_response(
-        &state,
-        "x5h",
-        query.status,
-        "Flash confirmation handled successfully",
-    )
-    .await
+    flash_confirmation_response(&state, "x5h", flashing_status).await
 }
 
 #[utoipa::path(
-    get,
+    post,
     path = "/api/v1/device/flash-confirm-gen4",
     tag = "Devices",
     summary = "Confirm a Gen4 IPL flash",
     description = "Public EdgeController callback that commits the Gen4 IPL flash outcome before downstream worker processing continues.",
-    params(("status" = CallbackStatus, Query, description = "Flash result")),
+    request_body(content = IplFlashingStatus, example = json!({
+        "mac": "aabbccddeeff",
+        "status": "success",
+        "completed": false,
+        "message": "Flash in progress",
+        "percentage": 50,
+        "generation": 4
+    })),
     responses(
         (status = 200, description = "Confirmation processed", body = CallbackResponse),
         (status = 500, description = "Confirmation persistence failed", body = ErrorResponse),
@@ -205,15 +214,9 @@ pub async fn flash_confirm(
 )]
 pub async fn flash_confirm_gen4(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<FlashConfirmationQuery>,
+    Json(flashing_status): Json<IplFlashingStatus>,
 ) -> axum::response::Response {
-    flash_confirmation_response(
-        &state,
-        "v4h",
-        query.status,
-        "Flash confirmation for Gen4 handled successfully",
-    )
-    .await
+    flash_confirmation_response(&state, "v4h", flashing_status).await
 }
 
 async fn callback_response<F, Fut>(
@@ -232,6 +235,7 @@ where
             "Device persistence is unavailable",
         );
     };
+    let message = message.to_string();
     match operation(repository).await {
         Ok(()) => Json(CallbackResponse {
             success: true,
@@ -245,8 +249,7 @@ where
 async fn flash_confirmation_response(
     state: &AppState,
     device_type: &str,
-    status: CallbackStatus,
-    message: &'static str,
+    flashing_status: IplFlashingStatus,
 ) -> axum::response::Response {
     let Some(repository) = state.device_repository.as_ref() else {
         return error_response(
@@ -255,7 +258,10 @@ async fn flash_confirmation_response(
             "Device persistence is unavailable",
         );
     };
-    match repository.confirm_flash(device_type, status).await {
+    match repository
+        .confirm_flash(device_type, &flashing_status)
+        .await
+    {
         Ok(result) => {
             if let Some(execution) = result.cancelled_execution {
                 let test_id = execution.test_id;
@@ -295,6 +301,34 @@ async fn flash_confirmation_response(
             {
                 tracing::warn!(%error, device_id, "failed to publish IPL rejection device state");
             }
+
+            if let Some(progress) = result.progress {
+                let test_id = progress.test_id;
+                let build_id = progress.build_id;
+                let created_by = progress.created_by;
+                if let Err(error) = state.event_publisher.publish(ServerEvent {
+                    event: "test_execution_update".to_owned(),
+                    payload: serde_json::json!({
+                        "testId": test_id,
+                        "buildId": build_id,
+                        "update": {
+                            "testId": test_id,
+                            "type": "status",
+                            "data": {
+                                "status": if progress.completed { "confirmed" } else { "in_progress" },
+                                "progress": progress.percentage,
+                                "message": progress.message,
+                                "timestamp": chrono::Utc::now().to_rfc3339(),
+                            }
+                        },
+                        "createdBy": created_by,
+                    }),
+                    room: Some(format!("user:{created_by}")),
+                }) {
+                    tracing::warn!(%error, test_id, "failed to publish IPL confirmation");
+                }
+            }
+            let message = flashing_status.message.clone();
             Json(CallbackResponse {
                 success: true,
                 message,

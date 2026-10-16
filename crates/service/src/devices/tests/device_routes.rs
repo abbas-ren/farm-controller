@@ -31,25 +31,40 @@ async fn edgecontroller_callbacks_preserve_wire_contracts() {
     assert_eq!(response.status(), StatusCode::OK);
 
     for path in [
-        "/api/v1/device/flash-confirm?status=success",
-        "/api/v1/device/flash-confirm-gen4?status=failure",
+        "/api/v1/device/flash-confirm",
+        "/api/v1/device/flash-confirm-gen4",
     ] {
+        let body = serde_json::json!({
+            "status": if path.ends_with("gen4") { "failure" } else { "success" },
+            "percentage": 50,
+            "completed": false,
+            "mac": "aabbccddeeff".to_string(),
+            "generation": if path.ends_with("gen4") { 4 } else { 5 },
+            "message": if path.ends_with("gen4") { "Failure" } else { "flashing" },
+        });
+
         let response = app
             .clone()
-            .oneshot(Request::get(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+            .oneshot(
+                Request::post(path)
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await;
+        println!("Response for {}: {:?}", path, response);
+        assert_eq!(response.unwrap().status(), StatusCode::OK);
     }
 
     assert_eq!(
         *repository.callbacks.lock().unwrap(),
         [
             "mapping:192.0.2.10:AA:BB:CC:DD:EE:FF:Success:/dev/ttyUSB0",
-            "flash:x5h:Success",
-            "flash:v4h:Failure",
+            "flash:x5h:IplFlashingStatus { status: Success, percentage: 50, completed: false, mac: \"aabbccddeeff\", generation: 5, message: \"flashing\" }",
+            "flash:v4h:IplFlashingStatus { status: Failure, percentage: 50, completed: false, mac: \"aabbccddeeff\", generation: 4, message: \"Failure\" }",
         ]
     );
+
     let cancellation = events.recv().await.unwrap();
     assert_eq!(cancellation.event, "test_execution_update");
     assert_eq!(cancellation.payload["testId"], "test-1");

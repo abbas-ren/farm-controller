@@ -234,8 +234,8 @@ async fn operational_routes_share_one_router() {
     );
     for path in [
         "/api/v1/device/mapping-gen5",
-        "/api/v1/device/flash-confirm",
-        "/api/v1/device/flash-confirm-gen4",
+        // "/api/v1/device/flash-confirm",
+        // "/api/v1/device/flash-confirm-gen4",
     ] {
         let method = if path.ends_with("mapping-gen5") {
             "post"

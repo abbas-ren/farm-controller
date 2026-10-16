@@ -72,6 +72,7 @@ async fn configure_channel(
     cleared_channels: &HashSet<Uuid>,
     actions: &mut Vec<RelayControllerAction>,
 ) -> Result<Value, DeviceRepositoryError> {
+    tracing::info!("Configuring relay channel: {:?}", configuration);
     let mut context = load_channel(transaction, configuration).await?;
     if !(0..=7).contains(&context.channel_number) {
         return Err(DeviceRepositoryError::Validation(

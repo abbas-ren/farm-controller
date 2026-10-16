@@ -235,6 +235,7 @@ pub(crate) struct DeferredCancellation {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FlashConfirmationResult {
+    pub progress: Option<FlashExecutionProgress>,
     pub cancelled_execution: Option<FlashCancelledExecution>,
     pub freed_device_id: Option<String>,
 }
@@ -245,7 +246,15 @@ pub(crate) struct FlashCancelledExecution {
     pub build_id: String,
     pub created_by: String,
 }
-
+#[derive(Clone, Debug)]
+pub(crate) struct FlashExecutionProgress {
+    pub test_id: String,
+    pub build_id: String,
+    pub completed: bool,
+    pub percentage: u8,
+    pub message: String,
+    pub created_by: String,
+}
 #[derive(Clone, Debug)]
 pub(crate) struct DeviceHeartbeatEvent {
     pub event: String,

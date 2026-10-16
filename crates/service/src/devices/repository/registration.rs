@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use super::*;
+use crate::devices::IplFlashingStatus;
 
 /// Owns device/controller registration callbacks and execution completion callbacks.
 #[async_trait]
@@ -41,6 +42,6 @@ pub(crate) trait DeviceRegistrationRepository: Send + Sync {
     async fn confirm_flash(
         &self,
         device_type: &str,
-        status: CallbackStatus,
+        flashing_status: &IplFlashingStatus,
     ) -> Result<FlashConfirmationResult, DeviceRepositoryError>;
 }
