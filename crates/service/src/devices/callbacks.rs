@@ -11,6 +11,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use tracing::info;
+use utoipa::openapi::info;
 
 pub(super) fn callback_client() -> reqwest::Client {
     crate::external_http::client(DEVICE_CALLBACK_TIMEOUT)
@@ -216,7 +218,21 @@ pub async fn flash_confirm_gen4(
     State(state): State<Arc<AppState>>,
     Json(flashing_status): Json<IplFlashingStatus>,
 ) -> axum::response::Response {
-    flash_confirmation_response(&state, "v4h", flashing_status).await
+    info!(
+        "Received flash confirmation for Gen4 device: {} status: {} completed: {} message: {} generation: {} percentage: {}",
+        flashing_status.mac,
+        flashing_status.status,
+        flashing_status.completed,
+        flashing_status.message,
+        flashing_status.generation,
+        flashing_status.percentage
+    );
+    let response = flash_confirmation_response(&state, "v4h", flashing_status).await;
+    info!(
+        "Processed flash confirmation response: {}",
+        response.status()
+    );
+    response
 }
 
 async fn callback_response<F, Fut>(

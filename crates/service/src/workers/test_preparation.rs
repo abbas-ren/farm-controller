@@ -8,7 +8,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{events::ServerEvent, state::AppState, test_catalog::TestRunCreation};
+use crate::{socket::types::ServerEvent, state::AppState, test_catalog::TestRunCreation};
 
 use super::artifact_preparation::{artifact_paths, prepare_artifacts, safe_segment};
 

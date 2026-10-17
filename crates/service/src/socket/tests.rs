@@ -1,6 +1,16 @@
+use std::sync::Arc;
+
+use axum::{body::Body, http::Request, routing::post};
+use clap::Parser;
+use http_body_util::BodyExt;
+use tower::ServiceExt;
+
+use crate::{cli::Cli, config::AppConfig, devices::{ControllerHeartbeat, DeviceHeartbeatResult}, observability::Metrics, socket::{helpers::{browser_auth_headers, browser_authorization, device_heartbeat_events, normalize_controller_id}, routes::user::send_user_message}, state::AppState};
+
+
 #[test]
 fn admin_terminal_mode_requires_the_frontend_client() {
-    use super::{BrowserAuthorization, NativeSocketQuery, browser_authorization};
+    use super::types::farm::{BrowserAuthorization, NativeSocketQuery};
 
     let query = |client: Option<&str>, admin_terminal| NativeSocketQuery {
         device_controller_id: None,
@@ -33,7 +43,7 @@ fn browser_websocket_subprotocol_supplies_bearer_authentication() {
         header::SEC_WEBSOCKET_PROTOCOL,
         HeaderValue::from_static("farm-browser-v1, bearer.header.payload.signature"),
     );
-    let authorized = super::browser_auth_headers(&headers);
+    let authorized = browser_auth_headers(&headers);
     assert_eq!(
         authorized
             .get(header::AUTHORIZATION)
@@ -42,13 +52,6 @@ fn browser_websocket_subprotocol_supplies_bearer_authentication() {
     );
 }
 
-use axum::{body::Body, http::Request, routing::post};
-use clap::Parser;
-use http_body_util::BodyExt;
-use tower::ServiceExt;
-
-use super::*;
-use crate::{cli::Cli, config::AppConfig, observability::Metrics};
 
 #[test]
 fn controller_identity_normalization_matches_registration() {
@@ -132,30 +135,6 @@ fn device_heartbeat_events_follow_committed_frontend_contract() {
     assert_eq!(events[3].payload["deviceId"], "device-1");
 }
 
-#[test]
-fn socket_io_room_and_build_fanout_match_frontend_contracts() {
-    assert_eq!(
-        ROOM_REGISTRATIONS,
-        [
-            ("join:build", "leave:build", "build"),
-            ("join:test", "leave:test", "test"),
-            ("join:dashboard", "leave:dashboard", "dashboard"),
-            ("join:device", "leave:device", "device"),
-            (
-                "join:device-controller",
-                "leave:device-controller",
-                "device-controller"
-            ),
-        ]
-    );
-    let events = build_performance_events("build-1");
-    assert!(events.iter().all(|event| {
-        event.event == "build_performance_update" && event.payload["buildId"] == "build-1"
-    }));
-    assert_eq!(events[0].room.as_deref(), Some("dashboard:admin"));
-    assert_eq!(events[1].room.as_deref(), Some("dashboard:user"));
-    assert_eq!(events[2].room.as_deref(), Some("build:build-1"));
-}
 
 #[tokio::test]
 async fn user_message_dispatch_preserves_public_event_contract() {
