@@ -15,7 +15,7 @@ use axum::{
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
-use crate::{auth, error::ErrorResponse, events::ServerEvent, state::AppState};
+use crate::{auth, error::ErrorResponse, state::AppState};
 
 use super::{
     CompatibilityErrorResponse, FaultyReportCreateRequest, FaultyReportDetail, FaultyReportRecord,

@@ -9,13 +9,16 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::auth::{
-    AdminRegistrationRequest, AdminRegistrationResponse, AuthErrorResponse, AuthMessageResponse,
-    ForgotPasswordRequest, RegistrationAction, RegistrationActionRequest, RegistrationRequest,
-    ResetPasswordRequest, UserEventRequest, VerifyUserRequest, errors::legacy_error,
-    session::authorize_request, validation::validate_registration,
+use crate::state::AppState;
+use crate::{
+    auth::{
+        AdminRegistrationRequest, AdminRegistrationResponse, AuthErrorResponse,
+        AuthMessageResponse, ForgotPasswordRequest, RegistrationAction, RegistrationActionRequest,
+        RegistrationRequest, ResetPasswordRequest, UserEventRequest, VerifyUserRequest,
+        errors::legacy_error, session::authorize_request, validation::validate_registration,
+    },
+    socket::{helpers::publish_frontend_event, types::frontend::FrontendMessagePayload},
 };
-use crate::{events::ServerEvent, state::AppState};
 
 #[utoipa::path(post, path = "/api/v1/auth/register", tag = "Authentication", summary = "Create a managed user", description = "Creates a Keycloak user, assigns the requested admin or user role, and returns the legacy registration envelope.", security(("bearer_auth" = [])), request_body = AdminRegistrationRequest, responses((status = 201, description = "User created", body = AdminRegistrationResponse), (status = 400, description = "Invalid user or role", body = AuthErrorResponse), (status = 401, description = "Authentication required", body = AuthErrorResponse), (status = 403, description = "Administrator role required", body = AuthErrorResponse), (status = 409, description = "User already exists", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
 pub async fn register_user(
@@ -194,16 +197,14 @@ pub async fn request_registration(
     };
     match provider.request_registration(&payload).await {
         Ok(user) => {
-            if let Err(error) = state.event_publisher.publish(ServerEvent {
-                event: "user".to_owned(),
-                payload: serde_json::json!({
-                    "message": user,
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                }),
-                room: None,
-            }) {
-                tracing::warn!(%error, username = payload.username, "failed to publish pending user");
-            }
+            publish_frontend_event(
+                &state,
+                FrontendMessagePayload::UserDataPayload {
+                    method: "registration".to_owned(),
+                    message: user,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                },
+            );
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({

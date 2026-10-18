@@ -3,7 +3,9 @@ use std::sync::Arc;
 use super::callbacks::callback_client;
 use super::*;
 use crate::error::ErrorResponse;
-use crate::{auth, events::ServerEvent, state::AppState};
+use crate::socket::types::farm::ServerEvent;
+use crate::socket::types::frontend::{DevicePower, FrontendMessagePayload};
+use crate::{auth, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
@@ -128,15 +130,11 @@ pub async fn toggle_device_power(
 }
 
 pub(super) fn device_power_event(device_id: &str, power: &str) -> ServerEvent {
-    ServerEvent {
-        event: "device_power_update".to_owned(),
-        payload: serde_json::json!({
-            "deviceId": device_id,
-            "power": power,
-            "changedAt": chrono::Utc::now().to_rfc3339(),
-        }),
-        room: None,
-    }
+    ServerEvent::frontend(FrontendMessagePayload::DevicePowerUpdate {
+        device_id: device_id.to_owned(),
+        power: DevicePower::from(power),
+        changed_at: chrono::Utc::now().to_rfc3339(),
+    })
 }
 
 #[utoipa::path(get, path = "/api/v1/device/{id}/reboot", tag = "Devices", summary = "Reboot a device", description = "Public compatibility action that resolves the inventory-authorized controller target, requests reboot, and schedules Gen5 recovery tracking when applicable.", params(("id" = String, Path)), responses((status = 200, description = "Device reboot command completed"), (status = 404, description = "Device or power mapping not found", body = ErrorResponse), (status = 500, description = "Reboot target or recovery persistence failed", body = ErrorResponse), (status = 502, description = "Controller rejected the reboot command", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]

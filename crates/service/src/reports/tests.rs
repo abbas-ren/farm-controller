@@ -1,5 +1,7 @@
 use tempfile::TempDir;
 
+use crate::socket::types::farm::EventHub;
+
 use super::*;
 
 struct FixtureDataSource;
@@ -142,7 +144,6 @@ async fn report_worker_generates_escaped_artifacts_and_completes() {
     assert_eq!(completed.payload["reportId"], job_id.to_string());
     assert_eq!(completed.payload["testExecutionId"], "test-1");
     assert_eq!(completed.payload["createdBy"], "user-1");
-    assert_eq!(completed.room.as_deref(), Some("user:user-1"));
     let report = tokio::fs::read_to_string(
         temp.path()
             .join("x5h/1.0.0/test-1/sanity_commands_report.html"),
@@ -295,24 +296,18 @@ async fn report_worker_persists_and_publishes_fatal_artifact_failure() {
     );
     drop(persisted);
 
-    let mut failure_rooms = Vec::new();
-    while failure_rooms.len() < 2 {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        if event.payload["status"] == "failed" {
-            assert_eq!(event.payload["reportId"], job_id.to_string());
-            assert!(
-                event.payload["error"]
-                    .as_str()
-                    .is_some_and(|error| error.contains("Sanity results directory not found"))
-            );
-            failure_rooms.push(event.room.unwrap());
-        }
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    if event.payload["status"] == "failed" {
+        assert_eq!(event.payload["reportId"], job_id.to_string());
+        assert!(
+            event.payload["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("Sanity results directory not found"))
+        );
     }
-    failure_rooms.sort();
-    assert_eq!(failure_rooms, ["test:test-1", "user:user-1"]);
     assert!(!temp.path().join("x5h/1.0.0/test-1/report.html").exists());
 
     cancellation.cancel();

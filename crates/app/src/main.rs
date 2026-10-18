@@ -9,7 +9,7 @@ use farmcontroller::{
     config::{AppConfig, Module},
     observability::{Metrics, init_logging},
     state::AppState,
-    workers::WorkerManager,
+    workers::types::WorkerManager,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;

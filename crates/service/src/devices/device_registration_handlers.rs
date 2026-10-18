@@ -7,7 +7,14 @@ use axum::{
     response::IntoResponse,
 };
 
-use crate::{error::ErrorResponse, events::ServerEvent, state::AppState};
+use crate::{
+    error::ErrorResponse,
+    socket::types::{
+        farm::ServerEvent,
+        frontend::{AlertLevel, FrontendMessagePayload},
+    },
+    state::AppState,
+};
 
 use super::{DeviceRegistration, DeviceRegistrationResponse, error_response, repository_error};
 
@@ -64,10 +71,14 @@ pub async fn register_device(
 }
 
 fn publish_alert(state: &AppState, subtype: &str, device: serde_json::Value) {
-    if let Err(error) = state
-        .event_publisher
-        .publish(ServerEvent::alert(subtype, device))
-    {
+    if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+        FrontendMessagePayload::AlertDataPayload {
+            level: Some(AlertLevel::Info),
+            subtype: Some(subtype.to_string()),
+            message: device,
+            timestamp: Some(chrono::Utc::now().to_rfc3339()),
+        },
+    )) {
         tracing::warn!(%error, subtype, "failed to publish device registration alert");
     }
 }

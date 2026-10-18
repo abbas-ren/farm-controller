@@ -3,27 +3,10 @@ use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    events::{ServerEvent, build_performance_events},
+    socket::helpers::{build_failure_event, test_failure_events},
     state::AppState,
+    workers::types::{ActionTransition, StaleAction},
 };
-
-#[derive(Debug, sqlx::FromRow)]
-struct StaleAction {
-    id: uuid::Uuid,
-    job_type: String,
-    test_id: Option<String>,
-    release_id: Option<uuid::Uuid>,
-    device_id: Option<String>,
-    device_type: String,
-    user_id: String,
-    build_id: Option<String>,
-    created_by: Option<String>,
-    version: Option<String>,
-}
-
-struct ActionTransition {
-    events: Vec<ServerEvent>,
-}
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
@@ -206,53 +189,6 @@ async fn fail_flash_action(
     })
 }
 
-fn test_failure_events(test_id: &str, build_id: &str, user_id: &str) -> Vec<ServerEvent> {
-    let mut events = vec![
-        ServerEvent {
-            event: "test_execution".to_owned(),
-            payload: serde_json::json!({
-                "testId": test_id,
-                "type": "status",
-                "data": {"status": "failed", "timestamp": chrono::Utc::now().to_rfc3339()},
-            }),
-            room: Some(format!("user:{user_id}")),
-        },
-        ServerEvent {
-            event: "test_execution_update".to_owned(),
-            payload: serde_json::json!({
-                "testId": test_id,
-                "buildId": build_id,
-                "status": "failed",
-            }),
-            room: Some(format!("build:{build_id}")),
-        },
-    ];
-    events.extend(build_performance_events(build_id));
-    events
-}
-
-fn build_failure_event(
-    release_id: uuid::Uuid,
-    device_id: Option<&str>,
-    device_type: &str,
-    version: Option<&str>,
-    user_id: &str,
-) -> ServerEvent {
-    ServerEvent {
-        event: "build_status_changed".to_owned(),
-        payload: serde_json::json!({
-            "releaseId": release_id,
-            "status": "failed",
-            "isFaulty": true,
-            "deviceId": device_id,
-            "deviceType": device_type,
-            "version": version,
-            "userId": user_id,
-        }),
-        room: None,
-    }
-}
-
 fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
     state
         .metrics
@@ -262,20 +198,15 @@ fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::socket::helpers::{build_failure_event, test_failure_events};
 
     #[test]
     fn stale_test_events_refresh_owner_and_build_views() {
         let events = test_failure_events("test-1", "build-1", "user-1");
         assert_eq!(events.len(), 5);
         assert_eq!(events[0].event, "test_execution");
-        assert_eq!(events[0].room.as_deref(), Some("user:user-1"));
         assert_eq!(events[1].event, "test_execution_update");
         assert_eq!(events[1].payload["status"], "failed");
-        assert_eq!(events[1].room.as_deref(), Some("build:build-1"));
-        assert_eq!(events[2].room.as_deref(), Some("dashboard:admin"));
-        assert_eq!(events[3].room.as_deref(), Some("dashboard:user"));
-        assert_eq!(events[4].room.as_deref(), Some("build:build-1"));
     }
 
     #[test]
@@ -287,6 +218,5 @@ mod tests {
         assert_eq!(event.payload["releaseId"], release_id.to_string());
         assert_eq!(event.payload["status"], "failed");
         assert_eq!(event.payload["isFaulty"], true);
-        assert!(event.room.is_none());
     }
 }

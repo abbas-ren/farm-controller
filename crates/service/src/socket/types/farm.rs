@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use socketioxide::SocketIo;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use utoipa::ToSchema;
 
 #[derive(Clone, Debug, Serialize)]

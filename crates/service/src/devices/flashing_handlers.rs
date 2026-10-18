@@ -7,7 +7,12 @@ use axum::{
     response::IntoResponse,
 };
 
-use crate::{error::ErrorResponse, events::ServerEvent, state::AppState};
+use crate::{
+    error::ErrorResponse,
+    socket::types::{farm::ServerEvent, frontend::FrontendMessagePayload},
+    state::AppState,
+    workers::types::DeviceState,
+};
 
 use super::{
     DeviceFlashingResponse, EDGE_CONTROLLER_PORT, error_response, repository_error,
@@ -45,17 +50,14 @@ pub async fn mark_device_flashing(
         Ok(Some(result)) => {
             let device = result.device;
             if device.get("state").and_then(serde_json::Value::as_str) == Some("busy") {
-                let event = ServerEvent {
-                    event: "device_state_update".to_owned(),
-                    payload: serde_json::json!({
-                        "deviceId": device_id,
-                        "state": device["state"],
-                        "upgrading": device["upgrading"],
-                        "flashing": device["flashing"],
-                        "changedAt": chrono::Utc::now().to_rfc3339(),
-                    }),
-                    room: None,
-                };
+                let event = ServerEvent::frontend(FrontendMessagePayload::DeviceStateUpdate {
+                    device_id: device_id.clone(),
+                    state: DeviceState::from(&device["state"].to_string()),
+                    upgrading: device["upgrading"].as_bool().unwrap_or(false),
+                    flashing: device["flashing"].as_bool().unwrap_or(false),
+                    changed_at: chrono::Utc::now().to_rfc3339(),
+                });
+
                 if let Err(error) = state.event_publisher.publish(event) {
                     tracing::warn!(%error, device_id, "failed to publish flashing state update");
                 }

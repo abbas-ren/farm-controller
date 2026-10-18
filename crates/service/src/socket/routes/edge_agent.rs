@@ -2,10 +2,7 @@ use axum::extract::ws::{Message, WebSocket};
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use crate::{
-    socket::helpers::device_heartbeat_events, 
-    state::AppState,
-};
+use crate::{socket::helpers::device_heartbeat_events, state::AppState};
 
 pub(crate) async fn device_session(state: Arc<AppState>, device_id: String, mut socket: WebSocket) {
     info!(device_id, "device WebSocket connected");
@@ -59,4 +56,3 @@ pub(crate) async fn process_device_heartbeat(
     }
     Ok(())
 }
-

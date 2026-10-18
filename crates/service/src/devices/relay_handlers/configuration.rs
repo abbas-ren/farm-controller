@@ -1,3 +1,8 @@
+use crate::socket::types::{
+    farm::ServerEvent,
+    frontend::{Action, DevicePower, FrontendMessagePayload},
+};
+
 use super::*;
 
 #[utoipa::path(post, path = "/api/v1/device/relay/configure", tag = "Devices", summary = "Configure relay channels", description = "Validates and atomically commits one or many channel mappings with clear-first move semantics, then queues hardware synchronization.", request_body = RelayConfigurationRequest, security(("bearer_auth" = [])), responses((status = 202, description = "Configuration committed and hardware sync started", body = RelayConfigurationAccepted), (status = 400, description = "Invalid configuration batch", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Relay, channel, controller, or device not found", body = ErrorResponse), (status = 409, description = "Device is already mapped", body = ErrorResponse), (status = 500, description = "Relay configuration failed", body = ErrorResponse), (status = 503, description = "Persistence or relay worker unavailable", body = ErrorResponse)))]
@@ -111,52 +116,47 @@ pub(crate) fn confirmation_events(response: &RelayConfirmationResponse) -> Vec<S
         return Vec::new();
     };
     if !response.confirmed {
-        return vec![ServerEvent {
-            event: "relay_configuration_status".to_owned(),
-            payload: serde_json::json!({
-                "controllerId": response.controller_id.as_deref(),
-                "relayId": relay_id,
-                "status": "failed",
-                "total": 1,
-                "completed": 0,
-                "message": response.message.as_str(),
-            }),
-            room: None,
-        }];
+        return vec![ServerEvent::frontend(
+            FrontendMessagePayload::RelayConfigurationStatus {
+                relay_id: Some(relay_id.clone()),
+                controller_id: response.controller_id.clone(),
+                status: "failed".to_owned(),
+                total: 1,
+                completed: 0,
+                errors: vec!["Failed to confirm relay configuration".to_owned()],
+                message: Some(response.message.clone()),
+            },
+        )];
     }
     let mut events = Vec::new();
     if let Some(device_id) = response.device_id.as_deref() {
-        events.push(ServerEvent {
-            event: "device_power_update".to_owned(),
-            payload: serde_json::json!({
-                "deviceId": device_id,
-                "power": "on",
-                "changedAt": chrono::Utc::now().to_rfc3339(),
-            }),
-            room: None,
-        });
+        events.push(ServerEvent::frontend(
+            FrontendMessagePayload::DevicePowerUpdate {
+                device_id: device_id.to_owned(),
+                power: DevicePower::On,
+                changed_at: chrono::Utc::now().to_rfc3339(),
+            },
+        ));
     }
     if response.configuration_complete {
-        events.push(ServerEvent {
-            event: "relay_configuration_status".to_owned(),
-            payload: serde_json::json!({
-                "controllerId": response.controller_id.as_deref(),
-                "relayId": relay_id,
-                "status": "completed",
-                "total": 1,
-                "completed": 1,
-            }),
-            room: None,
-        });
+        events.push(ServerEvent::frontend(
+            FrontendMessagePayload::RelayConfigurationStatus {
+                relay_id: Some(relay_id.clone()),
+                controller_id: response.controller_id.clone(),
+                status: "completed".to_owned(),
+                total: 1,
+                completed: 1,
+                errors: Vec::new(),
+                message: Some(response.message.clone()),
+            },
+        ));
         if let Some(controller_id) = response.controller_id.as_deref() {
-            events.push(ServerEvent {
-                event: "device_controller_changed".to_owned(),
-                payload: serde_json::json!({
-                    "action": "updated",
-                    "controllerId": controller_id,
-                }),
-                room: None,
-            });
+            events.push(ServerEvent::frontend(
+                FrontendMessagePayload::DeviceControllerChanged {
+                    action: Action::Updated,
+                    controller_id: controller_id.to_owned(),
+                },
+            ));
         }
     }
     events

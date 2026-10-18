@@ -1,3 +1,8 @@
+use crate::socket::{
+    helpers::publish_frontend_event,
+    types::frontend::{AlertLevel, FrontendMessagePayload},
+};
+
 use super::*;
 
 #[utoipa::path(post, path = "/api/v1/device/faulty/report", tag = "Faulty Reports", summary = "Submit a faulty build report", description = "Streams one bounded optional attachment, safely copies requested execution logs, commits the pending report and alert, then emits the browser alert.", security(("bearer_auth" = [])), request_body(content = FaultyReportCreateRequest, content_type = "multipart/form-data"), responses((status = 201, description = "Faulty report created", body = FaultyReportRecord), (status = 400, description = "Invalid report or attachment", body = CompatibilityErrorResponse), (status = 401, description = "Authentication required or token subject missing", body = CompatibilityErrorResponse), (status = 404, description = "Release not found", body = MessageResponse), (status = 500, description = "Report persistence or file storage failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
@@ -213,12 +218,15 @@ pub(crate) async fn create(
         .await
     {
         Ok(result) => {
-            if let Err(error) = state
-                .event_publisher
-                .publish(ServerEvent::alert("device-alert", result.alert))
-            {
-                tracing::warn!(%error, report_id = %id, "failed to publish faulty report alert");
-            }
+            publish_frontend_event(
+                &state,
+                FrontendMessagePayload::AlertDataPayload {
+                    level: Some(AlertLevel::Info),
+                    subtype: Some("device-alert".to_owned()),
+                    message: result.alert,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                },
+            );
             (StatusCode::CREATED, response_headers, Json(result.report)).into_response()
         }
         Err(error) => repository_error(error, "creating faulty report"),

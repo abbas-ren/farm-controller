@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use super::types::TtyEntry;
 use super::*;
-use crate::devices::types::IplFlashingStatus;
 use crate::error::ErrorResponse;
-use crate::{events::ServerEvent, state::AppState};
+use crate::socket::types::frontend::{AlertLevel, FrontendMessagePayload, TestStatus};
+use crate::state::AppState;
+use crate::workers::types::DeviceState;
+use crate::{devices::types::IplFlashingStatus, socket::types::farm::ServerEvent};
 use axum::{
     Json,
     extract::State,
@@ -12,7 +14,6 @@ use axum::{
     response::IntoResponse,
 };
 use tracing::info;
-use utoipa::openapi::info;
 
 pub(super) fn callback_client() -> reqwest::Client {
     crate::external_http::client(DEVICE_CALLBACK_TIMEOUT)
@@ -55,9 +56,13 @@ pub async fn register_controller(
             let action = if result.created { "added" } else { "updated" };
             publish_controller_changed(&state, action, &result.controller.device_controller_id);
             if result.created
-                && let Err(error) = state.event_publisher.publish(ServerEvent::alert(
-                    "device-controller-addition",
-                    serde_json::to_value(&result.controller).unwrap_or_default(),
+                && let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+                    FrontendMessagePayload::AlertDataPayload {
+                        level: Some(AlertLevel::Info),
+                        subtype: Some("device-controller-addition".to_string()),
+                        message: serde_json::to_value(&result.controller).unwrap_or_default(),
+                        timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                    },
                 ))
             {
                 tracing::warn!(%error, controller_id = %result.controller.device_controller_id, "failed to publish new-controller alert");
@@ -219,7 +224,7 @@ pub async fn flash_confirm_gen4(
     Json(flashing_status): Json<IplFlashingStatus>,
 ) -> axum::response::Response {
     info!(
-        "Received flash confirmation for Gen4 device: {} status: {} completed: {} message: {} generation: {} percentage: {}",
+        "Received flash confirmation for Gen4 device: {} status: {:?} completed: {} message: {} generation: {} percentage: {}",
         flashing_status.mac,
         flashing_status.status,
         flashing_status.completed,
@@ -281,39 +286,30 @@ async fn flash_confirmation_response(
         Ok(result) => {
             if let Some(execution) = result.cancelled_execution {
                 let test_id = execution.test_id;
-                let created_by = execution.created_by;
-                if let Err(error) = state.event_publisher.publish(ServerEvent {
-                    event: "test_execution_update".to_owned(),
-                    payload: serde_json::json!({
-                        "testId": test_id,
-                        "buildId": execution.build_id,
-                        "update": {
-                            "testId": test_id,
-                            "type": "status",
-                            "data": {
-                                "status": "cancelled",
-                                "timestamp": chrono::Utc::now().to_rfc3339(),
-                            }
-                        },
-                        "createdBy": created_by,
-                    }),
-                    room: Some(format!("user:{created_by}")),
-                }) {
+                // let created_by = execution.created_by;
+                if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+                    FrontendMessagePayload::TestExecutionUpdate {
+                        build_id: Some(execution.build_id),
+                        test_id: test_id.clone(),
+                        status: Some(TestStatus::Cancelled),
+                        progress: None,
+                        message: None,
+                        cancel_requested: None,
+                    },
+                )) {
                     tracing::warn!(%error, test_id, "failed to publish IPL rejection cancellation");
                 }
             }
             if let Some(device_id) = result.freed_device_id
-                && let Err(error) = state.event_publisher.publish(ServerEvent {
-                    event: "device_state_update".to_owned(),
-                    payload: serde_json::json!({
-                        "deviceId": device_id,
-                        "state": "free",
-                        "upgrading": false,
-                        "flashing": false,
-                        "changedAt": chrono::Utc::now().to_rfc3339(),
-                    }),
-                    room: None,
-                })
+                && let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+                    FrontendMessagePayload::DeviceStateUpdate {
+                        device_id: device_id.clone(),
+                        state: DeviceState::Free,
+                        upgrading: false,
+                        flashing: false,
+                        changed_at: chrono::Utc::now().to_rfc3339(),
+                    },
+                ))
             {
                 tracing::warn!(%error, device_id, "failed to publish IPL rejection device state");
             }
@@ -321,26 +317,21 @@ async fn flash_confirmation_response(
             if let Some(progress) = result.progress {
                 let test_id = progress.test_id;
                 let build_id = progress.build_id;
-                let created_by = progress.created_by;
-                if let Err(error) = state.event_publisher.publish(ServerEvent {
-                    event: "test_execution_update".to_owned(),
-                    payload: serde_json::json!({
-                        "testId": test_id,
-                        "buildId": build_id,
-                        "update": {
-                            "testId": test_id,
-                            "type": "status",
-                            "data": {
-                                "status": if progress.completed { "confirmed" } else { "in_progress" },
-                                "progress": progress.percentage,
-                                "message": progress.message,
-                                "timestamp": chrono::Utc::now().to_rfc3339(),
-                            }
-                        },
-                        "createdBy": created_by,
-                    }),
-                    room: Some(format!("user:{created_by}")),
-                }) {
+                // let created_by = progress.created_by;
+                if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+                    FrontendMessagePayload::TestExecutionUpdate {
+                        build_id: Some(build_id),
+                        test_id: test_id.clone(),
+                        status: Some(if progress.completed {
+                            TestStatus::Completed
+                        } else {
+                            TestStatus::InProgress
+                        }),
+                        progress: Some(progress.percentage as u64),
+                        message: Some(progress.message.clone()),
+                        cancel_requested: None,
+                    },
+                )) {
                     tracing::warn!(%error, test_id, "failed to publish IPL confirmation");
                 }
             }

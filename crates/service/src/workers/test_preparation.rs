@@ -8,30 +8,19 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{socket::types::ServerEvent, state::AppState, test_catalog::TestRunCreation};
+use crate::{
+    socket::types::{
+        farm::ServerEvent,
+        frontend::{
+            FrontendMessagePayload, TestExecutionUpdateData, TestExecutionUpdateType, TestStatus,
+        },
+    },
+    state::AppState,
+    test_catalog::TestRunCreation,
+    workers::types::{TestPreparation, TestPreparationCase},
+};
 
 use super::artifact_preparation::{artifact_paths, prepare_artifacts, safe_segment};
-
-#[derive(Debug, sqlx::FromRow)]
-struct Preparation {
-    test_id: String,
-    device_type: String,
-    build_id: String,
-    build_version: String,
-    test_plan_id: i64,
-    test_plan_name: String,
-    name: String,
-    is_all_selected: bool,
-    created_by: String,
-    test_cycle_id: Option<String>,
-    artifacts: serde_json::Value,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct PreparationCase {
-    test_case_id: i64,
-    script_file: String,
-}
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
@@ -81,11 +70,11 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
-async fn claim(state: &AppState) -> Result<Option<Preparation>, sqlx::Error> {
+async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sqlx::Error> {
     let database = state.database.as_ref().expect("worker requires database");
     let lease_seconds =
         i64::try_from(state.config.workers.test_preparation_lease_seconds).unwrap_or(i64::MAX);
-    sqlx::query_as::<_, Preparation>(
+    sqlx::query_as::<_, TestPreparation>(
         r#"WITH candidate AS (
                SELECT execution."testId"
                FROM test_executions execution
@@ -121,9 +110,12 @@ async fn claim(state: &AppState) -> Result<Option<Preparation>, sqlx::Error> {
     .await
 }
 
-async fn prepare(state: &AppState, mut preparation: Preparation) -> Result<ServerEvent, String> {
+async fn prepare(
+    state: &AppState,
+    mut preparation: TestPreparation,
+) -> Result<ServerEvent, String> {
     let database = state.database.as_ref().expect("worker requires database");
-    let cases = sqlx::query_as::<_, PreparationCase>(
+    let cases = sqlx::query_as::<_, TestPreparationCase>(
         r#"SELECT "testCaseId"::bigint AS test_case_id,
               COALESCE("scriptFile", '') AS script_file
            FROM testcase WHERE "executionId" = $1 ORDER BY "suiteId", id"#,
@@ -282,7 +274,7 @@ async fn set_executable(_path: &Path) -> io::Result<()> {
 
 async fn mark_failed(state: &AppState, test_id: &str, error: &str) -> Option<ServerEvent> {
     let database = state.database.as_ref()?;
-    let owner = sqlx::query_as::<_, (String, String)>(
+    let _owner = sqlx::query_as::<_, (String, String)>(
         r#"UPDATE test_executions
            SET status = 'failed', "executionPhase" = 'COMPLETE_FAILED',
                "endedAt" = now(), "updatedAt" = now()
@@ -300,20 +292,22 @@ async fn mark_failed(state: &AppState, test_id: &str, error: &str) -> Option<Ser
             "type": "status",
             "data": {"status": "failed", "message": error, "timestamp": chrono::Utc::now().to_rfc3339()},
         }),
-        room: Some(format!("user:{}", owner.0)),
     })
 }
 
-fn prepared_event(test_id: &str, user_id: &str) -> ServerEvent {
-    ServerEvent {
-        event: "test_execution".to_owned(),
-        payload: serde_json::json!({
-            "testId": test_id,
-            "type": "queued",
-            "data": {"status": "not_executed", "timestamp": chrono::Utc::now().to_rfc3339()},
-        }),
-        room: Some(format!("user:{user_id}")),
-    }
+fn prepared_event(test_id: &str, _user_id: &str) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::TestExecution {
+        test_id: test_id.to_owned(),
+        r#type: TestExecutionUpdateType::Queued,
+        data: TestExecutionUpdateData {
+            status: Some(TestStatus::NotExecuted),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            cancel_requested: None,
+            phase: Some("queued".to_owned()),
+            rtos_log_path: None,
+            message: None,
+        },
+    })
 }
 
 fn record_failure(state: &AppState, error: &sqlx::Error) {
@@ -371,6 +365,5 @@ mod tests {
         let event = prepared_event("test-1", "user-1");
         assert_eq!(event.event, "test_execution");
         assert_eq!(event.payload["type"], "queued");
-        assert_eq!(event.room.as_deref(), Some("user:user-1"));
     }
 }

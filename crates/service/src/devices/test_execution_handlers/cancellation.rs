@@ -5,7 +5,12 @@ use crate::{
     auth,
     devices::{EDGE_CONTROLLER_PORT, TEST_CANCELLATION_TIMEOUT},
     error::ErrorResponse,
-    events::ServerEvent,
+    socket::types::{
+        farm::ServerEvent,
+        frontend::{
+            FrontendMessagePayload, TestExecutionUpdateData, TestExecutionUpdateType, TestStatus,
+        },
+    },
     state::AppState,
 };
 use axum::{
@@ -67,23 +72,16 @@ pub async fn cancel(
                         tracing::warn!(%error, run_id, test_id, "failed to delete cancelled TestRail run");
                     }
                 }
-                if let Err(error) = state.event_publisher.publish(ServerEvent {
-                    event: "test_execution_update".to_owned(),
-                    payload: serde_json::json!({
-                        "testId": test_id,
-                        "buildId": result.build_id,
-                        "update": {
-                            "testId": test_id,
-                            "type": "status",
-                            "data": {
-                                "status": "cancelled",
-                                "timestamp": chrono::Utc::now().to_rfc3339(),
-                            }
-                        },
-                        "createdBy": result.created_by,
-                    }),
-                    room: Some(format!("user:{}", result.created_by)),
-                }) {
+                if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+                    FrontendMessagePayload::TestExecutionUpdate {
+                        build_id: None,
+                        test_id: test_id.to_owned(),
+                        status: Some(TestStatus::Cancelled),
+                        progress: None,
+                        message: None,
+                        cancel_requested: None,
+                    },
+                )) {
                     tracing::warn!(%error, test_id, "failed to publish terminal cancellation");
                 }
             }
@@ -152,23 +150,16 @@ pub(crate) async fn complete_deferred_cancellation(
     state: &AppState,
     cancellation: &super::super::repository_types::DeferredCancellation,
 ) {
-    if let Err(error) = state.event_publisher.publish(ServerEvent {
-        event: "test_execution_update".to_owned(),
-        payload: serde_json::json!({
-            "testId": cancellation.test_id,
-            "buildId": cancellation.build_id,
-            "update": {
-                "testId": cancellation.test_id,
-                "type": "status",
-                "data": {
-                    "status": "cancelled",
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                }
-            },
-            "createdBy": cancellation.created_by,
-        }),
-        room: Some(format!("user:{}", cancellation.created_by)),
-    }) {
+    if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+        FrontendMessagePayload::TestExecutionUpdate {
+            build_id: Some(cancellation.build_id.clone()),
+            test_id: cancellation.test_id.clone(),
+            status: Some(TestStatus::Cancelled),
+            progress: None,
+            message: None,
+            cancel_requested: None,
+        },
+    )) {
         tracing::warn!(
             %error,
             test_id = cancellation.test_id,
@@ -181,31 +172,28 @@ pub(crate) fn cancellation_events(
     test_id: &str,
     build_id: &str,
     phase: &str,
-    user_id: &str,
+    _user_id: &str,
 ) -> [ServerEvent; 2] {
-    let timestamp = chrono::Utc::now().to_rfc3339();
     [
-        ServerEvent {
-            event: "test_execution".to_owned(),
-            payload: serde_json::json!({
-                "testId": test_id,
-                "type": "cancel_requested",
-                "data": {
-                    "cancelRequested": true,
-                    "phase": phase,
-                    "timestamp": timestamp,
-                },
-            }),
-            room: Some(format!("user:{user_id}")),
-        },
-        ServerEvent {
-            event: "test_execution_update".to_owned(),
-            payload: serde_json::json!({
-                "testId": test_id,
-                "buildId": build_id,
-                "cancelRequested": true,
-            }),
-            room: Some(format!("build:{build_id}")),
-        },
+        ServerEvent::frontend(FrontendMessagePayload::TestExecution {
+            test_id: test_id.to_owned(),
+            r#type: TestExecutionUpdateType::Status,
+            data: TestExecutionUpdateData {
+                status: Some(TestStatus::CancelRequested),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                cancel_requested: Some(true),
+                phase: Some(phase.to_owned()),
+                rtos_log_path: None,
+                message: None,
+            },
+        }),
+        ServerEvent::frontend(FrontendMessagePayload::TestExecutionUpdate {
+            build_id: Some(build_id.to_owned()),
+            test_id: test_id.to_owned(),
+            status: Some(TestStatus::CancelRequested),
+            progress: None,
+            message: None,
+            cancel_requested: Some(true),
+        }),
     ]
 }

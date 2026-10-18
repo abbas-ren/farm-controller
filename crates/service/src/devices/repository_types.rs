@@ -23,6 +23,8 @@ pub(crate) struct FaultyReportFinalization {
     pub alert: serde_json::Value,
 }
 
+use crate::socket::types::farm::ServerEvent;
+
 use super::{DeviceController, ExecutionCaseInput, ExecutionSelection};
 
 #[derive(Debug)]
@@ -222,7 +224,8 @@ pub(crate) struct DeviceHeartbeatResult {
     pub interface_changes: Vec<serde_json::Value>,
     pub heartbeat_data: serde_json::Value,
     pub alerts: Vec<serde_json::Value>,
-    pub post_update_events: Vec<DeviceHeartbeatEvent>,
+    #[allow(unused)]
+    pub post_update_events: Vec<ServerEvent>,
     pub deferred_cancellations: Vec<DeferredCancellation>,
 }
 
@@ -230,6 +233,7 @@ pub(crate) struct DeviceHeartbeatResult {
 pub(crate) struct DeferredCancellation {
     pub test_id: String,
     pub build_id: String,
+    #[allow(unused)]
     pub created_by: String,
 }
 
@@ -244,6 +248,7 @@ pub(crate) struct FlashConfirmationResult {
 pub(crate) struct FlashCancelledExecution {
     pub test_id: String,
     pub build_id: String,
+    #[allow(unused)]
     pub created_by: String,
 }
 #[derive(Clone, Debug)]
@@ -253,17 +258,18 @@ pub(crate) struct FlashExecutionProgress {
     pub completed: bool,
     pub percentage: u8,
     pub message: String,
+    #[allow(unused)]
     pub created_by: String,
 }
 #[derive(Clone, Debug)]
+#[allow(unused)]
 pub(crate) struct DeviceHeartbeatEvent {
     pub event: String,
     pub payload: serde_json::Value,
-    pub room: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum RelayControllerAction {
+pub enum RelayControllerAction {
     Remove {
         controller_address: String,
         device_mac: String,

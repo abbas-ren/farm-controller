@@ -5,14 +5,14 @@ use crate::{
     config::{AppConfig, Module},
     devices::{DeviceRepository, PostgresDeviceRepository},
     error::AppError,
-    events::EventHub,
     jira::JiraClient,
     observability::Metrics,
     persistence::Database,
     qmetry_catalog::{HttpQmetryCatalog, QmetryCatalog},
     reports::{PostgresReportDataSource, ReportService},
+    socket::types::farm::EventHub,
     test_catalog::{TestCatalog, TestRailCatalog},
-    workers::RelaySyncService,
+    workers::types::RelaySyncService,
 };
 
 #[derive(Clone)]

@@ -2,21 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::{events::ServerEvent, state::AppState};
-
-#[derive(Debug, sqlx::FromRow)]
-struct StaleDevice {
-    device_id: String,
-    previous_state: String,
-    target_state: String,
-    timeout: i32,
-}
-
-struct DeviceStateTransition {
-    device_id: String,
-    state: String,
-    alert: serde_json::Value,
-}
+use crate::{
+    socket::helpers::transition_events,
+    state::AppState,
+    workers::types::{DeviceState, DeviceStateTransition, StaleDevice},
+};
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
@@ -185,7 +175,7 @@ async fn run_cycle(state: &AppState) {
         };
         transitions.push(DeviceStateTransition {
             device_id: device.device_id,
-            state: device.target_state,
+            state: DeviceState::from(&device.target_state),
             alert,
         });
     }
@@ -209,23 +199,6 @@ async fn run_cycle(state: &AppState) {
         .record_worker_run("device_heartbeat_timeout", "success");
 }
 
-fn transition_events(transition: &DeviceStateTransition) -> [ServerEvent; 2] {
-    [
-        ServerEvent {
-            event: "device_state_update".to_owned(),
-            payload: serde_json::json!({
-                "deviceId": transition.device_id,
-                "state": transition.state,
-                "upgrading": false,
-                "flashing": false,
-                "changedAt": chrono::Utc::now().to_rfc3339(),
-            }),
-            room: None,
-        },
-        ServerEvent::alert("device-alert", transition.alert.clone()),
-    ]
-}
-
 fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
     state
         .metrics
@@ -235,19 +208,23 @@ fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
 
 #[cfg(test)]
 mod tests {
+    use crate::{socket::helpers::transition_events, workers::types::DeviceState};
+
     use super::*;
 
     #[test]
     fn timeout_events_preserve_device_frontend_contracts() {
         let [state, alert] = transition_events(&DeviceStateTransition {
             device_id: "device-1".to_owned(),
-            state: "not_reachable".to_owned(),
+            state: DeviceState::NotReachable,
             alert: serde_json::json!({"title": "Device device-1 is not_reachable"}),
         });
         assert_eq!(state.event, "device_state_update");
         assert_eq!(state.payload["deviceId"], "device-1");
-        assert_eq!(state.payload["state"], "not_reachable");
-        assert!(state.room.is_none());
+        assert_eq!(
+            state.payload["state"],
+            DeviceState::NotReachable.to_string()
+        );
         assert_eq!(alert.event, "alert");
         assert_eq!(alert.payload["subtype"], "device-alert");
     }

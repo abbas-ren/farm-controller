@@ -1,10 +1,23 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use farmcontroller_core::config::AppConfig;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
-use crate::{cli::Cli, config::AppConfig, observability::Metrics, state::AppState};
-
-use super::*;
+use crate::{
+    cli::Cli,
+    devices::RelayControllerAction,
+    observability::Metrics,
+    socket::{
+        helpers::{controller_timeout_events, relay_timeout_event},
+        types::farm::EventHub,
+    },
+    state::AppState,
+    workers::types::{
+        ControllerStateTransition, ExpiredRelayConfiguration, RelaySyncService, WorkerManager,
+    },
+};
 
 #[tokio::test]
 async fn disabled_workers_start_no_tasks_and_shutdown_cleanly() {
@@ -71,7 +84,6 @@ fn relay_timeout_event_preserves_frontend_contract() {
         event.payload["message"],
         "Configuration timed out for device aabbcc on channel 2"
     );
-    assert!(event.room.is_none());
 }
 
 #[test]
@@ -83,7 +95,6 @@ fn controller_timeout_events_preserve_frontend_contracts() {
     assert_eq!(changed.event, "device_controller_changed");
     assert_eq!(changed.payload["action"], "updated");
     assert_eq!(changed.payload["controllerId"], "controller-1");
-    assert!(changed.room.is_none());
     assert_eq!(alert.event, "alert");
     assert_eq!(alert.payload["subtype"], "device-alert");
     assert_eq!(

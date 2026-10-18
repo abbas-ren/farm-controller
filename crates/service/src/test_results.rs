@@ -5,8 +5,14 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::{
     config::DeviceConfig,
-    events::{ServerEvent, build_performance_events},
     jira::JiraDefect,
+    socket::{
+        helpers::build_performance_event,
+        types::{
+            farm::ServerEvent,
+            frontend::{FrontendMessagePayload, TestStatus},
+        },
+    },
     state::AppState,
     test_catalog::TestResultUpdate,
 };
@@ -570,43 +576,37 @@ fn parse_output(output: &str) -> ParsedOutput {
     ParsedOutput { result, command }
 }
 
-fn publish(state: &AppState, result: &ProcessedTestResult, created_by: Option<&str>) {
-    let mut events = vec![ServerEvent {
-        event: "build_test_execution_update".to_owned(),
-        payload: serde_json::json!({
-            "buildId": result.build_id,
-            "testId": result.test_id,
-            "testCaseId": result.case_id.to_string(),
-            "status": result.result,
-        }),
-        room: Some(format!("build:{}", result.build_id)),
-    }];
-    events.extend(build_performance_events(&result.build_id));
+fn publish(state: &AppState, result: &ProcessedTestResult, _created_by: Option<&str>) {
+    let mut events = vec![ServerEvent::frontend(
+        FrontendMessagePayload::BuildTestExecutionUpdate {
+            test_id: result.test_id.clone(),
+            build_id: result.build_id.clone(),
+            test_case_id: Some(result.case_id.to_string()),
+            status: Some(result.result.clone()),
+        },
+    )];
+
+    events.push(ServerEvent::frontend(
+        FrontendMessagePayload::TestExecutionUpdate {
+            build_id: Some(result.build_id.clone()),
+            test_id: result.test_id.clone(),
+            status: Some(if result.completed {
+                TestStatus::Completed
+            } else {
+                TestStatus::InProgress
+            }),
+            progress: if result.completed { Some(100) } else { None },
+            message: None,
+            cancel_requested: None,
+        },
+    ));
+
+    events.push(build_performance_event(&result.build_id));
+
     for event in events {
         if let Err(error) = state.event_publisher.publish(event) {
             tracing::warn!(%error, "failed to publish test result event");
         }
-    }
-    if let Some(user_id) = created_by {
-        let data = if result.completed {
-            serde_json::json!({"status": "completed"})
-        } else {
-            serde_json::json!({"testCaseId": result.case_id, "result": result.result})
-        };
-        let _ = state.event_publisher.publish(ServerEvent {
-            event: "test_execution_update".to_owned(),
-            payload: serde_json::json!({
-                "buildId": result.build_id,
-                "testId": result.test_id,
-                "update": {
-                    "testId": result.test_id,
-                    "type": if result.completed { "status" } else { "testcase" },
-                    "data": data,
-                },
-                "createdBy": user_id,
-            }),
-            room: Some(format!("user:{user_id}")),
-        });
     }
 }
 

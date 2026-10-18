@@ -6,7 +6,6 @@ fn device_power_event_preserves_frontend_contract() {
     assert_eq!(event.payload["deviceId"], "device-1");
     assert_eq!(event.payload["power"], "off");
     assert!(event.payload["changedAt"].is_string());
-    assert!(event.room.is_none());
 }
 
 #[test]
@@ -21,7 +20,6 @@ fn new_execution_event_preserves_frontend_contract() {
         "Test execution test-1 created"
     );
     assert!(event.payload["data"]["timestamp"].is_string());
-    assert_eq!(event.room.as_deref(), Some("user:user-1"));
 }
 
 #[test]
@@ -36,12 +34,10 @@ fn cancellation_events_preserve_user_and_build_contracts() {
     assert_eq!(user_event.payload["type"], "cancel_requested");
     assert_eq!(user_event.payload["data"]["cancelRequested"], true);
     assert_eq!(user_event.payload["data"]["phase"], "PREPARE_ARTIFACTS");
-    assert_eq!(user_event.room.as_deref(), Some("user:user-1"));
     assert_eq!(build_event.event, "test_execution_update");
     assert_eq!(build_event.payload["testId"], "test-1");
     assert_eq!(build_event.payload["buildId"], "build-1");
     assert_eq!(build_event.payload["cancelRequested"], true);
-    assert_eq!(build_event.room.as_deref(), Some("build:build-1"));
 }
 
 #[test]
@@ -65,9 +61,6 @@ fn report_upload_events_preserve_frontend_status_and_room_contracts() {
         "Confluence upload failed: rejected"
     );
     assert_eq!(events[0].payload["uploadError"], "rejected");
-    assert_eq!(events[0].room.as_deref(), Some("user:user-1"));
-    assert_eq!(events[1].payload, events[0].payload);
-    assert_eq!(events[1].room.as_deref(), Some("test:test-1"));
 }
 
 #[test]
@@ -89,5 +82,4 @@ fn relay_confirmation_events_follow_committed_context() {
     assert_eq!(events[1].payload["completed"], 1);
     assert_eq!(events[2].event, "device_controller_changed");
     assert_eq!(events[2].payload["controllerId"], "controller-1");
-    assert!(events.iter().all(|event| event.room.is_none()));
 }

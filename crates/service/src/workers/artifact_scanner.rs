@@ -10,7 +10,11 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{config::ArtifactCleanup, events::ServerEvent, state::AppState};
+use crate::{
+    config::ArtifactCleanup,
+    socket::types::{farm::ServerEvent, frontend::FrontendMessagePayload},
+    state::AppState,
+};
 
 use super::{
     artifact_preparation::{prepare_artifacts, safe_segment},
@@ -478,17 +482,15 @@ async fn persist_results(
                 tracing::error!(%error, folder = %result.folder_name, version = %result.version, "failed to prepare scanned build");
             }
         }
-        let _ = state.event_publisher.publish(ServerEvent {
-            event: "build_uploaded".to_owned(),
-            payload: serde_json::json!({
-                "releaseId": release_id,
-                "version": result.version,
-                "deviceType": device_type,
-                "deviceFamily": device_family,
-                "buildType": build_type,
-            }),
-            room: None,
-        });
+        let _ = state.event_publisher.publish(ServerEvent::frontend(
+            FrontendMessagePayload::BuildUploaded {
+                release_id: release_id.to_string(),
+                version: result.version.clone(),
+                device_type: device_type.to_owned(),
+                device_family: device_family.to_owned(),
+                build_type: build_type.to_owned(),
+            },
+        ));
     }
     cleanup_removed(state, &seen).await
 }

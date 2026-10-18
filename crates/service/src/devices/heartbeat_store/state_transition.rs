@@ -1,11 +1,16 @@
-use crate::devices::repository_types::{DeferredCancellation, DeviceHeartbeatEvent};
+use uuid::Uuid;
+
+use crate::{
+    devices::repository_types::DeferredCancellation,
+    socket::types::{farm::ServerEvent, frontend::FrontendMessagePayload},
+};
 
 /// Applies heartbeat-confirmed recovery work within the device heartbeat transaction.
 pub(super) async fn process_device_post_update(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     device_id: &str,
     nfs_path: Option<&str>,
-) -> Result<(Vec<DeviceHeartbeatEvent>, Vec<DeferredCancellation>), sqlx::Error> {
+) -> Result<(Vec<ServerEvent>, Vec<DeferredCancellation>), sqlx::Error> {
     let mut events = Vec::new();
     let mut deferred_cancellations = Vec::new();
     let fallback = sqlx::query_as::<_, (i32, String, String)>(
@@ -47,14 +52,14 @@ pub(super) async fn process_device_post_update(
             .bind(&test_id)
             .execute(&mut **transaction)
             .await?;
-        events.push(DeviceHeartbeatEvent {
-            event: "test_execution_update".to_owned(),
-            payload: serde_json::json!({
-                "testId": test_id,
-                "update": {"type": "phase", "data": {"executionPhase": phase}},
-            }),
-            room: Some(format!("test:{test_id}")),
-        });
+        events.push(ServerEvent::frontend(
+            FrontendMessagePayload::BuildTestExecutionUpdate {
+                test_id: test_id.to_owned(),
+                build_id: "".to_owned(),
+                test_case_id: None,
+                status: Some(phase.to_owned()),
+            },
+        ));
     }
 
     let completed_flash = sqlx::query_scalar::<_, uuid::Uuid>(
@@ -71,28 +76,30 @@ pub(super) async fn process_device_post_update(
     .fetch_optional(&mut **transaction)
     .await?;
     if completed_flash.is_some()
-        && let Some((release_id, device_type)) = sqlx::query_as::<_, (String, String)>(
+        && let Some((release_id, device_type, version, user_id)) = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
             r#"UPDATE releases release
                SET status = 'passed', "isFaulty" = false, "updatedAt" = now()
                FROM devices device
                WHERE release."testedDeviceId" = $1 AND release.status::text = 'testing'
                  AND device."deviceId" = $1
-               RETURNING release.id::text, device."deviceType""#,
+               RETURNING release.id::text, device."deviceType", release."version", release."userId""#,
         )
         .bind(device_id)
         .fetch_optional(&mut **transaction)
         .await?
     {
-        events.push(DeviceHeartbeatEvent {
-            event: "release-status-changed".to_owned(),
-            payload: serde_json::json!({
-                "releaseId": release_id,
-                "status": "passed",
-                "deviceId": device_id,
-                "deviceType": device_type,
-            }),
-            room: None,
-        });
+        events.push(
+            ServerEvent::frontend(
+            FrontendMessagePayload::BuildStatusChanged {
+                release_id: Uuid::parse_str(&release_id).unwrap(),
+                status: "passed".to_owned(),
+                is_faulty: false,
+                device_id: Some(device_id.to_owned()),
+                device_type: device_type,
+                version: version,
+                user_id: user_id.unwrap_or_default(),
+                }
+        ));
     }
 
     let flash_confirm = sqlx::query_as::<_, (uuid::Uuid, Option<String>)>(

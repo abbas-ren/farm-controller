@@ -64,7 +64,7 @@ pub(crate) async fn process_heartbeat(
         state.event_publisher.publish(ServerEvent::frontend(
             FrontendMessagePayload::DeviceControllerChanged {
                 action: Action::Updated,
-                controller_id: normalized_cid,
+                controller_id: normalized_cid.clone(),
             },
         ))?;
     }

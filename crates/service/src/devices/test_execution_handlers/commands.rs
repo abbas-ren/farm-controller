@@ -1,7 +1,15 @@
 //! Create and update test execution commands.
 
 use super::*;
-use crate::{auth, error::ErrorResponse, events::ServerEvent, state::AppState};
+use crate::{
+    auth,
+    error::ErrorResponse,
+    socket::types::{
+        farm::ServerEvent,
+        frontend::{FrontendMessagePayload, TestStatus},
+    },
+    state::AppState,
+};
 use axum::{
     Json,
     extract::{Path, State},
@@ -52,11 +60,15 @@ pub async fn update_status(
                 test_id,
                 status
             );
-            let event = ServerEvent {
-                event: "test_execution_update".to_owned(),
-                payload: serde_json::json!({"testId": test_id, "update": {"type": "status", "data": {"status": status}}}),
-                room: None,
-            };
+            let event = ServerEvent::frontend(FrontendMessagePayload::TestExecutionUpdate {
+                build_id: None,
+                test_id: test_id.to_owned(),
+                status: Some(TestStatus::from(status.as_str())),
+                progress: None,
+                message: None,
+                cancel_requested: None,
+            });
+
             if let Err(error) = state.event_publisher.publish(event) {
                 tracing::warn!(%error, %test_id, "failed to publish admin execution status update");
             }

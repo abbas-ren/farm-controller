@@ -1,12 +1,27 @@
 use std::sync::Arc;
 
-use axum::{body::Body, http::Request, routing::post};
+use axum::{Router, body::Body, http::Request, routing::post};
 use clap::Parser;
 use http_body_util::BodyExt;
+use reqwest::StatusCode;
 use tower::ServiceExt;
 
-use crate::{cli::Cli, config::AppConfig, devices::{ControllerHeartbeat, DeviceHeartbeatResult}, observability::Metrics, socket::{helpers::{browser_auth_headers, browser_authorization, device_heartbeat_events, normalize_controller_id}, routes::user::send_user_message}, state::AppState};
-
+use crate::{
+    cli::Cli,
+    config::AppConfig,
+    devices::{ControllerHeartbeat, DeviceHeartbeatResult},
+    observability::Metrics,
+    socket::{
+        constants::WS_EVENT,
+        helpers::{
+            browser_auth_headers, browser_authorization, controller_heartbeat_payload,
+            device_heartbeat_events, normalize_controller_id,
+        },
+        routes::user::send_user_message,
+        types::farm::ServerEvent,
+    },
+    state::AppState,
+};
 
 #[test]
 fn admin_terminal_mode_requires_the_frontend_client() {
@@ -52,7 +67,6 @@ fn browser_websocket_subprotocol_supplies_bearer_authentication() {
     );
 }
 
-
 #[test]
 fn controller_identity_normalization_matches_registration() {
     assert_eq!(normalize_controller_id("AA:BB:CC:DD:EE:FF"), "aabbccddeeff");
@@ -81,12 +95,12 @@ fn edgecontroller_binary_payload_decodes() {
         serde_json::from_slice(&serde_json::to_vec(&payload).unwrap()).unwrap();
     assert_eq!(heartbeat.message_type, "heartbeat");
     assert_eq!(heartbeat.uid, "aabbccddeeff");
-    let event = controller_heartbeat_event(heartbeat.uid.clone(), &heartbeat);
-    assert_eq!(event.event, "device_controller:ping");
-    assert_eq!(
-        event.room.as_deref(),
-        Some("device-controller:aabbccddeeff")
-    );
+    let event = ServerEvent::frontend(controller_heartbeat_payload(
+        heartbeat.uid.clone(),
+        &heartbeat,
+    ));
+    assert_eq!(event.event, WS_EVENT.DEVICE_CONTROLLER_PING);
+
     assert_eq!(event.payload["controllerId"], "aabbccddeeff");
     assert_eq!(event.payload["timestamp"], "2026-10-02T00:00:00.000Z");
     assert_eq!(event.payload["metrics"]["cpu"]["usagePercent"], 12.5);
@@ -128,13 +142,10 @@ fn device_heartbeat_events_follow_committed_frontend_contract() {
         ]
     );
     assert_eq!(events[0].payload["state"], "free");
-    assert_eq!(events[1].room.as_deref(), Some("device:device-1"));
     assert_eq!(events[1].payload["changes"][0]["interfaceId"], "eth0");
     assert_eq!(events[2].payload["subtype"], "device-alert");
-    assert_eq!(events[3].room.as_deref(), Some("device:device-1"));
     assert_eq!(events[3].payload["deviceId"], "device-1");
 }
-
 
 #[tokio::test]
 async fn user_message_dispatch_preserves_public_event_contract() {

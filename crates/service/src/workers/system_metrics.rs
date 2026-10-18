@@ -4,7 +4,10 @@ use chrono::{SecondsFormat, Utc};
 use sysinfo::{Disks, Networks, System};
 use tokio_util::sync::CancellationToken;
 
-use crate::events::{EventHub, ServerEvent};
+use crate::{
+    socket::types::farm::{EventHub, ServerEvent},
+    workers::types::SystemMetricsSampler,
+};
 
 const METRICS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -31,12 +34,6 @@ async fn worker_with_interval(
         }
     }
     tracing::info!(worker = "system_metrics", "worker stopped");
-}
-
-struct SystemMetricsSampler {
-    system: System,
-    disks: Disks,
-    networks: Networks,
 }
 
 impl SystemMetricsSampler {
@@ -110,7 +107,6 @@ impl SystemMetricsSampler {
                 },
                 "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             }),
-            room: None,
         }
     }
 }
@@ -154,7 +150,6 @@ mod tests {
     fn metrics_payload_preserves_frontend_contract() {
         let event = SystemMetricsSampler::new().sample_event();
         assert_eq!(event.event, "system_metrics_update");
-        assert!(event.room.is_none());
         for section in ["cpu", "memory", "network", "disk"] {
             assert!(event.payload[section].is_object(), "{section}");
         }

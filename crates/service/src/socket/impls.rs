@@ -1,24 +1,12 @@
-use std::sync::{Arc, OnceLock};
-
-use axum::{
-    Router,
-    http::{HeaderMap, HeaderValue, header},
-};
-use socketioxide::{SocketIo, layer::SocketIoLayer};
+use socketioxide::SocketIo;
+use std::sync::OnceLock;
 use tracing::info;
 
-use crate::{
-    devices::ControllerHeartbeat,
-    socket::{
-        constants::BROWSER_BEARER_PREFIX,
-        types::{
-            edge_agent::EdgeAgentMessagePayload,
-            edge_controller::EdgeControllerMessagePayload,
-            farm::{EventHub, NativeSocketQuery, ServerEvent},
-            frontend::FrontendMessagePayload,
-        },
-    },
-    state::AppState,
+use crate::socket::types::{
+    edge_agent::EdgeAgentMessagePayload,
+    edge_controller::EdgeControllerMessagePayload,
+    farm::{EventHub, ServerEvent},
+    frontend::FrontendMessagePayload,
 };
 
 impl ServerEvent {
@@ -29,6 +17,7 @@ impl ServerEvent {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn edge_agent(payload: EdgeAgentMessagePayload) -> Self {
         Self {
             event: "edge_agent".to_owned(),
@@ -37,6 +26,7 @@ impl ServerEvent {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn edge_controller(payload: EdgeControllerMessagePayload) -> Self {
         Self {
             event: "edge_controller".to_owned(),

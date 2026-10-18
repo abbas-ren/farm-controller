@@ -3,7 +3,9 @@ use std::sync::Arc;
 use super::callbacks::callback_client;
 use super::*;
 use crate::error::ErrorResponse;
-use crate::{auth, events::ServerEvent, state::AppState};
+use crate::socket::types::farm::ServerEvent;
+use crate::socket::types::frontend::{AlertLevel, FrontendMessagePayload};
+use crate::{auth, state::AppState};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -229,9 +231,14 @@ pub async fn device_action(
     {
         Ok(Some(device)) => {
             if request.action == DeviceAction::Approved
-                && let Err(error) = state
-                    .event_publisher
-                    .publish(ServerEvent::alert("device-approval", device.clone()))
+                && let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+                    FrontendMessagePayload::AlertDataPayload {
+                        level: Some(AlertLevel::Critical),
+                        subtype: Some("device-approval".to_string()),
+                        message: device.clone(),
+                        timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                    },
+                ))
             {
                 tracing::warn!(%error, device_id, "failed to publish device approval alert");
             }

@@ -1,48 +1,18 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::{
     devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
-    events::{ServerEvent, build_performance_events},
+    socket::{
+        helpers::{assignment_events, dispatch_failure_events},
+        types::farm::ServerEvent,
+    },
     state::AppState,
+    workers::types::{AssignedAction, Gen4IplTarget, QueuedAction},
 };
 
 use super::test_preconditions;
-
-#[derive(Debug, sqlx::FromRow)]
-struct QueuedAction {
-    id: Uuid,
-    test_id: Option<String>,
-    release_id: Option<Uuid>,
-    version: Option<String>,
-    device_type: String,
-    user_id: String,
-    mode: String,
-    target_device_id: Option<String>,
-    ipl_flash_confirm: Option<bool>,
-    build_id: Option<String>,
-    build_version: Option<String>,
-    created_by: Option<String>,
-}
-
-struct AssignedAction {
-    action: QueuedAction,
-    device_id: String,
-    ip_address: String,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct Gen4IplTarget {
-    controller_ip: String,
-    relay_serial: String,
-    channel_number: i32,
-    device_mac: String,
-    gpio: String,
-    gpio_default_level: String,
-    relay_default_level: String,
-}
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
@@ -540,91 +510,6 @@ async fn fail_dispatch(
     Ok(dispatch_failure_events(assigned, error))
 }
 
-fn assignment_events(assigned: &AssignedAction) -> Vec<ServerEvent> {
-    let mut events = vec![device_state_event(&assigned.device_id, "busy")];
-    if let Some(test_id) = assigned.action.test_id.as_deref() {
-        let build_id = assigned.action.build_id.as_deref().unwrap_or_default();
-        let owner = assigned
-            .action
-            .created_by
-            .as_deref()
-            .unwrap_or(&assigned.action.user_id);
-        events.push(test_status_event(test_id, "in_progress", owner));
-        events.push(test_build_event(test_id, build_id, "in_progress"));
-        events.extend(build_performance_events(build_id));
-    } else if let Some(release_id) = assigned.action.release_id {
-        events.push(build_status_event(assigned, release_id, "testing", false));
-    }
-    events
-}
-
-fn dispatch_failure_events(assigned: &AssignedAction, error: &str) -> Vec<ServerEvent> {
-    let mut events = vec![device_state_event(&assigned.device_id, "free")];
-    if let Some(test_id) = assigned.action.test_id.as_deref() {
-        let build_id = assigned.action.build_id.as_deref().unwrap_or_default();
-        let owner = assigned
-            .action
-            .created_by
-            .as_deref()
-            .unwrap_or(&assigned.action.user_id);
-        let mut status = test_status_event(test_id, "failed", owner);
-        status.payload["data"]["message"] = serde_json::Value::String(error.to_owned());
-        events.push(status);
-        events.push(test_build_event(test_id, build_id, "failed"));
-        events.extend(build_performance_events(build_id));
-    } else if let Some(release_id) = assigned.action.release_id {
-        events.push(build_status_event(assigned, release_id, "failed", true));
-    }
-    events
-}
-
-fn device_state_event(device_id: &str, state: &str) -> ServerEvent {
-    ServerEvent {
-        event: "device_state_update".to_owned(),
-        payload: serde_json::json!({
-            "deviceId": device_id, "state": state, "upgrading": false,
-            "flashing": false, "changedAt": chrono::Utc::now().to_rfc3339(),
-        }),
-        room: None,
-    }
-}
-
-fn test_status_event(test_id: &str, status: &str, user_id: &str) -> ServerEvent {
-    ServerEvent {
-        event: "test_execution".to_owned(),
-        payload: serde_json::json!({
-            "testId": test_id, "type": "status",
-            "data": {"status": status, "timestamp": chrono::Utc::now().to_rfc3339()},
-        }),
-        room: Some(format!("user:{user_id}")),
-    }
-}
-
-fn test_build_event(test_id: &str, build_id: &str, status: &str) -> ServerEvent {
-    ServerEvent {
-        event: "test_execution_update".to_owned(),
-        payload: serde_json::json!({"testId": test_id, "buildId": build_id, "status": status}),
-        room: Some(format!("build:{build_id}")),
-    }
-}
-
-fn build_status_event(
-    assigned: &AssignedAction,
-    release_id: Uuid,
-    status: &str,
-    is_faulty: bool,
-) -> ServerEvent {
-    ServerEvent {
-        event: "build_status_changed".to_owned(),
-        payload: serde_json::json!({
-            "releaseId": release_id, "status": status, "isFaulty": is_faulty,
-            "version": assigned.action.version, "deviceType": assigned.action.device_type,
-            "deviceId": assigned.device_id, "userId": assigned.action.user_id,
-        }),
-        room: None,
-    }
-}
-
 fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
     state.metrics.record_worker_run("device_action", "failure");
     tracing::error!(%error, worker = "device_action", "{message}");
@@ -632,6 +517,9 @@ fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
 
 #[cfg(test)]
 mod tests {
+    use crate::{socket::helpers::assignment_events, workers::types::DeviceState};
+    use uuid::Uuid;
+
     use super::*;
 
     fn assigned_test() -> AssignedAction {
@@ -673,17 +561,12 @@ mod tests {
             ]
         );
         assert_eq!(events[1].payload["data"]["status"], "in_progress");
-        assert_eq!(events[1].room.as_deref(), Some("user:user-1"));
-        assert_eq!(events[2].room.as_deref(), Some("build:build-1"));
-        assert_eq!(events[3].room.as_deref(), Some("dashboard:admin"));
-        assert_eq!(events[4].room.as_deref(), Some("dashboard:user"));
-        assert_eq!(events[5].room.as_deref(), Some("build:build-1"));
     }
 
     #[test]
     fn dispatch_failure_events_restore_device_and_fail_test() {
         let events = dispatch_failure_events(&assigned_test(), "connection refused");
-        assert_eq!(events[0].payload["state"], "free");
+        assert_eq!(events[0].payload["state"], DeviceState::Free.to_string());
         assert_eq!(events[1].payload["data"]["status"], "failed");
         assert_eq!(events[1].payload["data"]["message"], "connection refused");
     }

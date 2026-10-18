@@ -30,6 +30,25 @@ pub enum ReportStatus {
     BuildingReport,
     Completed,
     Failed,
+    Generating,
+}
+
+impl From<&str> for ReportStatus {
+    fn from(status: &str) -> Self {
+        match status {
+            "queued" => ReportStatus::Queued,
+            "processing" => ReportStatus::Processing,
+            "consolidating" => ReportStatus::Consolidating,
+            "generating_sanity" => ReportStatus::GeneratingSanity,
+            "generating_perf" => ReportStatus::GeneratingPerf,
+            "generating_graphs" => ReportStatus::GeneratingGraphs,
+            "building_report" => ReportStatus::BuildingReport,
+            "completed" => ReportStatus::Completed,
+            "failed" => ReportStatus::Failed,
+            "generating" => ReportStatus::Generating,
+            _ => ReportStatus::Failed,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -43,6 +62,7 @@ pub struct ReportJobSnapshot {
     pub error: Option<String>,
     #[serde(skip)]
     #[schema(ignore)]
+    #[allow(unused)]
     pub(crate) created_by: Option<String>,
     #[schema(value_type = String, format = DateTime)]
     pub updated_at: DateTime<Utc>,

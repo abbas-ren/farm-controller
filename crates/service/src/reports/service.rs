@@ -10,8 +10,11 @@ use uuid::Uuid;
 
 use crate::{
     config::ReportsConfig,
-    events::{EventHub, ServerEvent},
     observability::Metrics,
+    socket::types::{
+        farm::{EventHub, ServerEvent},
+        frontend::FrontendMessagePayload,
+    },
 };
 
 use super::{
@@ -230,27 +233,21 @@ impl ReportService {
         let Some(event_publisher) = &self.event_publisher else {
             return;
         };
-        let mut payload = serde_json::json!({
-            "reportId": snapshot.job_id,
-            "testExecutionId": snapshot.test_id,
-            "status": snapshot.status,
-            "createdBy": snapshot.created_by,
+
+        let err = if let Some(error) = &snapshot.error {
+            Some(error.clone().into())
+        } else {
+            None
+        };
+
+        let event = ServerEvent::frontend(FrontendMessagePayload::ExecutionReportUpdate {
+            test_execution_id: Some(snapshot.test_id.clone()),
+            status: Some(snapshot.status),
+            error: err.clone(),
+            upload_error: err,
         });
-        if let Some(error) = &snapshot.error {
-            payload["error"] = error.clone().into();
-        }
-        let mut rooms = vec![format!("test:{}", snapshot.test_id)];
-        if let Some(created_by) = snapshot.created_by.as_deref() {
-            rooms.insert(0, format!("user:{created_by}"));
-        }
-        for room in rooms {
-            if let Err(error) = event_publisher.publish(ServerEvent {
-                event: "execution_report_update".to_owned(),
-                payload: payload.clone(),
-                room: Some(room),
-            }) {
-                tracing::warn!(%error, job_id = %snapshot.job_id, "failed to publish report status");
-            }
+        if let Err(error) = event_publisher.publish(event) {
+            tracing::warn!(%error, job_id = %snapshot.job_id, "failed to publish report status");
         }
     }
 }

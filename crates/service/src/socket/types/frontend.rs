@@ -1,4 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::{reports::ReportStatus, workers::types::DeviceState};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,11 +29,22 @@ pub enum Action {
     Deleted,
 }
 
+impl From<&str> for Action {
+    fn from(action: &str) -> Self {
+        match action {
+            "added" => Action::Added,
+            "updated" => Action::Updated,
+            "deleted" => Action::Deleted,
+            _ => Action::Updated, // default case
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FrontendMessagePayload {
     #[serde(rename = "heartbeat")]
-    HeartbeatDataPayload {
+    HeartbeatData {
         device_id: Option<String>,
         controller_id: Option<String>,
         device_controller_id: Option<String>,
@@ -47,7 +61,7 @@ pub enum FrontendMessagePayload {
         timestamp: Option<String>,
     },
 
-    #[serde(rename = "user")]
+    #[serde(rename = "user_data")]
     UserDataPayload {
         method: String,
         message: serde_json::Value,
@@ -66,7 +80,7 @@ pub enum FrontendMessagePayload {
     #[serde(rename = "device_state_update")]
     DeviceStateUpdate {
         device_id: String,
-        state: String,
+        state: DeviceState,
         upgrading: bool,
         flashing: bool,
         changed_at: String,
@@ -75,7 +89,7 @@ pub enum FrontendMessagePayload {
     #[serde(rename = "device_power_update")]
     DevicePowerUpdate {
         device_id: String,
-        power: String,
+        power: DevicePower,
         changed_at: String,
     },
 
@@ -88,9 +102,8 @@ pub enum FrontendMessagePayload {
     #[serde(rename = "test_execution")]
     TestExecution {
         test_id: String,
-        build_id: Option<String>,
-        created_by: Option<String>,
-        update: TestExecutionUpdate,
+        r#type: TestExecutionUpdateType,
+        data: TestExecutionUpdateData,
     },
 
     #[serde(rename = "build_test_execution_update")]
@@ -98,13 +111,14 @@ pub enum FrontendMessagePayload {
         test_id: String,
         build_id: String,
         test_case_id: Option<String>,
+        status: Option<String>,
     },
 
     #[serde(rename = "test_execution_update")]
     TestExecutionUpdate {
-        build_id: String,
+        build_id: Option<String>,
         test_id: String,
-        status: String,
+        status: Option<TestStatus>,
         progress: Option<u64>,
         message: Option<String>,
         cancel_requested: Option<bool>,
@@ -115,7 +129,7 @@ pub enum FrontendMessagePayload {
 
     #[serde(rename = "build_status_changed")]
     BuildStatusChanged {
-        release_id: uuid::Uuid,
+        release_id: Uuid,
         status: String,
         is_faulty: bool,
         device_id: Option<String>,
@@ -126,15 +140,29 @@ pub enum FrontendMessagePayload {
 
     #[serde(rename = "build_uploaded")]
     BuildUploaded {
-        release_id: serde_json::Value,
-        version: serde_json::Value,
-        device_type: serde_json::Value,
-        device_family: serde_json::Value,
-        build_type: serde_json::Value,
+        release_id: String,
+        version: String,
+        device_type: String,
+        device_family: String,
+        build_type: String,
     },
 
     #[serde(rename = "build_deleted")]
-    BuildDeleted { release_id: String },
+    BuildDeleted {
+        release_id: String,
+        version: String,
+        device_type: String,
+        user_id: String,
+    },
+
+    #[serde(rename = "build_flagged")]
+    BuildFlagged {
+        release_id: String,
+        is_faulty: bool,
+        version: String,
+        device_type: String,
+        user_id: String,
+    },
 
     #[serde(rename = "upload_progress")]
     UploadProgress { upload_id: String, percent: u64 },
@@ -168,28 +196,36 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "edge_controller_ping")]
-    EdgeControllerPing {
+    #[serde(rename = "device_controller_ping")]
+    DeviceControllerPing {
         controller_id: String,
         timestamp: String,
         metrics: Metrics,
     },
-    #[serde(rename = "edge_ping")]
-    EdgePingPayload {
+    #[serde(rename = "device_ping")]
+    DevicePingPayload {
         device_id: String,
         timestamp: String,
     },
 
-    #[serde(rename = "edge_interface_update")]
-    InterfaceUpdatePayload {
+    #[serde(rename = "device_interface_update")]
+    DeviceInterfaceUpdate {
         device_id: String,
         changes: Vec<InterfaceChange>,
-        heartbeat_data: serde_json::Value,
+        heartbeat_data: HeartbeatData,
         timestamp: String,
+    },
+
+    #[serde(rename = "execution_report_update")]
+    ExecutionReportUpdate {
+        test_execution_id: Option<String>,
+        status: Option<ReportStatus>,
+        error: Option<String>,
+        upload_error: Option<String>,
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InterfaceChange {
     pub r#type: String,
@@ -239,15 +275,68 @@ pub struct DiskMetrics {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TestExecutionUpdate {
-    Status { data: TestStatusData },
+#[serde(rename_all = "snake_case")]
+pub enum TestExecutionUpdateType {
+    Status,
+    Log,
+    New,
+    CancelRequested,
+    RtosLog,
+    Queued,
+}
 
-    Testcase { data: TestcaseData },
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "data", rename_all = "snake_case")]
+pub struct TestExecutionUpdateData {
+    pub status: Option<TestStatus>,
+    pub message: Option<String>,
+    pub timestamp: String,
+    pub cancel_requested: Option<bool>,
+    pub phase: Option<String>,
+    pub rtos_log_path: Option<String>,
+}
 
-    Queued { data: QueuedData },
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestStatus {
+    NotExecuted,
+    InProgress,
+    Completed,
+    Queued,
+    Cancelled,
+    CancelRequested,
+    Failed,
+}
 
-    CancelRequested { data: CancelRequestedData },
+impl From<&str> for TestStatus {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "not_executed" => Self::NotExecuted,
+            "in_progress" => Self::InProgress,
+            "completed" => Self::Completed,
+            "queued" => Self::Queued,
+            "cancelled" => Self::Cancelled,
+            "cancel_requested" => Self::CancelRequested,
+            "failed" => Self::Failed,
+            _ => Self::NotExecuted,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DevicePower {
+    On,
+    Off,
+}
+
+impl From<&str> for DevicePower {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "on" => Self::On,
+            _ => Self::Off,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -279,4 +368,15 @@ pub struct CancelRequestedData {
     pub cancel_requested: bool,
     pub phase: String,
     pub timestamp: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeartbeatData {
+    pub device_id: Option<String>,
+    pub controller_id: Option<String>,
+    pub device_controller_id: Option<String>,
+    pub timestamp: Option<String>,
+    pub status: Option<String>,
+    pub extra: Option<serde_json::Value>,
 }

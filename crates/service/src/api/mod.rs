@@ -23,8 +23,8 @@ use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
-    admin_control, auth, config::Module, devices, error::ErrorResponse, events,
-    observability::track_request, reports, runtime_log_handlers, state::AppState,
+    admin_control, auth, config::Module, devices, error::ErrorResponse,
+    observability::track_request, reports, runtime_log_handlers, socket, state::AppState,
 };
 
 #[derive(OpenApi)]
@@ -33,6 +33,8 @@ use crate::{
         health,
         ready,
         metrics,
+        socket::routes::user::send_user_message,
+        socket::routes::upgrade::upgrade,
         admin_control::get,
         admin_control::patch,
         admin_control::action,
@@ -54,8 +56,6 @@ use crate::{
         auth::validate,
         auth::validate_admin,
         auth::validate_user,
-        events::send_user_message,
-        events::upgrade,
         devices::build_handlers::build_by_id,
         devices::build_handlers::build_filters,
         devices::build_handlers::delete_build,
@@ -77,20 +77,20 @@ use crate::{
         devices::log_handlers::list,
         devices::log_handlers::search,
         devices::test_completion_handlers::test_completed,
-            devices::analytics_handlers::device_state,
-            devices::analytics_handlers::detailed_device_state,
-            devices::analytics_handlers::recent_executions,
-            devices::analytics_handlers::daily_executions,
-            devices::analytics_handlers::execution_by_id,
-            devices::analytics_handlers::build_comparisons,
-            devices::analytics_handlers::build_comparison_by_id,
-            devices::analytics_handlers::builds_performance,
-            devices::analytics_handlers::build_performance_by_id,
-            devices::analytics_handlers::daily_device_usage,
-            devices::analytics_handlers::device_usage_summary,
-            devices::analytics_handlers::test_analytics,
-            devices::analytics_handlers::test_plan_summary,
-            devices::analytics_handlers::daily_test_summary,
+        devices::analytics_handlers::device_state,
+        devices::analytics_handlers::detailed_device_state,
+        devices::analytics_handlers::recent_executions,
+        devices::analytics_handlers::daily_executions,
+        devices::analytics_handlers::execution_by_id,
+        devices::analytics_handlers::build_comparisons,
+        devices::analytics_handlers::build_comparison_by_id,
+        devices::analytics_handlers::builds_performance,
+        devices::analytics_handlers::build_performance_by_id,
+        devices::analytics_handlers::daily_device_usage,
+        devices::analytics_handlers::device_usage_summary,
+        devices::analytics_handlers::test_analytics,
+        devices::analytics_handlers::test_plan_summary,
+        devices::analytics_handlers::daily_test_summary,
         devices::alert_handlers::admin_alerts,
         devices::alert_handlers::all_alerts,
         devices::alert_handlers::mark_single_read,
@@ -199,9 +199,6 @@ use crate::{
         auth::AuthUserResponse,
         auth::AdminRegistrationResponse,
         auth::ValidationResponse,
-        events::UserMessageRequest,
-        events::UserMessageResponse,
-        events::EventErrorResponse,
         devices::ControllerRegistration,
         devices::ControllerRegistrationResponse,
         devices::DeviceRegistration,
@@ -257,9 +254,9 @@ use crate::{
         devices::LogListQuery,
         devices::LogEntry,
         devices::LogList,
-            devices::DeviceStateAnalytics,
-            devices::DeviceStateDetailedItem,
-            devices::DeviceStateDetailedAnalytics,
+        devices::DeviceStateAnalytics,
+        devices::DeviceStateDetailedItem,
+        devices::DeviceStateDetailedAnalytics,
         devices::AlertList,
         devices::MessageResponse,
         devices::CompatibilityErrorResponse,
@@ -304,7 +301,10 @@ use crate::{
         reports::ReportJobSnapshot,
         reports::ReportStatus,
         reports::ConfluenceUploadRequest,
-        reports::ConfluenceUploadResponse
+        reports::ConfluenceUploadResponse,
+        socket::types::farm::UserMessageRequest,
+        socket::types::farm::UserMessageResponse,
+        socket::types::farm::EventErrorResponse
     )),
     tags((name = "Operations", description = "FarmController process and dependency status")),
     modifiers(&SecurityAddon)
@@ -354,7 +354,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let socket_io_layer = state
         .config
         .module_enabled(Module::Events)
-        .then(|| events::socket_io_layer(&state.event_publisher));
+        .then(|| socket::helpers::socket_io_layer(&state.event_publisher));
     let mut router = Router::new();
 
     if state.config.module_enabled(Module::Health) {
@@ -375,7 +375,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             .nest("/api/v1/device", devices::router());
     }
     if state.config.module_enabled(Module::Events) {
-        router = router.merge(events::router());
+        router = router.merge(socket::routes::router());
     }
     if state.config.module_enabled(Module::Reports) {
         router = router.merge(reports::router());

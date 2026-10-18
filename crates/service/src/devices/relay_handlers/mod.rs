@@ -16,7 +16,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{auth, error::ErrorResponse, events::ServerEvent, state::AppState};
+use crate::{auth, error::ErrorResponse, state::AppState};
 
 use super::{
     CallbackStatus, LegacyRelayChannelListQuery, LegacyRelayConfiguration,

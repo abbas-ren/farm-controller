@@ -76,7 +76,6 @@ async fn edgecontroller_registration_is_create_then_idempotent_update() {
             }
         );
         assert_eq!(event.payload["controllerId"], "aabbccddeeff");
-        assert!(event.room.is_none());
         if expected == StatusCode::CREATED {
             let alert = events.recv().await.unwrap();
             assert_eq!(alert.event, "alert");
@@ -148,7 +147,6 @@ async fn registration_request_publishes_pending_user_frontend_event() {
     assert_eq!(response.status(), StatusCode::CREATED);
     let event = events.recv().await.unwrap();
     assert_eq!(event.event, "user");
-    assert!(event.room.is_none());
     assert_eq!(event.payload["message"]["id"], "pending-user-1");
     assert_eq!(event.payload["message"]["username"], "pending.user");
     assert_eq!(event.payload["message"]["email"], "pending@example.com");

@@ -101,7 +101,6 @@ async fn execution_creation_preserves_legacy_payload_and_auth_contract() {
     assert_eq!(event.payload["testId"], body["testId"]);
     assert_eq!(event.payload["type"], "new");
     assert_eq!(event.payload["data"]["status"], body["status"]);
-    assert_eq!(event.room.as_deref(), Some("user:system"));
 
     let invalid = app
         .oneshot(

@@ -72,7 +72,6 @@ async fn edgecontroller_callbacks_preserve_wire_contracts() {
         cancellation.payload["update"]["data"]["status"],
         "cancelled"
     );
-    assert_eq!(cancellation.room.as_deref(), Some("user:user-1"));
     let device = events.recv().await.unwrap();
     assert_eq!(device.event, "device_state_update");
     assert_eq!(device.payload["deviceId"], "device-1");
@@ -364,7 +363,6 @@ async fn device_power_toggle_preserves_frontend_http_and_event_contracts() {
     assert_eq!(event.payload["deviceId"], "power-device");
     assert_eq!(event.payload["power"], "off");
     assert!(event.payload["changedAt"].is_string());
-    assert!(event.room.is_none());
 
     controller_task.abort();
     let _ = controller_task.await;

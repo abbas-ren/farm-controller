@@ -11,7 +11,14 @@ use axum::{
     response::IntoResponse,
 };
 
-use crate::{error::ErrorResponse, events::ServerEvent, state::AppState};
+use crate::{
+    error::ErrorResponse,
+    socket::types::{
+        farm::ServerEvent,
+        frontend::{FrontendMessagePayload, TestExecutionUpdateData, TestExecutionUpdateType},
+    },
+    state::AppState,
+};
 
 use super::{
     EDGE_CONTROLLER_PORT, TestCompletionQuery, TestCompletionResponse, error_response,
@@ -228,20 +235,24 @@ fn is_terminal(status: &str) -> bool {
     matches!(status, "completed" | "cancelled" | "failed")
 }
 
-fn rtos_log_event(test_id: &str, build_id: Option<&str>, path: &str, user_id: &str) -> ServerEvent {
-    ServerEvent {
-        event: "test_execution".to_owned(),
-        payload: serde_json::json!({
-            "testId": test_id,
-            "type": "rtos_log",
-            "data": {
-                "rtosLogPath": path,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            },
-            "buildId": build_id,
-        }),
-        room: Some(format!("user:{user_id}")),
-    }
+fn rtos_log_event(
+    test_id: &str,
+    _build_id: Option<&str>,
+    path: &str,
+    _user_id: &str,
+) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::TestExecution {
+        test_id: test_id.to_owned(),
+        r#type: TestExecutionUpdateType::RtosLog,
+        data: TestExecutionUpdateData {
+            status: None,
+            message: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            cancel_requested: None,
+            phase: None,
+            rtos_log_path: Some(path.to_owned()),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -290,6 +301,5 @@ mod tests {
         assert_eq!(event.event, "test_execution");
         assert_eq!(event.payload["type"], "rtos_log");
         assert_eq!(event.payload["data"]["rtosLogPath"], "/tmp/rtos.log");
-        assert_eq!(event.room.as_deref(), Some("user:user-1"));
     }
 }

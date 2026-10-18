@@ -29,7 +29,7 @@ pub use models::{
 pub use service::ReportService;
 
 #[cfg(test)]
-use crate::{config::ReportsConfig, events::EventHub, observability::Metrics};
+use crate::{config::ReportsConfig, observability::Metrics};
 #[cfg(test)]
 use async_trait::async_trait;
 #[cfg(test)]

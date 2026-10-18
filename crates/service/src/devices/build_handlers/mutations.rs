@@ -1,5 +1,12 @@
 use super::super::{error_response, repository_error};
-use crate::{auth, events::ServerEvent, state::AppState};
+use crate::{
+    auth,
+    socket::{
+        helpers::publish_frontend_event,
+        types::frontend::{AlertLevel, FrontendMessagePayload},
+    },
+    state::AppState,
+};
 use axum::{
     Json,
     extract::{Path, State, rejection::JsonRejection},
@@ -7,6 +14,7 @@ use axum::{
     response::IntoResponse,
 };
 use std::sync::Arc;
+use uuid::Uuid;
 
 use super::super::{BuildFlagRequest, BuildStatusRequest, BuildStatusResponse};
 
@@ -40,18 +48,28 @@ pub async fn update_build_status(
     };
     match repository.update_build_status(&build_id, &status).await {
         Ok(Some(result)) => {
-            publish_build_event(
+            publish_frontend_event(
                 &state,
-                "build_status_changed",
-                serde_json::json!({
-                    "releaseId": build_id,
-                    "status": status,
-                    "isFaulty": result.is_faulty,
-                    "version": result.version,
-                    "deviceType": result.device_type,
-                }),
+                FrontendMessagePayload::BuildStatusChanged {
+                    release_id: Uuid::parse_str(&build_id).unwrap(),
+                    is_faulty: result.is_faulty,
+                    version: Some(result.version),
+                    device_id: None,
+                    device_type: result.device_type,
+                    status: status.clone(),
+                    user_id: "".to_owned(),
+                },
             );
-            publish_alert(&state, result.alert);
+            publish_frontend_event(
+                &state,
+                FrontendMessagePayload::AlertDataPayload {
+                    level: Some(AlertLevel::Info),
+                    subtype: Some("device-alert".to_owned()),
+                    message: result.alert,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                },
+            );
+
             (
                 response_headers,
                 Json(BuildStatusResponse {
@@ -97,17 +115,26 @@ pub async fn flag_build(
     };
     match repository.flag_build(&build_id, &request).await {
         Ok(Some(result)) => {
-            publish_build_event(
+            publish_frontend_event(
                 &state,
-                "build_flagged",
-                serde_json::json!({
-                    "releaseId": build_id,
-                    "isFaulty": request.is_faulty,
-                    "version": result.version,
-                    "deviceType": result.device_type,
-                }),
+                FrontendMessagePayload::BuildFlagged {
+                    release_id: build_id.to_owned(),
+                    is_faulty: request.is_faulty,
+                    version: result.version,
+                    device_type: result.device_type,
+                    user_id: "".to_owned(),
+                },
             );
-            publish_alert(&state, result.alert);
+            publish_frontend_event(
+                &state,
+                FrontendMessagePayload::AlertDataPayload {
+                    level: Some(AlertLevel::Warning),
+                    subtype: Some("device-alert".to_owned()),
+                    message: result.alert,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                },
+            );
+
             (
                 response_headers,
                 Json(serde_json::json!({"id": build_id, "isFaulty": request.is_faulty})),
@@ -158,16 +185,24 @@ pub async fn delete_build(
             {
                 tracing::error!(%error, family = %target.device_family, version = %target.version, "failed to remove build IPL payload");
             }
-            publish_build_event(
+            publish_frontend_event(
                 &state,
-                "build_deleted",
-                serde_json::json!({
-                    "releaseId": build_id,
-                    "version": target.version,
-                    "deviceType": target.device_type,
-                }),
+                FrontendMessagePayload::BuildDeleted {
+                    release_id: build_id.to_owned(),
+                    version: target.version,
+                    device_type: target.device_type,
+                    user_id: "".to_owned(),
+                },
             );
-            publish_alert(&state, target.alert);
+            publish_frontend_event(
+                &state,
+                FrontendMessagePayload::AlertDataPayload {
+                    level: Some(AlertLevel::Info),
+                    subtype: Some("device-alert".to_owned()),
+                    message: target.alert,
+                    timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                },
+            );
             (response_headers, StatusCode::NO_CONTENT).into_response()
         }
         Ok(None) => error_response(
@@ -176,25 +211,6 @@ pub async fn delete_build(
             &format!("Release not found: {build_id}"),
         ),
         Err(error) => repository_error(error, "Failed to delete build"),
-    }
-}
-
-fn publish_build_event(state: &AppState, event: &str, payload: serde_json::Value) {
-    if let Err(error) = state.event_publisher.publish(ServerEvent {
-        event: event.to_owned(),
-        payload,
-        room: None,
-    }) {
-        tracing::warn!(%error, event, "failed to publish build event");
-    }
-}
-
-fn publish_alert(state: &AppState, alert: serde_json::Value) {
-    if let Err(error) = state
-        .event_publisher
-        .publish(ServerEvent::alert("device-alert", alert))
-    {
-        tracing::warn!(%error, "failed to publish build alert");
     }
 }
 

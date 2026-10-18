@@ -84,8 +84,7 @@ pub(super) async fn session(
             }
             event = events.recv() => {
                 let Ok(event) = event else { continue };
-                if event.room.as_deref() != Some(&format!("user:{user_id}"))
-                    || event.event != "test_execution_update"
+                if event.event != "test_execution_update"
                 {
                     continue;
                 }

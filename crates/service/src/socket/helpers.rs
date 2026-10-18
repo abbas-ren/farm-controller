@@ -4,14 +4,25 @@ use socketioxide::{
     extract::{SocketRef, TryData},
     layer::SocketIoLayer,
 };
+use uuid::Uuid;
 
 use crate::{
-    devices::{ControllerHeartbeat, DeviceHeartbeatResult}, socket::{
-        constants::BROWSER_BEARER_PREFIX, types::{
-            farm::{BrowserAuthorization, EventHub, NativeSocketQuery, ServerEvent}, frontend::{
-                AlertLevel, CpuMetrics, DiskMetrics, FrontendMessagePayload, MemoryMetrics, Metrics, NetworkMetrics,
+    devices::{ControllerHeartbeat, DeviceHeartbeatResult},
+    socket::{
+        constants::BROWSER_BEARER_PREFIX,
+        types::{
+            farm::{BrowserAuthorization, EventHub, NativeSocketQuery, ServerEvent},
+            frontend::{
+                Action, AlertLevel, CpuMetrics, DiskMetrics, FrontendMessagePayload, HeartbeatData,
+                InterfaceChange, MemoryMetrics, Metrics, NetworkMetrics, TestExecutionUpdateData,
+                TestExecutionUpdateType, TestStatus,
             },
         },
+    },
+    state::AppState,
+    workers::types::{
+        AssignedAction, ControllerStateTransition, DeviceState, DeviceStateTransition,
+        ExpiredRelayConfiguration,
     },
 };
 
@@ -61,7 +72,7 @@ pub(crate) fn socket_io_layer(event_hub: &EventHub) -> SocketIoLayer {
 }
 
 async fn socket_io_connect(socket: SocketRef, TryData(auth): TryData<serde_json::Value>) {
-    if let Ok(auth) = auth {
+    if let Ok(_auth) = auth {
         // Validate/authenticate `auth` here if required.
         tracing::debug!(socket_id = %socket.id, "Socket.IO client connected");
     } else {
@@ -76,6 +87,23 @@ pub(crate) fn normalize_controller_id(value: &str) -> String {
     value.trim().replace([':', '-'], "").to_lowercase()
 }
 
+pub(crate) fn publish_frontend_event(state: &AppState, payload: FrontendMessagePayload) {
+    if let Err(error) = state
+        .event_publisher
+        .publish(ServerEvent::frontend(payload))
+    {
+        tracing::warn!(%error, "failed to publish frontend event");
+    }
+}
+
+// ---------------- Socket Events ------------------
+
+pub(crate) fn build_performance_event(build_id: &str) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::BuildPerformanceUpdate {
+        build_id: build_id.to_owned(),
+    })
+}
+
 pub(crate) fn controller_heartbeat_payload(
     controller_id: String,
     heartbeat: &ControllerHeartbeat,
@@ -83,27 +111,27 @@ pub(crate) fn controller_heartbeat_payload(
     let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(heartbeat.timestamp, 0)
         .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         .unwrap_or_else(|| heartbeat.timestamp.to_string());
-    FrontendMessagePayload::EdgeControllerPing {
+    FrontendMessagePayload::DeviceControllerPing {
         controller_id,
-        timestamp,
+        timestamp: timestamp.clone(),
         metrics: Metrics {
             cpu: CpuMetrics {
-                current: heartbeat.cpu_current,
-                total: heartbeat.cpu_total,
+                current: heartbeat.cpu_current.clone(),
+                total: heartbeat.cpu_total.clone(),
                 usage_percent: heartbeat.cpu_usage_percent,
             },
             memory: MemoryMetrics {
-                used: heartbeat.memory_used,
-                total: heartbeat.memory_total,
+                used: heartbeat.memory_used.clone(),
+                total: heartbeat.memory_total.clone(),
                 usage_percent: heartbeat.memory_usage_percent,
             },
             network: NetworkMetrics {
-                upload: heartbeat.network_upload,
-                download: heartbeat.network_download,
+                upload: heartbeat.network_upload.clone(),
+                download: heartbeat.network_download.clone(),
             },
             disk: DiskMetrics {
-                used: heartbeat.disk_used,
-                total: heartbeat.disk_total,
+                used: heartbeat.disk_used.clone(),
+                total: heartbeat.disk_total.clone(),
                 usage_percent: heartbeat.disk_usage_percent,
             },
             timestamp,
@@ -113,7 +141,7 @@ pub(crate) fn controller_heartbeat_payload(
 
 pub(crate) fn device_heartbeat_events(
     device_id: &str,
-    mut result: DeviceHeartbeatResult,
+    result: DeviceHeartbeatResult,
     timestamp: &str,
 ) -> Vec<ServerEvent> {
     let mut events = Vec::new();
@@ -122,7 +150,7 @@ pub(crate) fn device_heartbeat_events(
         events.push(ServerEvent::frontend(
             FrontendMessagePayload::DeviceStateUpdate {
                 device_id: device_id.to_owned(),
-                state: result.state.clone(),
+                state: DeviceState::from(&result.state),
                 upgrading: false,
                 flashing: false,
                 changed_at: timestamp.to_owned(),
@@ -134,13 +162,28 @@ pub(crate) fn device_heartbeat_events(
         events.push(ServerEvent::frontend(
             FrontendMessagePayload::DeviceInterfaceUpdate {
                 device_id: device_id.to_owned(),
-                changes: serde_json::to_value(&result.interface_changes)
-                    .unwrap_or(serde_json::Value::Null),
-                heartbeat_data: serde_json::to_value(&result.heartbeat_data)
-                    .unwrap_or(serde_json::Value::Null),
+                changes: result
+                    .interface_changes
+                    .into_iter()
+                    .map(|change| {
+                        serde_json::from_value::<InterfaceChange>(change).unwrap_or(
+                            InterfaceChange {
+                                r#type: "".to_owned(),
+                                interface_id: None,
+                                status: "".to_owned(),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                heartbeat_data: serde_json::from_value::<HeartbeatData>(result.heartbeat_data)
+                    .unwrap_or_default(),
                 timestamp: timestamp.to_owned(),
             },
         ));
+    }
+
+    if !result.post_update_events.is_empty() {
+        events.extend(result.post_update_events.into_iter());
     }
 
     events.extend(result.alerts.into_iter().map(|alert| {
@@ -153,9 +196,13 @@ pub(crate) fn device_heartbeat_events(
     }));
 
     events.push(ServerEvent::frontend(
-        FrontendMessagePayload::EdgeHeartbeat {
-            device_id: device_id.to_owned(),
-            timestamp: timestamp.to_owned(),
+        FrontendMessagePayload::HeartbeatData {
+            device_id: Some(device_id.to_owned()),
+            controller_id: None,
+            device_controller_id: None,
+            timestamp: Some(timestamp.to_owned()),
+            status: None,
+            extra: None,
         },
     ));
 
@@ -163,4 +210,208 @@ pub(crate) fn device_heartbeat_events(
     // Do not forward their old arbitrary event names into the new typed protocol.
 
     events
+}
+
+// ---------------- build_preparation ----------------
+
+pub(crate) fn test_failure_events(
+    test_id: &str,
+    build_id: &str,
+    _user_id: &str,
+) -> Vec<ServerEvent> {
+    let mut events = vec![ServerEvent::frontend(
+        FrontendMessagePayload::TestExecution {
+            test_id: test_id.to_owned(),
+            r#type: TestExecutionUpdateType::Status,
+            data: TestExecutionUpdateData {
+                status: Some(TestStatus::Failed),
+                message: Some("Test failed".to_owned()),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                cancel_requested: Some(false),
+                phase: Some("execution".to_owned()),
+                rtos_log_path: None,
+            },
+        },
+    )];
+    events.push(ServerEvent::frontend(
+        FrontendMessagePayload::TestExecutionUpdate {
+            test_id: test_id.to_owned(),
+            build_id: Some(build_id.to_owned()),
+            status: Some(TestStatus::Failed),
+            progress: None,
+            message: None,
+            cancel_requested: Some(false),
+        },
+    ));
+    events.push(build_performance_event(build_id));
+
+    events
+}
+
+pub(crate) fn build_failure_event(
+    release_id: uuid::Uuid,
+    device_id: Option<&str>,
+    device_type: &str,
+    version: Option<&str>,
+    user_id: &str,
+) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::BuildStatusChanged {
+        release_id,
+        status: "failed".to_owned(),
+        is_faulty: true,
+        device_id: device_id.map(|s| s.to_owned()),
+        device_type: device_type.to_owned(),
+        version: version.map(|s| s.to_owned()),
+        user_id: user_id.to_owned(),
+    })
+}
+
+// ------------- device_action ---------------
+
+pub(crate) fn assignment_events(assigned: &AssignedAction) -> Vec<ServerEvent> {
+    let mut events = vec![device_state_event(&assigned.device_id, DeviceState::Busy)];
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        let build_id = assigned.action.build_id.as_deref().unwrap_or_default();
+        let owner = assigned
+            .action
+            .created_by
+            .as_deref()
+            .unwrap_or(&assigned.action.user_id);
+        events.push(test_status_event(test_id, TestStatus::InProgress, owner));
+        events.push(test_build_event(test_id, build_id, "in_progress"));
+        events.push(build_performance_event(build_id));
+    } else if let Some(release_id) = assigned.action.release_id {
+        events.push(build_status_event(assigned, release_id, "testing", false));
+    }
+    events
+}
+
+pub(crate) fn dispatch_failure_events(assigned: &AssignedAction, error: &str) -> Vec<ServerEvent> {
+    let mut events = vec![device_state_event(&assigned.device_id, DeviceState::Free)];
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        let build_id = assigned.action.build_id.as_deref().unwrap_or_default();
+        let owner = assigned
+            .action
+            .created_by
+            .as_deref()
+            .unwrap_or(&assigned.action.user_id);
+        let mut status = test_status_event(test_id, TestStatus::Failed, owner);
+        status.payload["data"]["message"] = serde_json::Value::String(error.to_owned());
+        events.push(status);
+        events.push(test_build_event(test_id, build_id, "failed"));
+        events.push(build_performance_event(build_id));
+    } else if let Some(release_id) = assigned.action.release_id {
+        events.push(build_status_event(assigned, release_id, "failed", true));
+    }
+    events
+}
+
+pub(crate) fn device_state_event(device_id: &str, state: DeviceState) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::DeviceStateUpdate {
+        device_id: device_id.to_owned(),
+        state,
+        upgrading: false,
+        flashing: false,
+        changed_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+pub(crate) fn test_status_event(test_id: &str, status: TestStatus, _user_id: &str) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::TestExecution {
+        test_id: test_id.to_owned(),
+        r#type: TestExecutionUpdateType::Status,
+        data: TestExecutionUpdateData {
+            status: Some(status),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            cancel_requested: None,
+            phase: None,
+            rtos_log_path: None,
+            message: None,
+        },
+    })
+}
+
+pub(crate) fn test_build_event(test_id: &str, build_id: &str, status: &str) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::TestExecutionUpdate {
+        build_id: Some(build_id.to_owned()),
+        test_id: test_id.to_owned(),
+        status: Some(TestStatus::from(status)),
+        progress: None,
+        message: None,
+        cancel_requested: None,
+    })
+}
+
+pub(crate) fn build_status_event(
+    assigned: &AssignedAction,
+    release_id: Uuid,
+    status: &str,
+    is_faulty: bool,
+) -> ServerEvent {
+    ServerEvent::frontend(FrontendMessagePayload::BuildStatusChanged {
+        release_id,
+        status: status.to_owned(),
+        is_faulty: is_faulty,
+        device_id: Some(assigned.device_id.to_owned()),
+        device_type: assigned.action.device_type.to_owned(),
+        version: assigned.action.version.clone(),
+        user_id: assigned.action.user_id.to_owned(),
+    })
+}
+
+// ---------------- device_heartbeat ------------------
+
+pub(crate) fn transition_events(transition: &DeviceStateTransition) -> [ServerEvent; 2] {
+    [
+        ServerEvent::frontend(FrontendMessagePayload::DeviceStateUpdate {
+            device_id: transition.device_id.clone(),
+            state: transition.state.clone(),
+            upgrading: false,
+            flashing: false,
+            changed_at: chrono::Utc::now().to_rfc3339(),
+        }),
+        ServerEvent::frontend(FrontendMessagePayload::AlertDataPayload {
+            level: Some(AlertLevel::Warning),
+            subtype: None,
+            message: serde_json::json!({"alert": "device alert"}),
+            timestamp: Some(chrono::Utc::now().to_rfc3339()),
+        }),
+    ]
+}
+
+// ---------------- device_controller ------------------
+
+pub(crate) fn controller_timeout_events(
+    transition: &ControllerStateTransition,
+) -> [ServerEvent; 2] {
+    [
+        ServerEvent::frontend(FrontendMessagePayload::DeviceControllerChanged {
+            action: Action::Updated,
+            controller_id: transition.controller_id.clone(),
+        }),
+        ServerEvent::frontend(FrontendMessagePayload::AlertDataPayload {
+            level: Some(AlertLevel::Critical),
+            subtype: None,
+            message: transition.alert.clone(),
+            timestamp: Some(chrono::Utc::now().to_rfc3339()),
+        }),
+    ]
+}
+
+// ---------------- relay_service ------------------
+
+pub(crate) fn relay_timeout_event(pending: &ExpiredRelayConfiguration) -> ServerEvent {
+    let message = format!(
+        "Configuration timed out for device {} on channel {}",
+        pending.device_mac, pending.channel_number
+    );
+    ServerEvent::frontend(FrontendMessagePayload::RelayConfigurationStatus {
+        relay_id: pending.relay_id,
+        controller_id: pending.controller_id.as_deref().map(str::to_owned),
+        status: "failed".to_owned(),
+        total: 1,
+        completed: 0,
+        errors: vec![message.clone()],
+        message: Some(message),
+    })
 }

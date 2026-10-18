@@ -5,35 +5,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     devices::EDGE_CONTROLLER_PORT,
-    events::{ServerEvent, build_performance_events},
+    socket::{
+        helpers::{device_state_event, test_failure_events},
+        types::farm::ServerEvent,
+    },
     state::AppState,
+    workers::types::{DeviceState, FailedTest, StuckDevice, WatchdogDecision, WatchdogTransition},
 };
-
-#[derive(Debug, sqlx::FromRow)]
-struct StuckDevice {
-    device_id: String,
-    attempted_at: Option<DateTime<Utc>>,
-    controller_ip: Option<String>,
-    power_port: Option<String>,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct FailedTest {
-    test_id: String,
-    build_id: Option<String>,
-    user_id: Option<String>,
-}
-
-enum WatchdogDecision {
-    Reboot,
-    Wait,
-    Fail,
-}
-
-struct WatchdogTransition {
-    reboot: Option<(String, String)>,
-    events: Vec<ServerEvent>,
-}
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
@@ -352,7 +330,7 @@ async fn fail_stuck_device(
         .execute(&mut **transaction)
         .await
         .map_err(|error| error.to_string())?;
-    let mut events = vec![device_state_event(&device.device_id)];
+    let mut events = vec![device_state_event(&device.device_id, DeviceState::Free)];
     for test in tests {
         events.extend(test_failure_events(
             &test.test_id,
@@ -405,37 +383,6 @@ fn watchdog_decision(
     }
 }
 
-fn device_state_event(device_id: &str) -> ServerEvent {
-    ServerEvent {
-        event: "device_state_update".to_owned(),
-        payload: serde_json::json!({
-            "deviceId": device_id, "state": "free", "upgrading": false,
-            "flashing": false, "changedAt": Utc::now().to_rfc3339(),
-        }),
-        room: None,
-    }
-}
-
-fn test_failure_events(test_id: &str, build_id: &str, user_id: &str) -> Vec<ServerEvent> {
-    let mut events = vec![
-        ServerEvent {
-            event: "test_execution".to_owned(),
-            payload: serde_json::json!({
-                "testId": test_id, "type": "status",
-                "data": {"status": "failed", "timestamp": Utc::now().to_rfc3339()},
-            }),
-            room: Some(format!("user:{user_id}")),
-        },
-        ServerEvent {
-            event: "test_execution_update".to_owned(),
-            payload: serde_json::json!({"testId": test_id, "buildId": build_id, "status": "failed"}),
-            room: Some(format!("build:{build_id}")),
-        },
-    ];
-    events.extend(build_performance_events(build_id));
-    events
-}
-
 fn record_failure(state: &AppState, error: &str, message: &str) {
     state
         .metrics
@@ -476,15 +423,10 @@ mod tests {
 
     #[test]
     fn watchdog_failure_events_refresh_device_owner_and_build() {
-        let device = device_state_event("device-1");
+        let device = device_state_event("device-1", DeviceState::Free);
         let tests = test_failure_events("test-1", "build-1", "user-1");
-        assert_eq!(device.payload["state"], "free");
+        assert_eq!(device.payload["state"], DeviceState::Free.to_string());
         assert_eq!(device.payload["upgrading"], false);
-        assert_eq!(tests[0].room.as_deref(), Some("user:user-1"));
         assert_eq!(tests[1].payload["status"], "failed");
-        assert_eq!(tests[1].room.as_deref(), Some("build:build-1"));
-        assert_eq!(tests[2].room.as_deref(), Some("dashboard:admin"));
-        assert_eq!(tests[3].room.as_deref(), Some("dashboard:user"));
-        assert_eq!(tests[4].room.as_deref(), Some("build:build-1"));
     }
 }

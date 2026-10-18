@@ -190,7 +190,6 @@ async fn build_list_requires_auth_and_preserves_frontend_shape() {
             let progress = events.recv().await.unwrap();
             assert_eq!(progress.event, "upload_progress");
             assert_eq!(progress.payload["percent"], 0);
-            assert_eq!(progress.room.as_deref(), Some("user:system"));
             let progress = events.recv().await.unwrap();
             assert_eq!(progress.event, "upload_progress");
             assert_eq!(progress.payload["percent"], 100);
@@ -425,7 +424,6 @@ async fn tus_upload_preserves_offsets_and_protocol_headers() {
         assert_eq!(received.event, event);
         if let Some(percent) = percent {
             assert_eq!(received.payload["percent"], percent);
-            assert_eq!(received.room.as_deref(), Some("user:user-1"));
         }
         if event == "build_uploaded" {
             assert_eq!(received.payload["buildType"], "custom");
@@ -536,7 +534,6 @@ async fn tus_upload_preserves_offsets_and_protocol_headers() {
             assert_eq!(received.payload["percent"], percent);
         } else {
             assert_eq!(received.payload["message"], "upload processing failed");
-            assert_eq!(received.room.as_deref(), Some("user:user-1"));
         }
     }
     let response = app

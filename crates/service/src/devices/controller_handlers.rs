@@ -3,7 +3,9 @@ use std::sync::Arc;
 use super::callbacks::callback_client;
 use super::*;
 use crate::error::ErrorResponse;
-use crate::{auth, events::ServerEvent, state::AppState};
+use crate::socket::types::farm::ServerEvent;
+use crate::socket::types::frontend::{Action, FrontendMessagePayload};
+use crate::{auth, state::AppState};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -234,14 +236,12 @@ pub async fn delete_controller(
 }
 
 pub(super) fn publish_controller_changed(state: &AppState, action: &str, controller_id: &str) {
-    if let Err(error) = state.event_publisher.publish(ServerEvent {
-        event: "device_controller_changed".to_owned(),
-        payload: serde_json::json!({
-            "action": action,
-            "controllerId": controller_id,
-        }),
-        room: None,
-    }) {
+    if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+        FrontendMessagePayload::DeviceControllerChanged {
+            action: Action::from(action),
+            controller_id: controller_id.to_string(),
+        },
+    )) {
         tracing::warn!(%error, action, controller_id, "failed to publish controller change");
     }
 }
