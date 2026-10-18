@@ -61,23 +61,23 @@ pub enum FrontendMessagePayload {
         timestamp: Option<String>,
     },
 
-    #[serde(rename = "user_data")]
+    #[serde(rename = "userData")]
     UserDataPayload {
         method: String,
         message: serde_json::Value,
         timestamp: Option<String>,
     },
 
-    #[serde(rename = "ssh_input")]
+    #[serde(rename = "sshInput")]
     SshInputPayload {
         // stream: StreamKind,
         chunk: String,
     },
 
-    #[serde(rename = "ssh_output")]
+    #[serde(rename = "sshOutput")]
     SshOutputPayload { stream: StreamKind, chunk: String },
 
-    #[serde(rename = "device_state_update")]
+    #[serde(rename = "deviceStateUpdate")]
     DeviceStateUpdate {
         device_id: String,
         state: DeviceState,
@@ -86,27 +86,27 @@ pub enum FrontendMessagePayload {
         changed_at: String,
     },
 
-    #[serde(rename = "device_power_update")]
+    #[serde(rename = "devicePowerUpdate")]
     DevicePowerUpdate {
         device_id: String,
         power: DevicePower,
         changed_at: String,
     },
 
-    #[serde(rename = "device_controller_changed")]
+    #[serde(rename = "deviceControllerChanged")]
     DeviceControllerChanged {
         action: Action,
         controller_id: String,
     },
 
-    #[serde(rename = "test_execution")]
+    #[serde(rename = "testExecution")]
     TestExecution {
         test_id: String,
         r#type: TestExecutionUpdateType,
         data: TestExecutionUpdateData,
     },
 
-    #[serde(rename = "build_test_execution_update")]
+    #[serde(rename = "buildTestExecutionUpdate")]
     BuildTestExecutionUpdate {
         test_id: String,
         build_id: String,
@@ -114,7 +114,7 @@ pub enum FrontendMessagePayload {
         status: Option<String>,
     },
 
-    #[serde(rename = "test_execution_update")]
+    #[serde(rename = "testExecutionUpdate")]
     TestExecutionUpdate {
         build_id: Option<String>,
         test_id: String,
@@ -124,10 +124,10 @@ pub enum FrontendMessagePayload {
         cancel_requested: Option<bool>,
     },
 
-    #[serde(rename = "build_performance_update")]
+    #[serde(rename = "buildPerformanceUpdate")]
     BuildPerformanceUpdate { build_id: String },
 
-    #[serde(rename = "build_status_changed")]
+    #[serde(rename = "buildStatusChanged")]
     BuildStatusChanged {
         release_id: Uuid,
         status: String,
@@ -138,7 +138,7 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "build_uploaded")]
+    #[serde(rename = "buildUploaded")]
     BuildUploaded {
         release_id: String,
         version: String,
@@ -147,7 +147,7 @@ pub enum FrontendMessagePayload {
         build_type: String,
     },
 
-    #[serde(rename = "build_deleted")]
+    #[serde(rename = "buildDeleted")]
     BuildDeleted {
         release_id: String,
         version: String,
@@ -155,7 +155,7 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "build_flagged")]
+    #[serde(rename = "buildFlagged")]
     BuildFlagged {
         release_id: String,
         is_faulty: bool,
@@ -164,20 +164,20 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "upload_progress")]
+    #[serde(rename = "uploadProgress")]
     UploadProgress { upload_id: String, percent: u64 },
 
-    #[serde(rename = "upload_error")]
+    #[serde(rename = "uploadError")]
     UploadError { upload_id: String, message: String },
 
-    #[serde(rename = "upload_complete")]
+    #[serde(rename = "uploadComplete")]
     UploadComplete {
         upload_id: String,
         file_name: String,
         tag: Option<String>,
     },
 
-    #[serde(rename = "relay_configuration_status")]
+    #[serde(rename = "relayConfigurationStatus")]
     RelayConfigurationStatus {
         relay_id: Option<uuid::Uuid>,
         controller_id: Option<String>,
@@ -188,7 +188,7 @@ pub enum FrontendMessagePayload {
         message: Option<String>,
     },
 
-    #[serde(rename = "rtos_log")]
+    #[serde(rename = "rtosLog")]
     RtosLogPayload {
         test_id: String,
         build_id: Option<String>,
@@ -196,19 +196,19 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "device_controller_ping")]
+    #[serde(rename = "deviceControllerPing")]
     DeviceControllerPing {
         controller_id: String,
         timestamp: String,
         metrics: Metrics,
     },
-    #[serde(rename = "device_ping")]
+    #[serde(rename = "devicePing")]
     DevicePingPayload {
         device_id: String,
         timestamp: String,
     },
 
-    #[serde(rename = "device_interface_update")]
+    #[serde(rename = "deviceInterfaceUpdate")]
     DeviceInterfaceUpdate {
         device_id: String,
         changes: Vec<InterfaceChange>,
@@ -216,7 +216,7 @@ pub enum FrontendMessagePayload {
         timestamp: String,
     },
 
-    #[serde(rename = "execution_report_update")]
+    #[serde(rename = "executionReportUpdate")]
     ExecutionReportUpdate {
         test_execution_id: Option<String>,
         status: Option<ReportStatus>,
@@ -275,7 +275,7 @@ pub struct DiskMetrics {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum TestExecutionUpdateType {
     Status,
     Log,
@@ -286,7 +286,7 @@ pub enum TestExecutionUpdateType {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "data", rename_all = "snake_case")]
+#[serde(tag = "data", rename_all = "camelCase")]
 pub struct TestExecutionUpdateData {
     pub status: Option<TestStatus>,
     pub message: Option<String>,
@@ -297,7 +297,7 @@ pub struct TestExecutionUpdateData {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum TestStatus {
     NotExecuted,
     InProgress,
@@ -324,7 +324,7 @@ impl From<&str> for TestStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum DevicePower {
     On,
     Off,
