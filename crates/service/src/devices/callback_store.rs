@@ -119,7 +119,7 @@ pub(crate) async fn confirm_flash(
         SELECT id, "targetDeviceId", "testId"
         FROM device_action_queue
         WHERE lower("deviceType") = lower($1)
-          AND status = 'waiting' AND "iplFlashConfirm" IS NULL
+          AND status = 'waiting' AND ("iplFlashConfirm" = false OR "iplFlashConfirm" IS NULL)
         ORDER BY "createdAt" ASC
         LIMIT 1 FOR UPDATE SKIP LOCKED
         "#,
