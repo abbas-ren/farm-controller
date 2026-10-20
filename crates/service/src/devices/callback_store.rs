@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::devices::{FlashExecutionProgress, IplFlashingStatus};
@@ -107,6 +108,10 @@ pub(crate) async fn confirm_flash(
     device_type: &str,
     flashing_status: &IplFlashingStatus,
 ) -> Result<FlashConfirmationResult, DeviceRepositoryError> {
+    info!(
+        "\nStarting flash confirmation for device_type: {}, flashing_status: {:?}\n",
+        device_type, flashing_status
+    );
     let mut transaction = pool.begin().await?;
     let mut result = FlashConfirmationResult::default();
     let job = sqlx::query_as::<_, (Uuid, Option<String>, Option<String>)>(
@@ -125,6 +130,10 @@ pub(crate) async fn confirm_flash(
     if let Some((job_id, device_id, test_id)) = job {
         match flashing_status.status {
             CallbackStatus::Success => {
+                info!(
+                    "\nFlash confirmation success received for job_id: {}\n",
+                    job_id
+                );
                 if flashing_status.completed {
                     sqlx::query(
                         r#"
@@ -165,6 +174,10 @@ pub(crate) async fn confirm_flash(
                         .fetch_optional(&mut *transaction)
                         .await?
                 {
+                    info!(
+                        "\nUpdating flash execution progress for test_id: {}, build_id: {}\n",
+                        test_id, build_id
+                    );
                     result.progress = Some(FlashExecutionProgress {
                         test_id: test_id.to_owned(),
                         build_id: build_id.to_owned(),
@@ -176,6 +189,10 @@ pub(crate) async fn confirm_flash(
                 }
             }
             CallbackStatus::Failure => {
+                info!(
+                    "\nFlash confirmation failure received for job_id: {}\n",
+                    job_id
+                );
                 sqlx::query(
                     r#"
                     UPDATE device_action_queue
@@ -219,6 +236,7 @@ pub(crate) async fn confirm_flash(
                     .await?;
                 }
                 if let Some(device_id) = device_id {
+                    info!("\nReleasing device with device_id: {}\n", device_id);
                     let freed = sqlx::query_scalar::<_, String>(
                         r#"
                         UPDATE devices SET state = 'free', "stateUpdatedAt" = now(),

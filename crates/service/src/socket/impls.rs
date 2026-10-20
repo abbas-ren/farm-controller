@@ -1,3 +1,4 @@
+use serde::Serialize;
 use socketioxide::SocketIo;
 use std::sync::OnceLock;
 use tracing::info;
@@ -11,9 +12,15 @@ use crate::socket::types::{
 
 impl ServerEvent {
     pub(crate) fn frontend(payload: FrontendMessagePayload) -> Self {
+        let payload =
+            serde_json::to_value(&payload).expect("frontend payload must be serializable");
+        let event_name = payload
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .expect("event field must be a string");
         Self {
-            event: "frontend".to_owned(),
-            payload: serde_json::to_value(payload).expect("general payload must be serializable"),
+            event: event_name.to_owned(),
+            payload,
         }
     }
 
@@ -66,7 +73,7 @@ impl EventHub {
         info!("Publishing event: {}", event_name);
         if let Some(socket_io) = self.socket_io.get() {
             for socket in socket_io.sockets() {
-                if let Err(error) = socket.emit(&event.event, &event) {
+                if let Err(error) = socket.emit(&event.event, &event.payload) {
                     tracing::debug!(%error, event = event.event, "Socket.IO client emit failed");
                 }
             }

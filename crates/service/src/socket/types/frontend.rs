@@ -43,7 +43,7 @@ impl From<&str> for Action {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FrontendMessagePayload {
-    #[serde(rename = "heartbeat")]
+    #[serde(rename = "heartbeat", rename_all = "camelCase")]
     HeartbeatData {
         device_id: Option<String>,
         controller_id: Option<String>,
@@ -53,7 +53,7 @@ pub enum FrontendMessagePayload {
         extra: Option<serde_json::Value>,
     },
 
-    #[serde(rename = "alert")]
+    #[serde(rename = "alert", rename_all = "camelCase")]
     AlertDataPayload {
         level: Option<AlertLevel>,
         subtype: Option<String>,
@@ -61,23 +61,23 @@ pub enum FrontendMessagePayload {
         timestamp: Option<String>,
     },
 
-    #[serde(rename = "userData")]
+    #[serde(rename = "userData", rename_all = "camelCase")]
     UserDataPayload {
         method: String,
         message: serde_json::Value,
         timestamp: Option<String>,
     },
 
-    #[serde(rename = "sshInput")]
+    #[serde(rename = "sshInput", rename_all = "camelCase")]
     SshInputPayload {
         // stream: StreamKind,
         chunk: String,
     },
 
-    #[serde(rename = "sshOutput")]
+    #[serde(rename = "sshOutput", rename_all = "camelCase")]
     SshOutputPayload { stream: StreamKind, chunk: String },
 
-    #[serde(rename = "deviceStateUpdate")]
+    #[serde(rename = "deviceStateUpdate", rename_all = "camelCase")]
     DeviceStateUpdate {
         device_id: String,
         state: DeviceState,
@@ -86,27 +86,27 @@ pub enum FrontendMessagePayload {
         changed_at: String,
     },
 
-    #[serde(rename = "devicePowerUpdate")]
+    #[serde(rename = "devicePowerUpdate", rename_all = "camelCase")]
     DevicePowerUpdate {
         device_id: String,
         power: DevicePower,
         changed_at: String,
     },
 
-    #[serde(rename = "deviceControllerChanged")]
+    #[serde(rename = "deviceControllerChanged", rename_all = "camelCase")]
     DeviceControllerChanged {
         action: Action,
         controller_id: String,
     },
 
-    #[serde(rename = "testExecution")]
+    #[serde(rename = "testExecution", rename_all = "camelCase")]
     TestExecution {
         test_id: String,
         r#type: TestExecutionUpdateType,
         data: TestExecutionUpdateData,
     },
 
-    #[serde(rename = "buildTestExecutionUpdate")]
+    #[serde(rename = "buildTestExecutionUpdate", rename_all = "camelCase")]
     BuildTestExecutionUpdate {
         test_id: String,
         build_id: String,
@@ -114,7 +114,7 @@ pub enum FrontendMessagePayload {
         status: Option<String>,
     },
 
-    #[serde(rename = "testExecutionUpdate")]
+    #[serde(rename = "testExecutionUpdate", rename_all = "camelCase")]
     TestExecutionUpdate {
         build_id: Option<String>,
         test_id: String,
@@ -124,10 +124,10 @@ pub enum FrontendMessagePayload {
         cancel_requested: Option<bool>,
     },
 
-    #[serde(rename = "buildPerformanceUpdate")]
+    #[serde(rename = "buildPerformanceUpdate", rename_all = "camelCase")]
     BuildPerformanceUpdate { build_id: String },
 
-    #[serde(rename = "buildStatusChanged")]
+    #[serde(rename = "buildStatusChanged", rename_all = "camelCase")]
     BuildStatusChanged {
         release_id: Uuid,
         status: String,
@@ -138,7 +138,7 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "buildUploaded")]
+    #[serde(rename = "buildUploaded", rename_all = "camelCase")]
     BuildUploaded {
         release_id: String,
         version: String,
@@ -147,7 +147,7 @@ pub enum FrontendMessagePayload {
         build_type: String,
     },
 
-    #[serde(rename = "buildDeleted")]
+    #[serde(rename = "buildDeleted", rename_all = "camelCase")]
     BuildDeleted {
         release_id: String,
         version: String,
@@ -155,7 +155,7 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "buildFlagged")]
+    #[serde(rename = "buildFlagged", rename_all = "camelCase")]
     BuildFlagged {
         release_id: String,
         is_faulty: bool,
@@ -164,20 +164,20 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "uploadProgress")]
+    #[serde(rename = "uploadProgress", rename_all = "camelCase")]
     UploadProgress { upload_id: String, percent: u64 },
 
-    #[serde(rename = "uploadError")]
+    #[serde(rename = "uploadError", rename_all = "camelCase")]
     UploadError { upload_id: String, message: String },
 
-    #[serde(rename = "uploadComplete")]
+    #[serde(rename = "uploadComplete", rename_all = "camelCase")]
     UploadComplete {
         upload_id: String,
         file_name: String,
         tag: Option<String>,
     },
 
-    #[serde(rename = "relayConfigurationStatus")]
+    #[serde(rename = "relayConfigurationStatus", rename_all = "camelCase")]
     RelayConfigurationStatus {
         relay_id: Option<uuid::Uuid>,
         controller_id: Option<String>,
@@ -188,7 +188,7 @@ pub enum FrontendMessagePayload {
         message: Option<String>,
     },
 
-    #[serde(rename = "rtosLog")]
+    #[serde(rename = "rtosLog", rename_all = "camelCase")]
     RtosLogPayload {
         test_id: String,
         build_id: Option<String>,
@@ -196,19 +196,19 @@ pub enum FrontendMessagePayload {
         user_id: String,
     },
 
-    #[serde(rename = "deviceControllerPing")]
+    #[serde(rename = "deviceControllerPing", rename_all = "camelCase")]
     DeviceControllerPing {
         controller_id: String,
         timestamp: String,
         metrics: Metrics,
     },
-    #[serde(rename = "devicePing")]
+    #[serde(rename = "devicePing", rename_all = "camelCase")]
     DevicePingPayload {
         device_id: String,
         timestamp: String,
     },
 
-    #[serde(rename = "deviceInterfaceUpdate")]
+    #[serde(rename = "deviceInterfaceUpdate", rename_all = "camelCase")]
     DeviceInterfaceUpdate {
         device_id: String,
         changes: Vec<InterfaceChange>,
@@ -216,7 +216,7 @@ pub enum FrontendMessagePayload {
         timestamp: String,
     },
 
-    #[serde(rename = "executionReportUpdate")]
+    #[serde(rename = "executionReportUpdate", rename_all = "camelCase")]
     ExecutionReportUpdate {
         test_execution_id: Option<String>,
         status: Option<ReportStatus>,

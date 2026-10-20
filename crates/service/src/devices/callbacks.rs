@@ -284,6 +284,7 @@ async fn flash_confirmation_response(
         .await
     {
         Ok(result) => {
+            info!("\nFlash confirmation result received: {:?}\n", result);
             if let Some(execution) = result.cancelled_execution {
                 let test_id = execution.test_id;
                 // let created_by = execution.created_by;
@@ -342,7 +343,10 @@ async fn flash_confirmation_response(
             })
             .into_response()
         }
-        Err(error) => repository_error(error, "Callback failed"),
+        Err(error) => {
+            tracing::error!(%error, "Callback failed");
+            repository_error(error, "Callback failed")
+        }
     }
 }
 
