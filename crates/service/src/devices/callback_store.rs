@@ -135,16 +135,29 @@ pub(crate) async fn confirm_flash(
                     job_id
                 );
                 if flashing_status.completed {
-                    sqlx::query(
+                    if let Some((tid,)) = sqlx::query_as::<_, (String,)>(
                         r#"
                         UPDATE device_action_queue
                         SET "iplFlashConfirm" = true, "updatedAt" = now()
-                        WHERE id = $1
+                        WHERE id = $1 RETURNING "testId"::text
                         "#,
                     )
                     .bind(job_id)
-                    .execute(&mut *transaction)
-                    .await?;
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    {
+                        info!("Updated device_action_queue for job_id: {}", job_id);
+                        // sqlx::query(
+                        //     r#"UPDATE test_executions
+                        //     SET "executionPhase" = 'REQUEUE_AFTER_IPL_CONFIRMATION',
+                        //         "updatedAt" = now()
+                        //     WHERE "testId" = $1"#,
+                        // )
+                        // .bind(tid)
+                        // .execute(&mut *transaction)
+                        // .await?;
+                    }
+
                     if let Some(test_id) = test_id.as_deref() {
                         sqlx::query(
                             r#"INSERT INTO log_entries

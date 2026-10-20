@@ -1,6 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 use crate::{
     devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
@@ -15,6 +16,7 @@ use crate::{
 use super::test_preconditions;
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
+    info!(worker = "device_action", "worker started");
     let mut interval = tokio::time::interval(Duration::from_secs(
         state.config.workers.device_action_poll_seconds,
     ));
@@ -32,15 +34,20 @@ async fn run_cycle(state: &AppState) {
     for _ in 0..state.config.workers.device_action_batch_size {
         let assigned = match assign_next(state).await {
             Ok(Some(assigned)) => assigned,
-            Ok(None) => break,
-            Err(error) => {
-                record_failure(state, &error, "failed to assign queued action");
+            Ok(None) => {
+                info!(worker = "device_action", "no queued actions available");
+                break;
+            }
+            Err(err) => {
+                error!(%err, worker = "device_action", "failed to assign queued action");
+                record_failure(state, &err, "failed to assign queued action");
                 break;
             }
         };
         for event in assignment_events(&assigned) {
             let _ = state.event_publisher.publish(event);
         }
+        info!(action_id = %assigned.action.id, worker = "device_action", "dispatching action");
         match dispatch(state, &assigned).await {
             Ok(()) => {
                 state.metrics.record_worker_items("device_action", 1);
