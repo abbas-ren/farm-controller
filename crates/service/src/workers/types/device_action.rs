@@ -32,6 +32,9 @@ pub struct QueuedAction {
     pub build_id: Option<String>,
     pub build_version: Option<String>,
     pub created_by: Option<String>,
+    /// Insert time; equal to `updated_at` until the first wait/assign touch.
+    #[sea_orm(alias = "createdAt")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
     /// Used to throttle "waiting for device" frontend logs.
     #[sea_orm(alias = "updatedAt")]
     pub updated_at: chrono::DateTime<chrono::Utc>,

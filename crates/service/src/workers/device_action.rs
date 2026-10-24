@@ -150,6 +150,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
         .column(device_action_queue::Column::Mode)
         .column(device_action_queue::Column::TargetDeviceId)
         .column(device_action_queue::Column::IplFlashConfirm)
+        .column(device_action_queue::Column::CreatedAt)
         .column(device_action_queue::Column::UpdatedAt)
         .column_as(test_execution::Column::BuildId, "build_id")
         .column_as(test_execution::Column::BuildVersion, "build_version")
@@ -314,33 +315,10 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
     }
 
     let Some((device_id, ip_address)) = selected else {
-        // Keep the job queued but surface why we skipped this tick (Node logs wait reasons).
-        let now = chrono::Utc::now();
-        device_action_queue::Entity::update_many()
-            .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
-            .filter(device_action_queue::Column::Id.eq(action.id))
-            .exec(&transaction)
-            .await?;
-        transaction.commit().await?;
-        // Throttle UI logs to ~30s so a 1s poll does not spam waiting messages.
-        let should_log_wait = chrono::Utc::now()
-            .signed_duration_since(action.updated_at)
-            .num_seconds()
-            >= 30;
-        if should_log_wait
-            && let Some(test_id) = action.test_id.as_deref()
-        {
-            let message = format!(
-                "Waiting for a free {} device that satisfies test preconditions",
-                action.device_type
-            );
-            if let Err(error) =
-                crate::devices::test_log::append_test_log(state, test_id, &message).await
-            {
-                tracing::warn!(%error, %test_id, "failed to append device-wait log");
-            }
-        }
-        return Ok(None);
+        // No free device this tick. Distinguish "none compatible ever" (fail) from
+        // "compatible but busy" (wait). Do NOT bump updated_at every poll — that reset
+        // the 30s wait-log throttle so UI stayed silent after "added to queue".
+        return handle_no_free_device(state, transaction, &action, confirmed).await;
     };
 
     // Official / faulty release gates (Node DeviceActionQueueService post-assign checks).
@@ -676,6 +654,227 @@ async fn evaluate_release_gate(
     }
     let _ = test_id;
     Ok(None)
+}
+
+/// Handle assign tick when no free eligible device was claimed.
+///
+/// Parity with Node `ensureQueuedTestsHaveEligibleDevices`: fail the test when no
+/// approved device can ever satisfy preconditions; otherwise keep queued and
+/// throttle UI wait logs to ~30s using `updated_at` as the last-log watermark.
+async fn handle_no_free_device(
+    state: &AppState,
+    transaction: sea_orm::DatabaseTransaction,
+    action: &QueuedAction,
+    confirmed: bool,
+) -> Result<Option<AssignedAction>, sea_orm::DbErr> {
+    let approved = device::Entity::find()
+        .filter(device::Column::DeviceType.eq(&action.device_type))
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(device::Column::IpAddress.is_not_null())
+        .select_only()
+        .column(device::Column::DeviceId)
+        .column(device::Column::State)
+        .into_tuple::<(String, Option<device::DeviceState>)>()
+        .all(&transaction)
+        .await?;
+
+    let approved_ids: Vec<String> = if matches!(
+        action.mode,
+        device_action_queue::QueueDispatchMode::DeviceSpecific
+    ) || confirmed
+    {
+        let Some(target) = action.target_device_id.as_deref() else {
+            transaction.rollback().await?;
+            if let Some(test_id) = action.test_id.as_deref() {
+                fail_unmet_conditions(
+                    state,
+                    action,
+                    test_id,
+                    "Conditions not met - target device is missing",
+                )
+                .await?;
+            }
+            return Ok(None);
+        };
+        approved
+            .into_iter()
+            .filter(|(id, _)| id == target)
+            .map(|(id, _)| id)
+            .collect()
+    } else {
+        approved.into_iter().map(|(id, _)| id).collect()
+    };
+
+    if approved_ids.is_empty() {
+        transaction.rollback().await?;
+        if let Some(test_id) = action.test_id.as_deref() {
+            let message = if matches!(
+                action.mode,
+                device_action_queue::QueueDispatchMode::DeviceSpecific
+            ) || confirmed
+            {
+                format!(
+                    "Conditions not met - target device {} is not approved/available",
+                    action.target_device_id.as_deref().unwrap_or("unknown")
+                )
+            } else {
+                format!(
+                    "Conditions not met - no approved {} devices available",
+                    action.device_type
+                )
+            };
+            fail_unmet_conditions(state, action, test_id, &message).await?;
+        }
+        return Ok(None);
+    }
+
+    // Any approved device that satisfies preconditions (free or busy) keeps the job queued.
+    let mut has_compatible = confirmed || action.test_id.is_none();
+    if !has_compatible
+        && let Some(test_id) = action.test_id.as_deref()
+    {
+        for device_id in &approved_ids {
+            if test_preconditions::device_satisfies(&transaction, device_id, test_id).await? {
+                has_compatible = true;
+                break;
+            }
+        }
+        if !has_compatible {
+            transaction.rollback().await?;
+            fail_unmet_conditions(
+                state,
+                action,
+                test_id,
+                "Conditions not met - no approved device satisfies test preconditions",
+            )
+            .await?;
+            return Ok(None);
+        }
+    }
+
+    // Compatible device(s) exist but none are free right now — wait, throttle UI logs.
+    // Log immediately once (updated_at still ≈ created_at), then at most every ~30s.
+    let now = chrono::Utc::now();
+    let age_secs = now.signed_duration_since(action.updated_at).num_seconds();
+    let first_wait = action
+        .updated_at
+        .signed_duration_since(action.created_at)
+        .num_seconds()
+        .abs()
+        < 2;
+    let should_log_wait = first_wait || age_secs >= 30;
+    if should_log_wait {
+        device_action_queue::Entity::update_many()
+            .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(device_action_queue::Column::Id.eq(action.id))
+            .exec(&transaction)
+            .await?;
+        transaction.commit().await?;
+        if let Some(test_id) = action.test_id.as_deref() {
+            let message = format!(
+                "Waiting for a free {} device that satisfies test preconditions ({} approved)",
+                action.device_type,
+                approved_ids.len()
+            );
+            if let Err(error) =
+                crate::devices::test_log::append_test_log(state, test_id, &message).await
+            {
+                tracing::warn!(%error, %test_id, "failed to append device-wait log");
+            }
+        }
+        info!(
+            action_id = %action.id,
+            device_type = %action.device_type,
+            approved = approved_ids.len(),
+            worker = "device_action",
+            "queued action waiting for a free device"
+        );
+    } else {
+        transaction.rollback().await?;
+    }
+    Ok(None)
+}
+
+/// Mark queue + test failed when no device can satisfy assignment conditions.
+async fn fail_unmet_conditions(
+    state: &AppState,
+    action: &QueuedAction,
+    test_id: &str,
+    reason: &str,
+) -> Result<(), sea_orm::DbErr> {
+    let database = state.database.as_ref().expect("worker requires database");
+    let transaction = database.orm().begin().await?;
+    let now = chrono::Utc::now();
+
+    let execution = test_execution::Entity::find()
+        .filter(test_execution::Column::TestId.eq(test_id))
+        .one(&transaction)
+        .await?;
+    if let Some(execution) = execution.as_ref()
+        && matches!(
+            execution.status,
+            Some(
+                test_execution::TestStatus::Completed
+                    | test_execution::TestStatus::Failed
+                    | test_execution::TestStatus::Cancelled
+            )
+        )
+    {
+        device_action_queue::Entity::update_many()
+            .col_expr(
+                device_action_queue::Column::Status,
+                crate::persistence::pg_enum::pg_enum(
+                    &device_action_queue::QueueJobStatus::Completed,
+                ),
+            )
+            .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(device_action_queue::Column::Id.eq(action.id))
+            .exec(&transaction)
+            .await?;
+        transaction.commit().await?;
+        return Ok(());
+    }
+
+    device_action_queue::Entity::update_many()
+        .col_expr(
+            device_action_queue::Column::Status,
+            crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Cancelled),
+        )
+        .col_expr(
+            device_action_queue::Column::TargetDeviceId,
+            Expr::value(Option::<String>::None),
+        )
+        .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(device_action_queue::Column::Id.eq(action.id))
+        .exec(&transaction)
+        .await?;
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::Status,
+            crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Failed),
+        )
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteFailed),
+        )
+        .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(test_id))
+        .exec(&transaction)
+        .await?;
+    transaction.commit().await?;
+
+    if let Err(error) = crate::devices::test_log::append_test_log(state, test_id, reason).await {
+        tracing::warn!(%error, %test_id, "failed to append unmet-conditions log");
+    }
+    tracing::warn!(
+        action_id = %action.id,
+        %test_id,
+        worker = "device_action",
+        "{reason}"
+    );
+    Ok(())
 }
 
 async fn apply_release_gate(
@@ -1292,6 +1491,7 @@ mod tests {
                 build_id: Some("build-1".to_owned()),
                 build_version: Some("1.0.0".to_owned()),
                 created_by: Some("user-1".to_owned()),
+                created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             },
             device_id: "device-1".to_owned(),

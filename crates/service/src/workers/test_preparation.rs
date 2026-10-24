@@ -347,7 +347,7 @@ async fn prepare(
             )
         })?
         .id;
-    test_execution::Entity::update_many()
+    let enqueue_update = test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::ExecutionPhase,
             crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::QueueTestExecution),
@@ -363,7 +363,13 @@ async fn prepare(
         )
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
         .filter(test_execution::Column::TestId.eq(&preparation.test_id))
-        .filter(test_execution::Column::Status.eq(test_execution::TestStatus::NotExecuted))
+        // Claim holds phase at PrepareTestScripts; do not require NotExecuted alone —
+        // a mismatched status filter would insert a queue row and leave phase stuck,
+        // so assign_next never claims the job after "added to queue".
+        .filter(
+            test_execution::Column::ExecutionPhase
+                .eq(test_execution::ExecutionPhase::PrepareTestScripts),
+        )
         .filter(
             sea_orm::Condition::any()
                 .add(test_execution::Column::CancelRequested.eq(false))
@@ -372,6 +378,16 @@ async fn prepare(
         .exec(&transaction)
         .await
         .map_err(|error| error.to_string())?;
+    if enqueue_update.rows_affected == 0 {
+        transaction
+            .rollback()
+            .await
+            .map_err(|error| error.to_string())?;
+        return Err(format!(
+            "failed to advance test {} to QUEUE_TEST_EXECUTION (missing PrepareTestScripts row or cancel requested)",
+            preparation.test_id
+        ));
+    }
     transaction
         .commit()
         .await
