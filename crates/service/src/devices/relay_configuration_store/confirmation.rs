@@ -2,8 +2,7 @@
 //!
 //! Used by confirm-relay handlers and timeout workers.
 
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect, TransactionTrait,
     sea_query::{Expr, LockType},
 };
@@ -75,7 +74,7 @@ pub(crate) async fn confirm(
         pending_relay_config::Entity::update_many()
             .col_expr(
                 pending_relay_config::Column::Status,
-                Expr::value(pending_relay_config::PendingRelayConfigStatus::Failed),
+                crate::persistence::pg_enum::pg_enum(&pending_relay_config::PendingRelayConfigStatus::Failed),
             )
             .col_expr(pending_relay_config::Column::UpdatedAt, Expr::value(now))
             .filter(pending_relay_config::Column::Id.eq(pending_id))
@@ -94,7 +93,7 @@ pub(crate) async fn confirm(
     pending_relay_config::Entity::update_many()
         .col_expr(
             pending_relay_config::Column::Status,
-            Expr::value(pending_relay_config::PendingRelayConfigStatus::Confirmed),
+            crate::persistence::pg_enum::pg_enum(&pending_relay_config::PendingRelayConfigStatus::Confirmed),
         )
         .col_expr(pending_relay_config::Column::UpdatedAt, Expr::value(now))
         .filter(pending_relay_config::Column::Id.eq(pending_id))
@@ -103,7 +102,7 @@ pub(crate) async fn confirm(
     relay_channel::Entity::update_many()
         .col_expr(
             relay_channel::Column::State,
-            Expr::value(Some(relay_channel::ChannelState::On)),
+            crate::persistence::pg_enum::pg_enum(&relay_channel::ChannelState::On),
         )
         .col_expr(relay_channel::Column::UpdatedAt, Expr::value(now))
         .filter(relay_channel::Column::Id.eq(channel_id))
@@ -114,7 +113,7 @@ pub(crate) async fn confirm(
         device::Entity::update_many()
             .col_expr(
                 device::Column::Power,
-                Expr::value(Some(device::DevicePower::On)),
+                crate::persistence::pg_enum::pg_enum(&device::DevicePower::On),
             )
             .col_expr(device::Column::UpdatedAt, Expr::value(now))
             .filter(device::Column::DeviceId.eq(mapped_device_id))

@@ -22,8 +22,7 @@ use crate::{
     workers::types::{DeviceState, FailedTest, StuckDevice, WatchdogDecision, WatchdogTransition},
 };
 
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
+use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
@@ -398,7 +397,7 @@ async fn fail_stuck_device(
     device_action_queue::Entity::update_many()
         .col_expr(
             device_action_queue::Column::Status,
-            Expr::value(device_action_queue::QueueJobStatus::Cancelled),
+            crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Cancelled),
         )
         .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
         .filter(device_action_queue::Column::TargetDeviceId.eq(&device.device_id))
@@ -414,7 +413,7 @@ async fn fail_stuck_device(
     fallback_update::Entity::update_many()
         .col_expr(
             fallback_update::Column::Status,
-            Expr::value(fallback_update::FallbackStatus::Failed),
+            crate::persistence::pg_enum::pg_enum(&fallback_update::FallbackStatus::Failed),
         )
         .col_expr(fallback_update::Column::UpdatedAt, Expr::value(now))
         .filter(fallback_update::Column::DeviceId.eq(&device.device_id))
@@ -431,11 +430,11 @@ async fn fail_stuck_device(
         let changed = test_execution::Entity::update_many()
             .col_expr(
                 test_execution::Column::Status,
-                Expr::value(Some(test_execution::TestStatus::Failed)),
+                crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Failed),
             )
             .col_expr(
                 test_execution::Column::ExecutionPhase,
-                Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+                crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteFailed),
             )
             .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
             .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
@@ -468,7 +467,7 @@ async fn fail_stuck_device(
     device::Entity::update_many()
         .col_expr(
             device::Column::State,
-            Expr::value(Some(device::DeviceState::Free)),
+            crate::persistence::pg_enum::pg_enum(&device::DeviceState::Free),
         )
         .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
         .col_expr(device::Column::Flashing, Expr::value(Some(false)))

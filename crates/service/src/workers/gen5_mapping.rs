@@ -16,8 +16,7 @@ use crate::{
     state::AppState,
 };
 
-use sea_orm::{
-    ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
 
@@ -118,8 +117,12 @@ async fn claim_next(state: &AppState) -> Result<Option<MappingJob>, sea_orm::DbE
         )
         .order_by_asc::<Expr>(
             Expr::case(
-                Expr::col(gen5_mapping_queue::Column::Status)
-                    .eq(gen5_mapping_queue::QueueJobStatus::Queued),
+                // Cast enum literal — plain text compare fails with enum_…_status = text.
+                Expr::col(gen5_mapping_queue::Column::Status).eq(
+                    crate::persistence::pg_enum::pg_enum(
+                        &gen5_mapping_queue::QueueJobStatus::Queued,
+                    ),
+                ),
                 0,
             )
             .finally(1)
@@ -142,7 +145,7 @@ async fn claim_next(state: &AppState) -> Result<Option<MappingJob>, sea_orm::DbE
         gen5_mapping_queue::Entity::update_many()
             .col_expr(
                 gen5_mapping_queue::Column::Status,
-                Expr::value(gen5_mapping_queue::QueueJobStatus::Running),
+                crate::persistence::pg_enum::pg_enum(&gen5_mapping_queue::QueueJobStatus::Running),
             )
             .col_expr(
                 gen5_mapping_queue::Column::LastError,
@@ -222,7 +225,7 @@ async fn process_queued(state: &AppState, job: &MappingJob) -> Result<u32, Strin
     gen5_mapping_queue::Entity::update_many()
         .col_expr(
             gen5_mapping_queue::Column::Status,
-            Expr::value(gen5_mapping_queue::QueueJobStatus::Waiting),
+            crate::persistence::pg_enum::pg_enum(&gen5_mapping_queue::QueueJobStatus::Waiting),
         )
         .col_expr(
             gen5_mapping_queue::Column::LastError,
@@ -253,7 +256,7 @@ async fn update_initial_failure(
     };
     let now = Utc::now();
     gen5_mapping_queue::Entity::update_many()
-        .col_expr(gen5_mapping_queue::Column::Status, Expr::value(status))
+        .col_expr(gen5_mapping_queue::Column::Status, crate::persistence::pg_enum::pg_enum(&status))
         .col_expr(gen5_mapping_queue::Column::RetryCount, Expr::value(attempts))
         .col_expr(
             gen5_mapping_queue::Column::LastError,
@@ -298,7 +301,7 @@ async fn process_failure_poll(state: &AppState, job: &MappingJob) -> Result<u32,
         gen5_mapping_queue::Entity::update_many()
             .col_expr(
                 gen5_mapping_queue::Column::Status,
-                Expr::value(gen5_mapping_queue::QueueJobStatus::Waiting),
+                crate::persistence::pg_enum::pg_enum(&gen5_mapping_queue::QueueJobStatus::Waiting),
             )
             .col_expr(
                 gen5_mapping_queue::Column::LastError,
@@ -394,7 +397,7 @@ async fn cancel_and_delete_device(
     let updated = gen5_mapping_queue::Entity::update_many()
         .col_expr(
             gen5_mapping_queue::Column::Status,
-            Expr::value(gen5_mapping_queue::QueueJobStatus::Cancelled),
+            crate::persistence::pg_enum::pg_enum(&gen5_mapping_queue::QueueJobStatus::Cancelled),
         )
         .col_expr(
             gen5_mapping_queue::Column::LastError,

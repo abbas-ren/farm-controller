@@ -5,8 +5,7 @@
 //! and flash confirmation that may cancel the active execution and free the device.
 
 use chrono::{Duration, Utc};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
+use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
     FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
@@ -270,7 +269,7 @@ pub(crate) async fn confirm_flash(
                     let updated = device::Entity::update_many()
                         .col_expr(
                             device::Column::State,
-                            Expr::value(Some(device::DeviceState::Free)),
+                            crate::persistence::pg_enum::pg_enum(&device::DeviceState::Free),
                         )
                         .col_expr(device::Column::StateUpdatedAt, Expr::current_timestamp())
                         .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
@@ -343,11 +342,11 @@ async fn cancel_active_execution(
     test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::Status,
-            Expr::value(Some(test_execution::TestStatus::Cancelled)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Cancelled),
         )
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(test_execution::ExecutionPhase::CompleteCancelled)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteCancelled),
         )
         .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))

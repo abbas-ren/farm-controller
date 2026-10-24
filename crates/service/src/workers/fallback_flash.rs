@@ -14,8 +14,7 @@ use crate::{
     state::AppState,
 };
 
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
@@ -128,7 +127,7 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::
     fallback_update::Entity::update_many()
         .col_expr(
             fallback_update::Column::Status,
-            Expr::value(fallback_update::FallbackStatus::Flashing),
+            crate::persistence::pg_enum::pg_enum(&fallback_update::FallbackStatus::Flashing),
         )
         .col_expr(fallback_update::Column::UpdatedAt, Expr::value(now))
         .filter(fallback_update::Column::Id.eq(fallback.id))
@@ -198,7 +197,7 @@ async fn fail(
     fallback_update::Entity::update_many()
         .col_expr(
             fallback_update::Column::Status,
-            Expr::value(fallback_update::FallbackStatus::Failed),
+            crate::persistence::pg_enum::pg_enum(&fallback_update::FallbackStatus::Failed),
         )
         .col_expr(fallback_update::Column::UpdatedAt, Expr::value(now))
         .filter(fallback_update::Column::Id.eq(fallback.id))
@@ -207,7 +206,7 @@ async fn fail(
     test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteFailed),
         )
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
         .filter(test_execution::Column::TestId.eq(&fallback.test_id))

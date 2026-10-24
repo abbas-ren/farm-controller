@@ -4,8 +4,7 @@
 //! Ports Node `DeviceService` / `RelayService` controller registration that
 //! upserts relays/channels and soft-deletes hardware no longer reported.
 
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
+use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockType, NullOrdering, OnConflict, Order},
 };
@@ -191,7 +190,7 @@ async fn sync_relay_inventory(
             Some(row) if row.device_controller_id == controller_id => {
                 let now = chrono::Utc::now();
                 relay::Entity::update_many()
-                    .col_expr(relay::Column::State, Expr::value(relay::RelayState::Connected))
+                    .col_expr(relay::Column::State, crate::persistence::pg_enum::pg_enum(&relay::RelayState::Connected))
                     .col_expr(relay::Column::UpdatedAt, Expr::value(now))
                     .filter(relay::Column::Id.eq(row.id))
                     .exec(transaction)

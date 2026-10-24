@@ -6,8 +6,7 @@
 //! alerts plus recent read ones and only surfaces alerts tied to live inventory.
 
 use chrono::{DateTime, Utc};
-use sea_orm::{
-    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
     sea_query::{Expr, extension::postgres::PgExpr},
 };
@@ -174,7 +173,7 @@ pub(crate) async fn mark_read(
     };
     let now = chrono::Utc::now();
     let result = alert::Entity::update_many()
-        .col_expr(alert::Column::Status, Expr::value(alert::AlertStatus::Read))
+        .col_expr(alert::Column::Status, crate::persistence::pg_enum::pg_enum(&alert::AlertStatus::Read))
         .col_expr(alert::Column::IsRead, Expr::value(true))
         .col_expr(alert::Column::ReadAt, Expr::value(Some(now)))
         .col_expr(alert::Column::UpdatedAt, Expr::value(now))
@@ -191,7 +190,7 @@ pub(crate) async fn mark_all_read(orm: &DatabaseConnection) -> Result<(), Device
     let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "mark_all_read");
     let now = chrono::Utc::now();
     alert::Entity::update_many()
-        .col_expr(alert::Column::Status, Expr::value(alert::AlertStatus::Read))
+        .col_expr(alert::Column::Status, crate::persistence::pg_enum::pg_enum(&alert::AlertStatus::Read))
         .col_expr(alert::Column::IsRead, Expr::value(true))
         .col_expr(alert::Column::ReadAt, Expr::value(Some(now)))
         .col_expr(alert::Column::UpdatedAt, Expr::value(now))

@@ -27,8 +27,7 @@ use crate::{
     workers::types::{ExpiredRelayConfiguration, RelaySyncJob, RelaySyncService},
 };
 
-use sea_orm::{
-    ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
 
@@ -352,7 +351,7 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
     if let Err(error) = pending_relay_config::Entity::update_many()
         .col_expr(
             pending_relay_config::Column::Status,
-            Expr::value(pending_relay_config::PendingRelayConfigStatus::Failed),
+            crate::persistence::pg_enum::pg_enum(&pending_relay_config::PendingRelayConfigStatus::Failed),
         )
         .col_expr(pending_relay_config::Column::UpdatedAt, Expr::value(now))
         .filter(pending_relay_config::Column::Id.is_in(ids))

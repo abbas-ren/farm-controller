@@ -10,8 +10,7 @@ use crate::{
     workers::types::ControllerStateTransition,
 };
 use chrono::Utc;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
@@ -95,7 +94,7 @@ async fn run_controller_heartbeat_timeout_cycle(state: &AppState) {
         let update = device_controller::Entity::update_many()
             .col_expr(
                 device_controller::Column::State,
-                Expr::value(device_controller::DeviceControllerState::NotReachable),
+                crate::persistence::pg_enum::pg_enum(&device_controller::DeviceControllerState::NotReachable),
             )
             .col_expr(device_controller::Column::UpdatedAt, Expr::value(now))
             .filter(device_controller::Column::DeviceControllerId.eq(&controller_id))

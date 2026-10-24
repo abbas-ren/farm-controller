@@ -3,8 +3,7 @@
 //! Encodes busy/free/faulty/not_reachable transitions and test-log inserts
 //! matching Node heartbeat worker behavior.
 
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel,
+use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel,
     QueryFilter, QueryOrder, QuerySelect, Set,
     sea_query::{Expr, LockType},
 };
@@ -210,7 +209,7 @@ pub(super) async fn process_device_post_update(
                     device_action_queue::Entity::update_many()
                         .col_expr(
                             device_action_queue::Column::Status,
-                            Expr::value(device_action_queue::QueueJobStatus::Cancelled),
+                            crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Cancelled),
                         )
                         .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
                         .filter(device_action_queue::Column::TestId.eq(tid))
@@ -270,7 +269,7 @@ pub(super) async fn process_device_post_update(
             test_execution::Entity::update_many()
                 .col_expr(
                     test_execution::Column::ExecutionPhase,
-                    Expr::value(Some(test_execution::ExecutionPhase::StartTestExecution)),
+                    crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::StartTestExecution),
                 )
                 .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
                 .filter(test_execution::Column::TestId.eq(tid))

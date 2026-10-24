@@ -6,8 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
@@ -138,7 +137,7 @@ async fn run_cycle(state: &AppState) {
                 )
             };
         if let Err(error) = device::Entity::update_many()
-            .col_expr(device::Column::State, Expr::value(Some(device_state)))
+            .col_expr(device::Column::State, crate::persistence::pg_enum::pg_enum(&device_state))
             .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
             .col_expr(device::Column::UpdatedAt, Expr::value(now))
             .filter(device::Column::DeviceId.eq(&stale.device_id))

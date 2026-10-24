@@ -27,8 +27,8 @@ use super::test_preconditions;
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, ExprTrait, JoinType, QueryFilter, QueryOrder,
-    QuerySelect, RelationTrait, Set, TransactionTrait,
-    sea_query::{Expr, LockBehavior, LockType},
+    QuerySelect, QueryTrait, RelationTrait, Set, TransactionTrait,
+    sea_query::{Alias, Expr, LockBehavior, LockType},
 };
 
 /// Poll loop for the device-action queue until cancellation.
@@ -126,7 +126,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
     // 1. Find and lock the next queued action.
     // ---------------------------------------------------------------
 
-    let action = device_action_queue::Entity::find()
+    let mut action_query = device_action_queue::Entity::find()
         .join(
             JoinType::LeftJoin,
             device_action_queue::Relation::TestExecution.def(),
@@ -216,17 +216,24 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
         )
         .order_by_asc::<Expr>(
             Expr::case(
-                Expr::col(device_action_queue::Column::Mode)
-                    .eq(device_action_queue::QueueDispatchMode::DeviceSpecific),
+                // Cast enum literal: plain text compare fails with enum_device_action_queue_mode = text.
+                Expr::col(device_action_queue::Column::Mode).eq(
+                    crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueDispatchMode::DeviceSpecific),
+                ),
                 0,
             )
             .finally(1)
             .into(),
         )
         .order_by_asc(device_action_queue::Column::CreatedAt)
-        .limit(1)
-        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
-        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .limit(1);
+    // FOR UPDATE OF queue only — Postgres rejects locking the nullable LEFT JOIN side.
+    QueryTrait::query(&mut action_query).lock_with_tables_behavior(
+        LockType::Update,
+        [Alias::new("device_action_queue")],
+        LockBehavior::SkipLocked,
+    );
+    let action = action_query
         .into_model::<QueuedAction>()
         .one(&transaction)
         .await?;
@@ -479,7 +486,7 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
             test_execution::Entity::update_many()
                 .col_expr(
                     test_execution::Column::ExecutionPhase,
-                    Expr::value(Some(test_execution::ExecutionPhase::SendFlashRequest)),
+                    crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::SendFlashRequest),
                 )
                 .col_expr(test_execution::Column::UpdatedAt, Expr::value(chrono::Utc::now()))
                 .filter(test_execution::Column::TestId.eq(test_id))
@@ -533,7 +540,7 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
                     test_execution::Entity::update_many()
                         .col_expr(
                             test_execution::Column::ExecutionPhase,
-                            Expr::value(Some(test_execution::ExecutionPhase::WaitForDeviceBoot)),
+                            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::WaitForDeviceBoot),
                         )
                         .col_expr(
                             test_execution::Column::UpdatedAt,
@@ -774,7 +781,7 @@ async fn request_gen4_ipl(
     device_action_queue::Entity::update_many()
         .col_expr(
             device_action_queue::Column::Status,
-            Expr::value(device_action_queue::QueueJobStatus::Waiting),
+            crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Waiting),
         )
         .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
         .filter(device_action_queue::Column::Id.eq(assigned.action.id))
@@ -785,7 +792,7 @@ async fn request_gen4_ipl(
         test_execution::Entity::update_many()
             .col_expr(
                 test_execution::Column::ExecutionPhase,
-                Expr::value(Some(test_execution::ExecutionPhase::WaitForIplConfirmation)),
+                crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::WaitForIplConfirmation),
             )
             .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
             .filter(test_execution::Column::TestId.eq(test_id))
@@ -823,7 +830,7 @@ async fn fail_dispatch(
     device_action_queue::Entity::update_many()
         .col_expr(
             device_action_queue::Column::Status,
-            Expr::value(device_action_queue::QueueJobStatus::Cancelled),
+            crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Cancelled),
         )
         .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
         .filter(device_action_queue::Column::Id.eq(assigned.action.id))
@@ -833,7 +840,7 @@ async fn fail_dispatch(
     device::Entity::update_many()
         .col_expr(
             device::Column::State,
-            Expr::value(Some(device::DeviceState::Free)),
+            crate::persistence::pg_enum::pg_enum(&device::DeviceState::Free),
         )
         .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
         .col_expr(device::Column::UpdatedAt, Expr::value(now))
@@ -856,11 +863,11 @@ async fn fail_dispatch(
         test_execution::Entity::update_many()
             .col_expr(
                 test_execution::Column::Status,
-                Expr::value(Some(test_execution::TestStatus::Failed)),
+                crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Failed),
             )
             .col_expr(
                 test_execution::Column::ExecutionPhase,
-                Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+                crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteFailed),
             )
             .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
             .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
@@ -871,7 +878,7 @@ async fn fail_dispatch(
         release::Entity::update_many()
             .col_expr(
                 release::Column::Status,
-                Expr::value(Some(release::ReleaseTestStatus::Failed)),
+                crate::persistence::pg_enum::pg_enum(&release::ReleaseTestStatus::Failed),
             )
             .col_expr(release::Column::IsFaulty, Expr::value(Some(true)))
             .col_expr(release::Column::UpdatedAt, Expr::value(now))

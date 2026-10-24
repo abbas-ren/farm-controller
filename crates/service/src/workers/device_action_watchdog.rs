@@ -7,9 +7,9 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use sea_orm::{
-    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
-    TransactionTrait,
-    sea_query::{Expr, LockBehavior, LockType},
+    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
+    RelationTrait, TransactionTrait,
+    sea_query::{Alias, Expr, LockBehavior, LockType},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -50,7 +50,7 @@ async fn run_cycle(state: &AppState) {
     let timeout_minutes =
         i64::try_from(state.config.workers.device_action_stale_timeout_minutes).unwrap_or(i64::MAX);
     let batch_size = u64::from(state.config.workers.device_action_watchdog_batch_size);
-    let actions = match device_action_queue::Entity::find()
+    let mut stale_query = device_action_queue::Entity::find()
         .join(
             JoinType::LeftJoin,
             device_action_queue::Relation::TestExecution.def(),
@@ -81,9 +81,14 @@ async fn run_cycle(state: &AppState) {
             [timeout_minutes],
         ))
         .order_by_asc(device_action_queue::Column::UpdatedAt)
-        .limit(batch_size)
-        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
-        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .limit(batch_size);
+    // FOR UPDATE OF queue only — Postgres rejects locking the nullable LEFT JOIN side.
+    QueryTrait::query(&mut stale_query).lock_with_tables_behavior(
+        LockType::Update,
+        [Alias::new("device_action_queue")],
+        LockBehavior::SkipLocked,
+    );
+    let actions = match stale_query
         .into_model::<StaleAction>()
         .all(&transaction)
         .await
@@ -102,7 +107,7 @@ async fn run_cycle(state: &AppState) {
         if let Err(error) = device_action_queue::Entity::update_many()
             .col_expr(
                 device_action_queue::Column::Status,
-                Expr::value(device_action_queue::QueueJobStatus::Cancelled),
+                crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Cancelled),
             )
             .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
             .filter(device_action_queue::Column::Id.eq(action.id))
@@ -167,11 +172,11 @@ async fn fail_test_action(
     test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::Status,
-            Expr::value(Some(test_execution::TestStatus::Failed)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Failed),
         )
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteFailed),
         )
         .col_expr(
             test_execution::Column::CancelRequested,
@@ -246,7 +251,7 @@ async fn fail_flash_action(
     release::Entity::update_many()
         .col_expr(
             release::Column::Status,
-            Expr::value(Some(release::ReleaseTestStatus::Failed)),
+            crate::persistence::pg_enum::pg_enum(&release::ReleaseTestStatus::Failed),
         )
         .col_expr(release::Column::IsFaulty, Expr::value(Some(true)))
         .col_expr(release::Column::UpdatedAt, Expr::value(now))

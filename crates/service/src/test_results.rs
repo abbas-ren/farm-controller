@@ -6,8 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use regex::Regex;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
+use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
     DatabaseTransaction, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockType},
@@ -484,7 +483,7 @@ async fn complete_execution(
     test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::Status,
-            Expr::value(Some(test_execution::TestStatus::Completed)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Completed),
         )
         .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
@@ -498,7 +497,7 @@ async fn complete_execution(
     device_action_queue::Entity::update_many()
         .col_expr(
             device_action_queue::Column::Status,
-            Expr::value(device_action_queue::QueueJobStatus::Completed),
+            crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Completed),
         )
         .col_expr(
             device_action_queue::Column::UpdatedAt,
@@ -525,7 +524,7 @@ async fn complete_execution(
         device::Entity::update_many()
             .col_expr(
                 device::Column::LastExecutionStatus,
-                Expr::value(Some(status)),
+                crate::persistence::pg_enum::pg_enum(&status),
             )
             .col_expr(device::Column::UpdatedAt, Expr::value(now))
             .filter(device::Column::DeviceId.eq(device_id))

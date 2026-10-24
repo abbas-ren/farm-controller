@@ -5,8 +5,7 @@
 use super::*;
 
 use crate::persistence::entity::{execution_report, test_case, test_execution};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockType},
 };
@@ -183,7 +182,7 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
         );
         let status = parse_report_status(status)?;
         execution_report::Entity::update_many()
-            .col_expr(execution_report::Column::Status, Expr::value(status))
+            .col_expr(execution_report::Column::Status, crate::persistence::pg_enum::pg_enum(&status))
             .col_expr(
                 execution_report::Column::UploadError,
                 Expr::value(error.map(str::to_owned)),

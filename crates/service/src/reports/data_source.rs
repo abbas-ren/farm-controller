@@ -2,8 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, sea_query::Expr,
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, sea_query::Expr,
 };
 use uuid::Uuid;
 
@@ -86,7 +85,7 @@ impl ReportDataSource for PostgresReportDataSource {
         };
         let now = Utc::now();
         execution_report::Entity::update_many()
-            .col_expr(execution_report::Column::Status, Expr::value(status))
+            .col_expr(execution_report::Column::Status, crate::persistence::pg_enum::pg_enum(&status))
             .col_expr(
                 execution_report::Column::UploadError,
                 Expr::value(error.map(str::to_owned)),

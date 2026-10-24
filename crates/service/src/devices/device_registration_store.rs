@@ -4,8 +4,7 @@
 //! Ports Node `DeviceService.registerDevice`, including interface rewrite,
 //! status/state parsing, and Gen3 controller mapping side effects.
 
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockType, OnConflict},
 };
@@ -124,7 +123,7 @@ pub(crate) async fn register_device(
                     device::Column::NfsPath,
                     Expr::value(registration.nfs_path.clone()),
                 )
-                .col_expr(device::Column::Status, Expr::value(Some(status)))
+                .col_expr(device::Column::Status, crate::persistence::pg_enum::pg_enum(&status))
                 .col_expr(device::Column::ControllerId, Expr::value(Some(String::new())))
                 .col_expr(device::Column::UpdatedAt, Expr::value(now))
                 .filter(device::Column::DeviceId.eq(&device_id))
@@ -171,11 +170,11 @@ pub(crate) async fn register_device(
                 )
                 .col_expr(
                     device::Column::State,
-                    Expr::value(Some(device::DeviceState::Unknown)),
+                    crate::persistence::pg_enum::pg_enum(&device::DeviceState::Unknown),
                 )
                 .col_expr(
                     device::Column::Status,
-                    Expr::value(Some(device::DeviceStatus::Requested)),
+                    crate::persistence::pg_enum::pg_enum(&device::DeviceStatus::Requested),
                 )
                 .col_expr(device::Column::ControllerId, Expr::value(Some(String::new())))
                 .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
@@ -305,7 +304,7 @@ pub(crate) async fn register_device(
     device::Entity::update_many()
         .col_expr(
             device::Column::Status,
-            Expr::value(Some(device::DeviceStatus::Approved)),
+            crate::persistence::pg_enum::pg_enum(&device::DeviceStatus::Approved),
         )
         .col_expr(
             device::Column::StatusActionBy,

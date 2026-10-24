@@ -6,8 +6,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
     TransactionTrait,
 };
 use uuid::Uuid;
@@ -282,7 +281,7 @@ pub(crate) async fn mark_upload_started(
     upload_build::Entity::update_many()
         .col_expr(
             upload_build::Column::Status,
-            sea_orm::sea_query::Expr::value(upload_build::UploadStatus::Uploading),
+            crate::persistence::pg_enum::pg_enum(&upload_build::UploadStatus::Uploading),
         )
         .col_expr(
             upload_build::Column::UserId,
@@ -314,7 +313,7 @@ pub(crate) async fn mark_upload_failed(
     upload_build::Entity::update_many()
         .col_expr(
             upload_build::Column::Status,
-            sea_orm::sea_query::Expr::value(upload_build::UploadStatus::Failed),
+            crate::persistence::pg_enum::pg_enum(&upload_build::UploadStatus::Failed),
         )
         .col_expr(
             upload_build::Column::UpdatedAt,

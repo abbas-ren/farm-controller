@@ -12,8 +12,7 @@ use crate::persistence::entity::{
     device, device_controller, device_interface, device_state_change, log_entry, relay,
     relay_channel,
 };
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter,
+use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockType, extension::postgres::PgExpr},
 };
@@ -144,9 +143,9 @@ impl ControllerRepository for PostgresDeviceRepository {
                 let updated = device::Entity::update_many()
                     .col_expr(
                         device::Column::Status,
-                        Expr::value(device::DeviceStatus::Approved),
+                        crate::persistence::pg_enum::pg_enum(&device::DeviceStatus::Approved),
                     )
-                    .col_expr(device::Column::State, Expr::value(device::DeviceState::Free))
+                    .col_expr(device::Column::State, crate::persistence::pg_enum::pg_enum(&device::DeviceState::Free))
                     .col_expr(device::Column::UpdatedBy, Expr::value(user_id.to_owned()))
                     .col_expr(device::Column::UpdatedAt, Expr::value(now))
                     .col_expr(device::Column::StateUpdatedAt, Expr::value(now))

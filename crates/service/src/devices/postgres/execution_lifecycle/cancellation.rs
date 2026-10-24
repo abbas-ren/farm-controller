@@ -7,8 +7,7 @@ use super::*;
 use crate::persistence::entity::{
     device, device_action_queue, fallback_update, log_entry, test_execution,
 };
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait,
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait,
     Set, TransactionTrait,
     sea_query::{Expr, LockType},
 };
@@ -148,7 +147,7 @@ impl PostgresDeviceRepository {
             test_execution::Entity::update_many()
                 .col_expr(
                     test_execution::Column::Status,
-                    Expr::value(Some(test_execution::TestStatus::Cancelled)),
+                    crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Cancelled),
                 )
                 .col_expr(
                     test_execution::Column::CancelHandled,
@@ -156,7 +155,7 @@ impl PostgresDeviceRepository {
                 )
                 .col_expr(
                     test_execution::Column::ExecutionPhase,
-                    Expr::value(Some(test_execution::ExecutionPhase::CompleteCancelled)),
+                    crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteCancelled),
                 )
                 .col_expr(
                     test_execution::Column::StartedAt,
@@ -212,7 +211,7 @@ impl PostgresDeviceRepository {
             device_action_queue::Entity::update_many()
                 .col_expr(
                     device_action_queue::Column::Status,
-                    Expr::value(device_action_queue::QueueJobStatus::Cancelled),
+                    crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Cancelled),
                 )
                 .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
                 .filter(device_action_queue::Column::TestId.eq(test_id))

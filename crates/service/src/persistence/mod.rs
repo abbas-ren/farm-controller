@@ -7,6 +7,7 @@
 //! batched retention deletes of high-volume tables.
 
 pub mod entity;
+pub mod pg_enum;
 pub mod projection;
 #[cfg(test)]
 pub mod tests;

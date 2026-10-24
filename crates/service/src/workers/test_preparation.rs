@@ -28,8 +28,7 @@ use crate::{
 
 use super::artifact_preparation::{artifact_paths, prepare_artifacts, safe_segment};
 
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
@@ -143,7 +142,7 @@ async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbE
     test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(test_execution::ExecutionPhase::PrepareTestScripts)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::PrepareTestScripts),
         )
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
         .filter(test_execution::Column::TestId.eq(&candidate.test_id))
@@ -322,7 +321,7 @@ async fn prepare(
     test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(test_execution::ExecutionPhase::QueueTestExecution)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::QueueTestExecution),
         )
         .col_expr(
             test_execution::Column::QueueId,
@@ -384,11 +383,11 @@ async fn mark_failed(state: &AppState, test_id: &str, error: &str) -> Option<Ser
     let updated = test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::Status,
-            Expr::value(Some(test_execution::TestStatus::Failed)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Failed),
         )
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::CompleteFailed),
         )
         .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))

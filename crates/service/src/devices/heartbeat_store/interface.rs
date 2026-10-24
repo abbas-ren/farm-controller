@@ -80,7 +80,7 @@ pub(super) async fn update_interface_status(
     let status = parse_interface_status(status)?;
     let now = chrono::Utc::now();
     device_interface::Entity::update_many()
-        .col_expr(device_interface::Column::Status, Expr::value(Some(status)))
+        .col_expr(device_interface::Column::Status, crate::persistence::pg_enum::pg_enum(&status))
         .col_expr(device_interface::Column::UpdatedAt, Expr::value(now))
         .filter(device_interface::Column::Id.eq(row_id))
         .exec(transaction)
