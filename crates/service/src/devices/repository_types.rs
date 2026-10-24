@@ -79,6 +79,8 @@ pub(crate) struct TestCancellationResult {
     pub changed: bool,
     /// Whether the execution reached a terminal cancelled state.
     pub terminalized: bool,
+    /// Assigned DUT freed for reassignment (when terminalized with a device).
+    pub device_id: Option<String>,
     pub device_ip: Option<String>,
     /// Device type for NFS `currentTest.txt` cleanup (even when cancel is deferred).
     pub device_type: Option<String>,

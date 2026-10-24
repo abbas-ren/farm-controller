@@ -127,6 +127,7 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
             phase: "PREPARE_ARTIFACTS".to_owned(),
             changed: true,
             terminalized: true,
+            device_id: None,
             device_ip: None,
             device_type: Some("x5h".to_owned()),
             device_nfs_path: None,

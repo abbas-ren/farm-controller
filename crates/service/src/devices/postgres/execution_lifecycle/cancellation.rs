@@ -5,7 +5,7 @@
 use super::*;
 
 use crate::persistence::entity::{
-    device, device_action_queue, fallback_update, log_entry, test_execution,
+    device, device_action_queue, device_state_change, fallback_update, log_entry, test_execution,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, QueryTrait,
@@ -96,12 +96,8 @@ impl PostgresDeviceRepository {
         let changed = !requested && !matches!(status_text, "cancelled" | "completed" | "failed");
         let phase = phase.unwrap_or(test_execution::ExecutionPhase::PrepareArtifacts);
         let phase_text = execution_phase_str(phase);
-        // These phases own asynchronous device/boot completion, so cancellation must be observed there.
-        let deferred = matches!(
-            phase,
-            test_execution::ExecutionPhase::WaitForIplConfirmation
-                | test_execution::ExecutionPhase::WaitForDeviceBoot
-        );
+        // Always terminalize on cancel (including IPL/boot wait). Deferred cancel left the DUT
+        // BUSY until heartbeat; cancel must free the device for other executions immediately.
         let already_finalizing = matches!(
             phase,
             test_execution::ExecutionPhase::SendFallbackFlashRequest
@@ -110,8 +106,9 @@ impl PostgresDeviceRepository {
                 | test_execution::ExecutionPhase::CompleteFailed
                 | test_execution::ExecutionPhase::CompleteCancelled
         );
-        let terminalized = changed && !deferred && !already_finalizing;
+        let terminalized = changed && !already_finalizing;
         let now = chrono::Utc::now();
+        let mut freed_device_id = None;
 
         if changed {
             test_execution::Entity::update_many()
@@ -179,39 +176,23 @@ impl PostgresDeviceRepository {
                 .exec(&transaction)
                 .await?;
 
-            if phase == test_execution::ExecutionPhase::StartTestExecution
-                && device_nfs_path
-                    .as_deref()
-                    .is_some_and(|path| path.contains(test_id))
-                && let Some(device_id) = device_id.as_deref()
-            {
-                let fallback_path = std::path::Path::new(nfs_host_path)
-                    .join(&device_type)
-                    .join(build_version.as_deref().unwrap_or(&build_id));
-                let existing = fallback_update::Entity::find()
-                    .filter(fallback_update::Column::TestId.eq(test_id))
-                    .filter(fallback_update::Column::Status.is_in([
-                        fallback_update::FallbackStatus::Pending,
-                        fallback_update::FallbackStatus::Flashing,
-                        fallback_update::FallbackStatus::Completed,
-                    ]))
-                    .one(&transaction)
-                    .await?;
-                if existing.is_none() {
-                    fallback_update::ActiveModel {
-                        device_id: Set(device_id.to_owned()),
-                        release_id: Set(build_id.clone()),
-                        test_id: Set(test_id.to_owned()),
-                        fallback_path: Set(fallback_path.to_string_lossy().into_owned()),
-                        status: Set(fallback_update::FallbackStatus::Pending),
-                        created_at: Set(now),
-                        updated_at: Set(now),
-                        ..Default::default()
-                    }
-                    .insert(&transaction)
-                    .await?;
-                }
-            }
+            // Do not enqueue fallback flash on cancel — that would keep the DUT BUSY.
+            // Cancel any in-flight fallback for this test so heartbeat treats the device as free.
+            let _ = nfs_host_path;
+            let _ = build_version;
+            fallback_update::Entity::update_many()
+                .col_expr(
+                    fallback_update::Column::Status,
+                    crate::persistence::pg_enum::pg_enum(&fallback_update::FallbackStatus::Failed),
+                )
+                .col_expr(fallback_update::Column::UpdatedAt, Expr::value(now))
+                .filter(fallback_update::Column::TestId.eq(test_id))
+                .filter(fallback_update::Column::Status.is_in([
+                    fallback_update::FallbackStatus::Pending,
+                    fallback_update::FallbackStatus::Flashing,
+                ]))
+                .exec(&transaction)
+                .await?;
 
             device_action_queue::Entity::update_many()
                 .col_expr(
@@ -228,6 +209,33 @@ impl PostgresDeviceRepository {
                 )
                 .exec(&transaction)
                 .await?;
+
+            if let Some(assigned_device_id) = device_id.as_deref().filter(|id| !id.is_empty()) {
+                device::Entity::update_many()
+                    .col_expr(
+                        device::Column::State,
+                        crate::persistence::pg_enum::pg_enum(&device::DeviceState::Free),
+                    )
+                    .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
+                    .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
+                    .col_expr(device::Column::Flashing, Expr::value(Some(false)))
+                    .col_expr(device::Column::UpdatedAt, Expr::value(now))
+                    .filter(device::Column::DeviceId.eq(assigned_device_id))
+                    .filter(device::Column::DeletedAt.is_null())
+                    .exec(&transaction)
+                    .await?;
+                device_state_change::ActiveModel {
+                    device_id: Set(assigned_device_id.to_owned()),
+                    state: Set(Some(device_state_change::DeviceStateChangeState::Free)),
+                    changed_at: Set(now),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .insert(&transaction)
+                .await?;
+                freed_device_id = Some(assigned_device_id.to_owned());
+            }
 
             log_entry::ActiveModel {
                 r#type: Set(log_entry::LogEntryType::Test),
@@ -246,12 +254,15 @@ impl PostgresDeviceRepository {
         }
 
         transaction.commit().await?;
-        // Notify eagent when tests may already be running (StartTestExecution) or when the
-        // DUT is mid-boot after `/test-execution` (WaitForDeviceBoot same-root race).
+        // Notify eagent whenever a DUT may still be running or mid-boot for this test.
         let notify_device = matches!(
             phase,
             test_execution::ExecutionPhase::StartTestExecution
                 | test_execution::ExecutionPhase::WaitForDeviceBoot
+                | test_execution::ExecutionPhase::SendFlashRequest
+                | test_execution::ExecutionPhase::DeviceAssigned
+                | test_execution::ExecutionPhase::WaitForIplConfirmation
+                | test_execution::ExecutionPhase::SendIplRequest
         );
         Ok(Some(TestCancellationResult {
             build_id,
@@ -268,6 +279,7 @@ impl PostgresDeviceRepository {
                 .map(|_| device_type.clone()),
             device_type: Some(device_type),
             device_nfs_path,
+            device_id: freed_device_id,
             device_ip: notify_device.then_some(device_ip).flatten(),
             phase: phase_text.to_owned(),
             changed,

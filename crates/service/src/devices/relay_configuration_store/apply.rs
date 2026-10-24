@@ -98,7 +98,8 @@ async fn configure_channel(
         ));
     }
     let Some(device_id) = normalized_device_id(configuration) else {
-        return load_channel_json(transaction, configuration.channel_id).await;
+        // Empty/null deviceId clears the channel mapping (Admin "Reset All" / unassign).
+        return clear_channel_mapping(transaction, configuration, &mut context, actions).await;
     };
 
     let device = load_device(transaction, device_id)
@@ -196,6 +197,70 @@ async fn configure_channel(
         channel_number: context.channel_number,
         device_generation: device.device_generation,
     });
+    load_channel_json(transaction, configuration.channel_id).await
+}
+
+/// PURPOSE: Unmap a relay channel (DB + GPIO map + EdgeController Remove action).
+/// USE: `configure_channel` when the request clears `deviceId`.
+async fn clear_channel_mapping(
+    transaction: &impl ConnectionTrait,
+    configuration: &RelayChannelConfiguration,
+    context: &mut ChannelContext,
+    actions: &mut Vec<RelayControllerAction>,
+) -> Result<Value, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::relay_configuration_store::apply",
+        "clear_channel_mapping",
+    );
+    // Already unmapped — nothing to clear.
+    if context.current_device_id.as_deref().is_none_or(str::is_empty) {
+        return load_channel_json(transaction, configuration.channel_id).await;
+    }
+
+    if let Some(previous_device_id) = context.current_device_id.as_deref()
+        && let Some(previous_device) = load_device(transaction, previous_device_id).await?
+    {
+        let previous_mac = device_mac(&previous_device);
+        actions.push(RelayControllerAction::Remove {
+            controller_address: context.controller_address.clone(),
+            device_mac: previous_mac.clone(),
+            relay_serial: context.relay_serial.clone(),
+            channel_number: context.channel_number,
+        });
+        clear_gpio_mapping(&mut context.mappings, &previous_mac);
+        save_mappings(transaction, configuration.relay_id, &context.mappings).await?;
+    }
+
+    let now = chrono::Utc::now();
+    relay_channel::Entity::update_many()
+        .col_expr(
+            relay_channel::Column::DeviceId,
+            Expr::value(Option::<String>::None),
+        )
+        .col_expr(relay_channel::Column::UpdatedAt, Expr::value(now))
+        .filter(relay_channel::Column::Id.eq(configuration.channel_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .exec(transaction)
+        .await?;
+
+    // Drop any in-flight configure confirmation for this channel so heartbeat/UI
+    // does not wait on a mapping that was just cleared.
+    pending_relay_config::Entity::update_many()
+        .col_expr(
+            pending_relay_config::Column::Status,
+            crate::persistence::pg_enum::pg_enum(
+                &pending_relay_config::PendingRelayConfigStatus::Failed,
+            ),
+        )
+        .col_expr(pending_relay_config::Column::UpdatedAt, Expr::value(now))
+        .filter(pending_relay_config::Column::RelayChannelId.eq(configuration.channel_id))
+        .filter(
+            pending_relay_config::Column::Status
+                .eq(pending_relay_config::PendingRelayConfigStatus::Pending),
+        )
+        .exec(transaction)
+        .await?;
+
     load_channel_json(transaction, configuration.channel_id).await
 }
 

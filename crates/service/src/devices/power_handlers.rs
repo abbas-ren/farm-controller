@@ -147,8 +147,8 @@ pub async fn toggle_device_power(
 }
 
 /// PURPOSE: Build a DevicePowerUpdate Socket.IO event for a power state change.
-/// USE: toggle_device_power after successful persistence.
-pub(super) fn device_power_event(device_id: &str, power: &str) -> ServerEvent {
+/// USE: toggle_device_power and cancel power-cycle after successful persistence.
+pub(crate) fn device_power_event(device_id: &str, power: &str) -> ServerEvent {
     let _api_trace = crate::observability::ApiTrace::enter("devices::power_handlers", "device_power_event");
     ServerEvent::frontend(FrontendMessagePayload::DevicePowerUpdate {
         device_id: device_id.to_owned(),

@@ -5,15 +5,22 @@
 use super::*;
 use crate::{
     auth,
-    devices::TEST_CANCELLATION_TIMEOUT,
+    devices::{
+        TEST_CANCELLATION_TIMEOUT, callbacks::callback_client, power_handlers, DeviceRepository,
+        repository_types::DevicePowerTarget,
+    },
     error::ErrorResponse,
-    socket::types::{
-        farm::ServerEvent,
-        frontend::{
-            FrontendMessagePayload, TestExecutionUpdateData, TestExecutionUpdateType, TestStatus,
+    socket::{
+        helpers::device_state_event,
+        types::{
+            farm::ServerEvent,
+            frontend::{
+                FrontendMessagePayload, TestExecutionUpdateData, TestExecutionUpdateType, TestStatus,
+            },
         },
     },
     state::AppState,
+    workers::types::DeviceState,
 };
 use axum::{
     Json,
@@ -22,6 +29,7 @@ use axum::{
     response::IntoResponse,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 /// PURPOSE: Request test execution cancellation
 /// USE: Authenticated frontend (bearer); publishes Socket.IO frontend events.
@@ -74,8 +82,7 @@ pub async fn cancel(
                 )
                 .await;
             }
-            // Notify eagent on terminal StartTestExecution *or* deferred WaitForDeviceBoot
-            // (same-root race: eagent may already be running while farm still waits).
+            // Notify eagent when the DUT may still be running/booting for this test.
             if let Some(device_ip) = result.device_ip.as_deref() {
                 send_device_cancellation(
                     device_ip,
@@ -106,11 +113,22 @@ pub async fn cancel(
                         progress: None,
                         message: None,
                         cancel_requested: None,
-            progress_kind: None,
-            phase: None,
+                        progress_kind: None,
+                        phase: None,
                     },
                 )) {
                     tracing::warn!(%error, test_id, "failed to publish terminal cancellation");
+                }
+                if let Some(device_id) = result.device_id.as_deref() {
+                    if let Err(error) = state
+                        .event_publisher
+                        .publish(device_state_event(device_id, DeviceState::Free))
+                    {
+                        tracing::warn!(%error, device_id, test_id, "failed to publish device free after cancel");
+                    }
+                    // Best-effort power-cycle so the DUT leaves any stuck busy/boot state.
+                    power_cycle_cancelled_device(&state, repository.as_ref(), device_id, &test_id)
+                        .await;
                 }
             }
             (
@@ -127,6 +145,166 @@ pub async fn cancel(
         // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Error while cancelling test execution"),
     }
+}
+
+/// PURPOSE: Power-cycle a cancelled DUT via EdgeController so it recovers for reassignment.
+/// USE: cancel handler after the device row is marked Free.
+async fn power_cycle_cancelled_device(
+    state: &AppState,
+    repository: &dyn DeviceRepository,
+    device_id: &str,
+    test_id: &str,
+) {
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::test_execution_handlers::cancellation",
+        "power_cycle_cancelled_device",
+    );
+    let target = match repository.device_power_target(device_id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => {
+            tracing::warn!(device_id, test_id, "no device found for cancel power-cycle");
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(%error, device_id, test_id, "failed to resolve cancel power-cycle target");
+            return;
+        }
+    };
+    let Some(controller_ip) = target.controller_ip.as_deref() else {
+        tracing::warn!(device_id, test_id, "no controller mapping for cancel power-cycle");
+        return;
+    };
+    let controller_port = state.config.device.edge_controller_http_port;
+    let family = target
+        .device_family
+        .as_deref()
+        .unwrap_or("")
+        .replace(' ', "")
+        .to_lowercase();
+    let client = callback_client();
+    if family == "gen5" || target.power_port.is_some() {
+        let Some(power_port) = target.power_port.as_deref() else {
+            tracing::warn!(device_id, test_id, "Gen5 cancel power-cycle missing power port");
+            return;
+        };
+        // EdgeController `/reboot-device` performs POWER#OFF → sleep → POWER#ON.
+        let url = match reqwest::Url::parse(&format!(
+            "http://{controller_ip}:{controller_port}/reboot-device"
+        )) {
+            Ok(url) => url,
+            Err(_) => {
+                tracing::warn!(controller_ip, device_id, test_id, "invalid controller address");
+                return;
+            }
+        };
+        match client
+            .post(url)
+            .json(&serde_json::json!({ "power": power_port }))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                let _ = repository
+                    .apply_device_power(device_id, target.channel_id, "on")
+                    .await;
+                if let Err(error) = state.event_publisher.publish(power_handlers::device_power_event(
+                    device_id, "on",
+                )) {
+                    tracing::warn!(%error, device_id, "failed to publish power-on after cancel cycle");
+                }
+                tracing::info!(device_id, test_id, "cancel power-cycle via /reboot-device succeeded");
+            }
+            Ok(response) => {
+                tracing::warn!(
+                    status = %response.status(),
+                    device_id,
+                    test_id,
+                    "controller rejected cancel /reboot-device"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, device_id, test_id, "cancel /reboot-device request failed");
+            }
+        }
+        return;
+    }
+    power_cycle_via_relay(state, repository, device_id, test_id, &target, controller_ip).await;
+}
+
+/// PURPOSE: Relay off→on power cycle for Gen3/Gen4 cancel recovery.
+/// USE: `power_cycle_cancelled_device` when no Gen5 power TTY mapping exists.
+async fn power_cycle_via_relay(
+    state: &AppState,
+    repository: &dyn DeviceRepository,
+    device_id: &str,
+    test_id: &str,
+    target: &DevicePowerTarget,
+    controller_ip: &str,
+) {
+    let (Some(serial), Some(channel)) = (target.relay_serial.as_deref(), target.channel_number)
+    else {
+        tracing::warn!(device_id, test_id, "no relay mapping for cancel power-cycle");
+        return;
+    };
+    let controller_port = state.config.device.edge_controller_http_port;
+    let url = match reqwest::Url::parse(&format!(
+        "http://{controller_ip}:{controller_port}/relay"
+    )) {
+        Ok(url) => url,
+        Err(_) => {
+            tracing::warn!(controller_ip, device_id, test_id, "invalid controller address");
+            return;
+        }
+    };
+    let client = callback_client();
+    for state_name in ["off", "on"] {
+        match client
+            .post(url.clone())
+            .json(&serde_json::json!({
+                "serial": serial,
+                "state": state_name,
+                "channel": channel,
+            }))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                let _ = repository
+                    .apply_device_power(device_id, target.channel_id, state_name)
+                    .await;
+                if let Err(error) = state
+                    .event_publisher
+                    .publish(power_handlers::device_power_event(device_id, state_name))
+                {
+                    tracing::warn!(%error, device_id, state_name, "failed to publish cancel power event");
+                }
+            }
+            Ok(response) => {
+                tracing::warn!(
+                    status = %response.status(),
+                    device_id,
+                    test_id,
+                    state_name,
+                    "controller rejected cancel relay power command"
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    device_id,
+                    test_id,
+                    state_name,
+                    "cancel relay power command failed"
+                );
+                return;
+            }
+        }
+        if state_name == "off" {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    tracing::info!(device_id, test_id, "cancel relay power-cycle succeeded");
 }
 
 /// PURPOSE: Ask EdgeController/EdgeAgent to abort the running test.
