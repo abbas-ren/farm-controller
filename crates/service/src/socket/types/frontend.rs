@@ -125,6 +125,13 @@ pub enum FrontendMessagePayload {
         progress: Option<u64>,
         message: Option<String>,
         cancel_requested: Option<bool>,
+        /// Distinguishes IPL bar vs wait-for-boot vs case-result progress for the UI.
+        /// Values: `ipl` | `deviceBoot` | `result`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        progress_kind: Option<String>,
+        /// Farm execution phase string when known (e.g. `WAIT_FOR_DEVICE_BOOT`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
     },
 
     #[serde(rename = "buildPerformanceUpdate", rename_all = "camelCase")]
@@ -315,12 +322,12 @@ impl From<&str> for TestStatus {
     /// From.
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "not_executed" => Self::NotExecuted,
-            "in_progress" => Self::InProgress,
+            "not_executed" | "notexecuted" => Self::NotExecuted,
+            "in_progress" | "inprogress" => Self::InProgress,
             "completed" => Self::Completed,
             "queued" => Self::Queued,
             "cancelled" => Self::Cancelled,
-            "cancel_requested" => Self::CancelRequested,
+            "cancel_requested" | "cancelrequested" => Self::CancelRequested,
             "failed" => Self::Failed,
             _ => Self::NotExecuted,
         }

@@ -339,7 +339,7 @@ mod tests {
             state: DeviceState::NotReachable,
             alert: serde_json::json!({"title": "Device device-1 is not_reachable"}),
         });
-        assert_eq!(state.event, "device_state_update");
+        assert_eq!(state.event, "deviceStateUpdate");
         assert_eq!(state.payload["deviceId"], "device-1");
         assert_eq!(
             state.payload["state"],

@@ -381,7 +381,9 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
             execution.status,
             Some(test_execution::TestStatus::Cancelled)
                 | Some(test_execution::TestStatus::Failed)
-        ) {
+        ) || execution.cancel_requested.unwrap_or(false)
+        {
+            // Hide case IDs once cancel is requested so eagent resume cannot start scripts.
             return Ok(None);
         }
         Ok(Some(

@@ -246,6 +246,13 @@ impl PostgresDeviceRepository {
         }
 
         transaction.commit().await?;
+        // Notify eagent when tests may already be running (StartTestExecution) or when the
+        // DUT is mid-boot after `/test-execution` (WaitForDeviceBoot same-root race).
+        let notify_device = matches!(
+            phase,
+            test_execution::ExecutionPhase::StartTestExecution
+                | test_execution::ExecutionPhase::WaitForDeviceBoot
+        );
         Ok(Some(TestCancellationResult {
             build_id,
             created_by: created_by.unwrap_or_else(|| user_id.to_owned()),
@@ -258,11 +265,10 @@ impl PostgresDeviceRepository {
                             | test_execution::ExecutionPhase::PrepareTestScripts
                     )
                 })
-                .map(|_| device_type),
-            device_ip: (terminalized
-                && phase == test_execution::ExecutionPhase::StartTestExecution)
-            .then_some(device_ip)
-            .flatten(),
+                .map(|_| device_type.clone()),
+            device_type: Some(device_type),
+            device_nfs_path,
+            device_ip: notify_device.then_some(device_ip).flatten(),
             phase: phase_text.to_owned(),
             changed,
             terminalized,

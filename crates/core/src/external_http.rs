@@ -7,13 +7,35 @@
 
 use std::time::Duration;
 
-use reqwest::{Client, ClientBuilder, Url, redirect::Policy};
+use reqwest::{Client, ClientBuilder, RequestBuilder, Url, redirect::Policy};
 
 /// Hard cap on TCP connect time even when the request timeout is larger.
 const MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Suggested retry budget for explicit operator-triggered external commands.
 pub const EXPLICIT_COMMAND_ATTEMPTS: usize = 3;
+
+/// Env var farm workers use for eagent Bearer auth (must match eagent `api_token` /
+/// `EDGEAGENT_API_TOKEN` on the DUT).
+pub const EDGE_AGENT_TOKEN_ENV: &str = "EDGE_AGENT_TOKEN";
+
+/// PURPOSE: Read the optional EdgeAgent API token from the environment.
+/// USE: All farm → eagent HTTP commands (`/flash`, `/test-execution`, `/cancel`, `/approve`).
+pub fn edge_agent_token() -> Option<String> {
+    std::env::var(EDGE_AGENT_TOKEN_ENV)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// PURPOSE: Attach Bearer auth when [`EDGE_AGENT_TOKEN`](EDGE_AGENT_TOKEN_ENV) is set.
+/// USE: Wrap every outbound eagent `RequestBuilder` so tokenized DUTs do not 401.
+pub fn with_edge_agent_auth(request: RequestBuilder) -> RequestBuilder {
+    match edge_agent_token() {
+        Some(token) => request.bearer_auth(token),
+        None => request,
+    }
+}
 
 /// PURPOSE: Build a reqwest client with farm-wide timeout and no redirects.
 /// USE: Integrations call this (or [`client_builder`]) when constructing

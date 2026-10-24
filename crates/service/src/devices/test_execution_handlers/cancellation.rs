@@ -64,15 +64,27 @@ pub async fn cancel(
                     }
                 }
             }
+            // Always clear NFS currentTest so eagent resume cannot restart a cancelled run.
+            if result.changed {
+                clear_nfs_current_test(
+                    &state.config.device.nfs_host_path,
+                    result.device_type.as_deref(),
+                    result.device_nfs_path.as_deref(),
+                    &test_id,
+                )
+                .await;
+            }
+            // Notify eagent on terminal StartTestExecution *or* deferred WaitForDeviceBoot
+            // (same-root race: eagent may already be running while farm still waits).
+            if let Some(device_ip) = result.device_ip.as_deref() {
+                send_device_cancellation(
+                    device_ip,
+                    &test_id,
+                    state.config.device.edge_agent_http_port,
+                )
+                .await;
+            }
             if result.terminalized {
-                if let Some(device_ip) = result.device_ip.as_deref() {
-                    send_device_cancellation(
-                        device_ip,
-                        &test_id,
-                        state.config.device.edge_agent_http_port,
-                    )
-                    .await;
-                }
                 if let Some(device_type) = result.cleanup_device_type.as_deref() {
                     cleanup_cancelled_preparation(&state, device_type, &test_id).await;
                     if let Some(run_id) = result
@@ -94,6 +106,8 @@ pub async fn cancel(
                         progress: None,
                         message: None,
                         cancel_requested: None,
+            progress_kind: None,
+            phase: None,
                     },
                 )) {
                     tracing::warn!(%error, test_id, "failed to publish terminal cancellation");
@@ -135,13 +149,41 @@ async fn send_device_cancellation(device_ip: &str, test_id: &str, agent_port: u1
             return;
         }
     };
-    if let Err(error) = client
-        .post(url)
-        .json(&serde_json::json!({"testId": test_id}))
-        .send()
-        .await
-    {
+    let request = crate::external_http::with_edge_agent_auth(
+        client.post(url).json(&serde_json::json!({"testId": test_id})),
+    );
+    if let Err(error) = request.send().await {
         tracing::warn!(%error, test_id, "device cancellation request failed");
+    }
+}
+
+/// Remove farm-staged / Mode A `usr/src/currentTest.txt` so post-reboot eagent resume stops.
+async fn clear_nfs_current_test(
+    nfs_host_path: &str,
+    device_type: Option<&str>,
+    device_nfs_path: Option<&str>,
+    test_id: &str,
+) {
+    let mut paths = Vec::new();
+    if let Some(device_type) = device_type.filter(|value| {
+        super::validation::safe_segment(value) && super::validation::safe_segment(test_id)
+    }) {
+        paths.push(
+            std::path::Path::new(nfs_host_path)
+                .join(device_type)
+                .join(test_id)
+                .join("usr/src/currentTest.txt"),
+        );
+    }
+    if let Some(nfs_path) = device_nfs_path.map(str::trim).filter(|value| !value.is_empty()) {
+        paths.push(std::path::Path::new(nfs_path).join("usr/src/currentTest.txt"));
+    }
+    for path in paths {
+        if let Err(error) = tokio::fs::remove_file(&path).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, path = %path.display(), test_id, "failed to clear NFS currentTest.txt");
+        }
     }
 }
 
@@ -183,6 +225,8 @@ pub(crate) async fn complete_deferred_cancellation(
             progress: None,
             message: None,
             cancel_requested: None,
+            progress_kind: None,
+            phase: None,
         },
     )) {
         tracing::warn!(
@@ -221,6 +265,8 @@ pub(crate) fn cancellation_events(
             progress: None,
             message: None,
             cancel_requested: Some(true),
+            progress_kind: None,
+            phase: None,
         }),
     ]
 }

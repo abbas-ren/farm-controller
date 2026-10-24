@@ -80,6 +80,10 @@ pub(crate) struct TestCancellationResult {
     /// Whether the execution reached a terminal cancelled state.
     pub terminalized: bool,
     pub device_ip: Option<String>,
+    /// Device type for NFS `currentTest.txt` cleanup (even when cancel is deferred).
+    pub device_type: Option<String>,
+    /// Registered device NFS root (Mode A currentTest lives here, not only under `{type}/{testId}`).
+    pub device_nfs_path: Option<String>,
     pub cleanup_device_type: Option<String>,
     pub test_cycle_id: Option<String>,
 }

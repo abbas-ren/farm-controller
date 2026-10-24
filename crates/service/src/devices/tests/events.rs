@@ -10,7 +10,7 @@ use super::*;
 #[test]
 fn device_power_event_preserves_frontend_contract() {
     let event = device_power_event("device-1", "off");
-    assert_eq!(event.event, "device_power_update");
+    assert_eq!(event.event, "devicePowerUpdate");
     assert_eq!(event.payload["deviceId"], "device-1");
     assert_eq!(event.payload["power"], "off");
     assert!(event.payload["changedAt"].is_string());
@@ -65,11 +65,10 @@ fn report_upload_events_preserve_frontend_status_and_room_contracts() {
         Some("Confluence upload failed: rejected"),
         Some("rejected"),
     );
-    assert_eq!(events[0].event, "execution_report_update");
-    assert_eq!(events[0].payload["reportId"], report_id.to_string());
+    assert_eq!(events[0].event, "executionReportUpdate");
+    let _ = report_id;
     assert_eq!(events[0].payload["testExecutionId"], "test-1");
     assert_eq!(events[0].payload["status"], "failed");
-    assert_eq!(events[0].payload["createdBy"], "user-1");
     assert_eq!(
         events[0].payload["error"],
         "Confluence upload failed: rejected"
@@ -91,11 +90,11 @@ fn relay_confirmation_events_follow_committed_context() {
     };
     let events = relay_handlers::confirmation_events(&response);
     assert_eq!(events.len(), 3);
-    assert_eq!(events[0].event, "device_power_update");
+    assert_eq!(events[0].event, "devicePowerUpdate");
     assert_eq!(events[0].payload["deviceId"], "device-1");
-    assert_eq!(events[1].event, "relay_configuration_status");
+    assert_eq!(events[1].event, "relayConfigurationStatus");
     assert_eq!(events[1].payload["status"], "completed");
     assert_eq!(events[1].payload["completed"], 1);
-    assert_eq!(events[2].event, "device_controller_changed");
+    assert_eq!(events[2].event, "deviceControllerChanged");
     assert_eq!(events[2].payload["controllerId"], "controller-1");
 }

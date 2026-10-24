@@ -74,6 +74,8 @@ pub async fn update_status(
                 progress: None,
                 message: None,
                 cancel_requested: None,
+            progress_kind: None,
+            phase: None,
             });
 
             // Publish: notify connected frontend clients via Socket.IO.

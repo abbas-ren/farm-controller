@@ -287,8 +287,8 @@ mod tests {
     fn stale_test_events_refresh_owner_and_build_views() {
         let events = test_failure_events("test-1", "build-1", "user-1");
         assert_eq!(events.len(), 5);
-        assert_eq!(events[0].event, "test_execution");
-        assert_eq!(events[1].event, "test_execution_update");
+        assert_eq!(events[0].event, "testExecution");
+        assert_eq!(events[1].event, "testExecutionUpdate");
         assert_eq!(events[1].payload["status"], "failed");
     }
 

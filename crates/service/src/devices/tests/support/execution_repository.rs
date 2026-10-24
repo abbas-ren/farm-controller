@@ -128,6 +128,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
             changed: true,
             terminalized: true,
             device_ip: None,
+            device_type: Some("x5h".to_owned()),
+            device_nfs_path: None,
             cleanup_device_type: None,
             test_cycle_id: None,
         }))

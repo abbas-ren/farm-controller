@@ -515,18 +515,7 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
         let build_version = dispatch_build_version(&assigned.action).ok_or_else(|| {
             "build version is missing for test-execution dispatch".to_owned()
         })?;
-        let build_path = format!("{}/{test_id}", assigned.action.device_type);
-        let current_test = PathBuf::from(&state.config.device.nfs_host_path)
-            .join(&build_path)
-            .join("usr/src/currentTest.txt");
-        if let Some(parent) = current_test.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        tokio::fs::write(current_test, test_id)
-            .await
-            .map_err(|error| error.to_string())?;
+        let boot = resolve_test_boot_paths(state, assigned, test_id).await?;
         if let Some(database) = &state.database {
             test_execution::Entity::update_many()
                 .col_expr(
@@ -544,10 +533,10 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
         (
             "test-execution",
             serde_json::json!({
-                "nfs": format!("{}/{build_path}", state.config.device.nfs_host_path.trim_end_matches('/')),
+                "nfs": boot.nfs,
                 "server_ip": state.config.device.server_ip,
-                "image": format!("/{build_path}/Image"),
-                "dtb": format!("/{build_path}/board.dtb"),
+                "image": boot.image,
+                "dtb": boot.dtb,
                 "testId": test_id,
                 "build_ver": build_version,
                 "deviceId": assigned.device_id,
@@ -585,15 +574,31 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
     .map_err(|error| error.to_string())?;
     let mut last_error = String::new();
     for _ in 0..crate::external_http::EXPLICIT_COMMAND_ATTEMPTS {
-        match client.post(url.clone()).json(&payload).send().await {
+        let request = crate::external_http::with_edge_agent_auth(client.post(url.clone()).json(&payload));
+        match request.send().await {
             Ok(response) if response.status().is_success() => {
+                let body = response.text().await.unwrap_or_default();
+                let started = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| value.get("started")?.as_bool())
+                    .unwrap_or(false);
+                let rebooting = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| value.get("rebooting")?.as_bool())
+                    .unwrap_or(!started);
                 if let Some(test_id) = assigned.action.test_id.as_deref()
                     && let Some(database) = &state.database
                 {
+                    // Same-root eagent starts immediately (`started`); reboot path waits for boot.
+                    let phase = if started {
+                        test_execution::ExecutionPhase::StartTestExecution
+                    } else {
+                        test_execution::ExecutionPhase::WaitForDeviceBoot
+                    };
                     test_execution::Entity::update_many()
                         .col_expr(
                             test_execution::Column::ExecutionPhase,
-                            crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::WaitForDeviceBoot),
+                            crate::persistence::pg_enum::pg_enum(&phase),
                         )
                         .col_expr(
                             test_execution::Column::UpdatedAt,
@@ -603,23 +608,40 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
                         .exec(database.orm())
                         .await
                         .map_err(|error| error.to_string())?;
-                    let message = format!(
-                        "Selected tests were sent to device {} ({}). Waiting for the device to boot and report case results...",
-                        assigned.device_id, assigned.ip_address
-                    );
+                    let message = if started {
+                        format!(
+                            "Selected tests started on device {} ({}). Waiting for case results...",
+                            assigned.device_id, assigned.ip_address
+                        )
+                    } else {
+                        format!(
+                            "Selected tests were sent to device {} ({}). Waiting for the device to boot and report case results...",
+                            assigned.device_id, assigned.ip_address
+                        )
+                    };
                     if let Err(error) =
                         crate::devices::test_log::append_test_log(state, test_id, &message).await
                     {
                         tracing::warn!(%error, %test_id, "failed to append test-execution dispatch log");
                     }
-                    crate::socket::helpers::publish_result_progress(
-                        state,
-                        test_id,
-                        assigned.action.build_id.as_deref(),
-                        0,
-                        crate::socket::types::frontend::TestStatus::InProgress,
-                        Some("Selected tests are starting on the device"),
-                    );
+                    if started {
+                        crate::socket::helpers::publish_result_progress(
+                            state,
+                            test_id,
+                            assigned.action.build_id.as_deref(),
+                            0,
+                            crate::socket::types::frontend::TestStatus::InProgress,
+                            Some("Selected tests are running on the device"),
+                        );
+                    } else {
+                        let _ = rebooting;
+                        crate::socket::helpers::publish_device_boot_progress(
+                            state,
+                            test_id,
+                            assigned.action.build_id.as_deref(),
+                            &message,
+                        );
+                    }
                 }
                 return Ok(());
             }
@@ -999,19 +1021,117 @@ async fn device_already_on_target_version(
     state: &AppState,
     assigned: &AssignedAction,
 ) -> Result<bool, String> {
+    Ok(load_assigned_device(state, assigned)
+        .await?
+        .is_some_and(|device| device_software_matches_target(&device, assigned)))
+}
+
+/// PURPOSE: Choose Mode A (reuse registered NFS/TFTP) vs Mode B (new `{type}/{testId}` tree).
+/// USE: test-execution payload construction after optional IPL confirmation.
+///
+/// Mode A when the DUT already reports the target `build_ver` and has a usable `nfsPath`
+/// (IPL may already have been skipped). Otherwise Mode B stages/boots the full image tree
+/// prepared from the release ZIP under `{nfs_host}/{deviceType}/{testId}`.
+async fn resolve_test_boot_paths(
+    state: &AppState,
+    assigned: &AssignedAction,
+    test_id: &str,
+) -> Result<super::nfs_boot_paths::BootPaths, String> {
+    let staging = super::nfs_boot_paths::staging_nfs_root(
+        &state.config.device.nfs_host_path,
+        &assigned.action.device_type,
+        test_id,
+    );
+    let device = load_assigned_device(state, assigned).await?;
+    let reuse = device
+        .as_ref()
+        .is_some_and(|row| device_software_matches_target(row, assigned));
+
+    if reuse {
+        let nfs_path = device
+            .as_ref()
+            .and_then(|row| row.nfs_path.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "device {} is already on the target build but has no registered nfsPath; re-register the device before running tests without a full image flash",
+                    assigned.device_id
+                )
+            })?;
+        let boot = super::nfs_boot_paths::derive_boot_paths(
+            &state.config.device.nfs_host_path,
+            nfs_path,
+        )?;
+        let current_root = PathBuf::from(&boot.nfs);
+        let staging_root = staging.clone();
+        tokio::task::spawn_blocking(move || {
+            super::nfs_boot_paths::sync_usr_src_tree(&staging_root, &current_root)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        let current_test = PathBuf::from(&boot.nfs).join("usr/src/currentTest.txt");
+        if let Some(parent) = current_test.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        tokio::fs::write(&current_test, test_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        tracing::info!(
+            device_id = %assigned.device_id,
+            test_id,
+            nfs = %boot.nfs,
+            "reusing registered NFS/TFTP paths for test execution (Mode A)"
+        );
+        return Ok(boot);
+    }
+
+    let build_path = format!("{}/{test_id}", assigned.action.device_type);
+    let current_test = staging.join("usr/src/currentTest.txt");
+    if let Some(parent) = current_test.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    tokio::fs::write(&current_test, test_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    tracing::info!(
+        device_id = %assigned.device_id,
+        test_id,
+        build_path = %build_path,
+        "using new per-test NFS/TFTP paths for full image flash (Mode B)"
+    );
+    Ok(super::nfs_boot_paths::BootPaths {
+        nfs: format!(
+            "{}/{build_path}",
+            state.config.device.nfs_host_path.trim_end_matches('/')
+        ),
+        image: format!("/{build_path}/Image"),
+        dtb: format!("/{build_path}/board.dtb"),
+    })
+}
+
+async fn load_assigned_device(
+    state: &AppState,
+    assigned: &AssignedAction,
+) -> Result<Option<device::Model>, String> {
     let database = state
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable".to_owned())?;
-    let device = device::Entity::find()
+    device::Entity::find()
         .filter(device::Column::DeviceId.eq(&assigned.device_id))
         .filter(device::Column::DeletedAt.is_null())
         .one(database.orm())
         .await
-        .map_err(|error| error.to_string())?;
-    let Some(device) = device else {
-        return Ok(false);
-    };
+        .map_err(|error| error.to_string())
+}
+
+fn device_software_matches_target(device: &device::Model, assigned: &AssignedAction) -> bool {
     let target = assigned
         .action
         .build_version
@@ -1020,13 +1140,13 @@ async fn device_already_on_target_version(
         .unwrap_or("")
         .trim();
     if target.is_empty() {
-        return Ok(false);
+        return false;
     }
-    Ok(device
+    device
         .software_version
         .as_deref()
         .map(|value| value.trim() == target)
-        .unwrap_or(false))
+        .unwrap_or(false)
 }
 
 async fn mark_ipl_confirm_true(state: &AppState, action_id: Uuid) -> Result<(), String> {
@@ -1525,6 +1645,26 @@ async fn fail_dispatch(
     }
 
     transaction.commit().await?;
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        let mut paths = vec![
+            PathBuf::from(&state.config.device.nfs_host_path)
+                .join(&assigned.action.device_type)
+                .join(test_id)
+                .join("usr/src/currentTest.txt"),
+        ];
+        if let Ok(Some(device)) = load_assigned_device(state, assigned).await
+            && let Some(nfs_path) = device.nfs_path.as_deref().map(str::trim).filter(|v| !v.is_empty())
+        {
+            paths.push(PathBuf::from(nfs_path).join("usr/src/currentTest.txt"));
+        }
+        for path in paths {
+            if let Err(error) = tokio::fs::remove_file(&path).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(%error, path = %path.display(), %test_id, "failed to clear NFS currentTest after dispatch failure");
+            }
+        }
+    }
     Ok(dispatch_failure_events(assigned, error))
 }
 

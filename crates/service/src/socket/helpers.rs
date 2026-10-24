@@ -5,7 +5,7 @@
 use axum::http::{HeaderMap, HeaderValue, header};
 use socketioxide::{
     SocketIo,
-    extract::{SocketRef, TryData},
+    extract::{Data, SocketRef, TryData},
     layer::SocketIoLayer,
 };
 use uuid::Uuid;
@@ -81,7 +81,6 @@ pub(crate) fn socket_io_layer(event_hub: &EventHub) -> SocketIoLayer {
 /// Socket io connect.
 async fn socket_io_connect(socket: SocketRef, TryData(auth): TryData<serde_json::Value>) {
     if let Ok(_auth) = auth {
-        // Validate/authenticate `auth` here if required.
         tracing::debug!(socket_id = %socket.id, "Socket.IO client connected");
     } else {
         tracing::warn!(
@@ -89,6 +88,27 @@ async fn socket_io_connect(socket: SocketRef, TryData(auth): TryData<serde_json:
             "Socket.IO connection received invalid auth data"
         );
     }
+    // FE emits join:dashboard / join:build; register rooms so publish can target them (G6).
+    socket.on("join:dashboard", join_dashboard_room);
+    socket.on("leave:dashboard", leave_dashboard_room);
+    socket.on("join:build", join_build_room);
+    socket.on("leave:build", leave_build_room);
+}
+
+async fn join_dashboard_room(socket: SocketRef, Data(name): Data<String>) {
+    socket.join(format!("dashboard:{}", name.trim()));
+}
+
+async fn leave_dashboard_room(socket: SocketRef, Data(name): Data<String>) {
+    socket.leave(format!("dashboard:{}", name.trim()));
+}
+
+async fn join_build_room(socket: SocketRef, Data(build_id): Data<String>) {
+    socket.join(format!("build:{}", build_id.trim()));
+}
+
+async fn leave_build_room(socket: SocketRef, Data(build_id): Data<String>) {
+    socket.leave(format!("build:{}", build_id.trim()));
 }
 
 /// Normalize controller id.
@@ -125,6 +145,30 @@ pub(crate) fn publish_ipl_progress(
             progress: Some(percentage.min(100)),
             message: Some(message.to_owned()),
             cancel_requested: None,
+            progress_kind: Some("ipl".to_owned()),
+            phase: Some("WAIT_FOR_IPL_CONFIRMATION".to_owned()),
+        },
+    );
+}
+
+/// Publish wait-for-boot progress after `/test-execution` is accepted (DUT may reboot).
+pub(crate) fn publish_device_boot_progress(
+    state: &AppState,
+    test_id: &str,
+    build_id: Option<&str>,
+    message: &str,
+) {
+    publish_frontend_event(
+        state,
+        FrontendMessagePayload::TestExecutionUpdate {
+            build_id: build_id.map(str::to_owned),
+            test_id: test_id.to_owned(),
+            status: Some(TestStatus::InProgress),
+            progress: Some(0),
+            message: Some(message.to_owned()),
+            cancel_requested: None,
+            progress_kind: Some("deviceBoot".to_owned()),
+            phase: Some("WAIT_FOR_DEVICE_BOOT".to_owned()),
         },
     );
 }
@@ -147,6 +191,8 @@ pub(crate) fn publish_result_progress(
             progress: Some(percentage.min(100)),
             message: message.map(str::to_owned),
             cancel_requested: None,
+            progress_kind: Some("result".to_owned()),
+            phase: Some("START_TEST_EXECUTION".to_owned()),
         },
     );
 }
@@ -332,6 +378,8 @@ pub(crate) fn test_failure_events(
             progress: None,
             message: None,
             cancel_requested: Some(false),
+            progress_kind: None,
+            phase: None,
         },
     ));
     events.push(build_performance_event(build_id));
@@ -436,6 +484,8 @@ pub(crate) fn test_build_event(test_id: &str, build_id: &str, status: &str) -> S
         progress: None,
         message: None,
         cancel_requested: None,
+            progress_kind: None,
+            phase: None,
     })
 }
 

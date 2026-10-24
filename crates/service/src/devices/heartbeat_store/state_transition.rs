@@ -3,7 +3,7 @@
 //! Encodes busy/free/faulty/not_reachable transitions and test-log inserts
 //! matching Node heartbeat worker behavior.
 
-use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel,
+use sea_orm::{ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel,
     QueryFilter, QueryOrder, QuerySelect, Set,
     sea_query::{Expr, LockType},
 };
@@ -267,20 +267,97 @@ pub(super) async fn process_device_post_update(
         .await?;
     if let Some(action) = running_test {
         if let Some(tid) = action.test_id.as_deref() {
-            test_execution::Entity::update_many()
-                .col_expr(
-                    test_execution::Column::ExecutionPhase,
-                    crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::StartTestExecution),
-                )
-                .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+            let execution = test_execution::Entity::find()
                 .filter(test_execution::Column::TestId.eq(tid))
-                .filter(
-                    Condition::any()
-                        .add(test_execution::Column::CancelRequested.eq(false))
-                        .add(test_execution::Column::CancelRequested.is_null()),
-                )
-                .exec(transaction)
+                .lock(LockType::Update)
+                .one(transaction)
                 .await?;
+            let Some(execution) = execution else {
+                return Ok((events, deferred_cancellations, deferred_test_logs));
+            };
+            let cancel_requested = execution.cancel_requested.unwrap_or(false);
+            let phase = execution.execution_phase;
+            if cancel_requested {
+                // Mirror IPL cancel: deferred WaitForDeviceBoot cancel must terminalize on boot.
+                let terminal = matches!(
+                    execution.status,
+                    Some(test_execution::TestStatus::Cancelled)
+                        | Some(test_execution::TestStatus::Completed)
+                        | Some(test_execution::TestStatus::Failed)
+                );
+                if !terminal {
+                    let build_id = execution.build_id.clone();
+                    let created_by = execution.created_by.clone();
+                    let started = execution.started_at.unwrap_or(now);
+                    let mut active = execution.into_active_model();
+                    active.status = Set(Some(test_execution::TestStatus::Cancelled));
+                    active.cancel_handled = Set(Some(true));
+                    active.execution_phase =
+                        Set(Some(test_execution::ExecutionPhase::CompleteCancelled));
+                    active.started_at = Set(Some(started));
+                    active.ended_at = Set(Some(now));
+                    active.updated_at = Set(now);
+                    active.update(transaction).await?;
+
+                    device_action_queue::Entity::update_many()
+                        .col_expr(
+                            device_action_queue::Column::Status,
+                            crate::persistence::pg_enum::pg_enum(
+                                &device_action_queue::QueueJobStatus::Cancelled,
+                            ),
+                        )
+                        .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+                        .filter(device_action_queue::Column::TestId.eq(tid))
+                        .filter(device_action_queue::Column::Status.is_not_in([
+                            device_action_queue::QueueJobStatus::Completed,
+                            device_action_queue::QueueJobStatus::Cancelled,
+                        ]))
+                        .exec(transaction)
+                        .await?;
+
+                    insert_test_log(
+                        transaction,
+                        tid,
+                        "This test has been cancelled successfully",
+                        now,
+                    )
+                    .await?;
+                    deferred_cancellations.push(DeferredCancellation {
+                        test_id: tid.to_owned(),
+                        build_id,
+                        created_by: created_by.unwrap_or_else(|| "system".to_owned()),
+                    });
+                }
+            } else if matches!(
+                phase,
+                Some(test_execution::ExecutionPhase::WaitForDeviceBoot)
+                    | Some(test_execution::ExecutionPhase::SendFlashRequest)
+                    | Some(test_execution::ExecutionPhase::RequeueAfterIplConfirmation)
+                    | Some(test_execution::ExecutionPhase::DeviceAssigned)
+                    | Some(test_execution::ExecutionPhase::StartTestExecution)
+                    | None
+            ) {
+                // Only promote toward StartTestExecution from boot/dispatch-related phases.
+                let promote = matches!(
+                    phase,
+                    Some(test_execution::ExecutionPhase::WaitForDeviceBoot)
+                        | Some(test_execution::ExecutionPhase::SendFlashRequest)
+                        | None
+                );
+                if promote {
+                    test_execution::Entity::update_many()
+                        .col_expr(
+                            test_execution::Column::ExecutionPhase,
+                            crate::persistence::pg_enum::pg_enum(
+                                &test_execution::ExecutionPhase::StartTestExecution,
+                            ),
+                        )
+                        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+                        .filter(test_execution::Column::TestId.eq(tid))
+                        .exec(transaction)
+                        .await?;
+                }
+            }
         }
     }
     Ok((events, deferred_cancellations, deferred_test_logs))

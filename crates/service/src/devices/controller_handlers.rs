@@ -75,12 +75,14 @@ pub async fn delete_device(
                 );
             }
         };
-        // Edge: outbound HTTP call to EdgeController.
-        match callback_client()
-            .post(url)
-            .json(&serde_json::json!({"UID": device_id}))
-            .send()
-            .await
+        // Edge: outbound HTTP call to eagent `/delete`.
+        match crate::external_http::with_edge_agent_auth(
+            callback_client()
+                .post(url)
+                .json(&serde_json::json!({"UID": device_id})),
+        )
+        .send()
+        .await
         {
             Ok(response) if response.status().is_success() => {}
             Ok(response) => {

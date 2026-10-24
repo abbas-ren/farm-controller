@@ -51,7 +51,7 @@ async fn admin_can_update_test_execution_status() {
                 serde_json::json!({"testId": "42", "status": "in_progress"})
             );
             let event = events.recv().await.unwrap();
-            assert_eq!(event.event, "test_execution_update");
+            assert_eq!(event.event, "testExecutionUpdate");
             assert_eq!(event.payload["testId"], "42");
             assert_eq!(event.payload["update"]["data"]["status"], "in_progress");
         }

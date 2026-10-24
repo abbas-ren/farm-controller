@@ -246,12 +246,7 @@ async fn proxy_agent(
         Err(error) => return internal_error(format!("cannot create EdgeAgent client: {error}")),
     };
     let mut request = client.request(method, url);
-    if let Some(token) = std::env::var("EDGE_AGENT_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty())
-    {
-        request = request.bearer_auth(token);
-    }
+    request = crate::external_http::with_edge_agent_auth(request);
     if let Some(body) = body {
         request = request.json(&body);
     }

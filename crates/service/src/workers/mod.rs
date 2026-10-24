@@ -23,6 +23,7 @@ pub mod fallback_flash;
 pub mod gen5_mapping;
 pub mod gen5_reboot_watchdog;
 pub mod ipl_distribution;
+pub mod nfs_boot_paths;
 pub mod relay_service;
 pub mod retention;
 pub mod system_metrics;

@@ -82,9 +82,37 @@ impl EventHub {
     pub fn publish(&self, event: ServerEvent) -> Result<(), String> {
         tracing::trace!(event = %event.event, "publishing socket event");
         if let Some(socket_io) = self.socket_io.get() {
-            for socket in socket_io.sockets() {
-                if let Err(error) = socket.emit(&event.event, &event.payload) {
-                    tracing::debug!(%error, event = %event.event, "Socket.IO client emit failed");
+            let test_scoped = matches!(
+                event.event.as_str(),
+                "testExecution"
+                    | "testExecutionUpdate"
+                    | "buildTestExecutionUpdate"
+                    | "executionReportUpdate"
+            );
+            if test_scoped {
+                // Target FE join rooms (G6): dashboard:user / dashboard:admin / build:{id}.
+                let mut rooms = vec!["dashboard:user".to_owned(), "dashboard:admin".to_owned()];
+                if let Some(build_id) = event
+                    .payload
+                    .get("buildId")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                {
+                    rooms.push(format!("build:{build_id}"));
+                }
+                let io = socket_io.clone();
+                let event_name = event.event.clone();
+                let payload = event.payload.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = io.to(rooms).emit(event_name.as_str(), &payload).await {
+                        tracing::debug!(%error, event = %event_name, "Socket.IO room emit failed");
+                    }
+                });
+            } else {
+                for socket in socket_io.sockets() {
+                    if let Err(error) = socket.emit(&event.event, &event.payload) {
+                        tracing::debug!(%error, event = %event.event, "Socket.IO client emit failed");
+                    }
                 }
             }
         }

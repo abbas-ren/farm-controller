@@ -198,52 +198,12 @@ pub async fn reboot_device(
             "Reboot is not supported for this device family",
         );
     }
-    let (Some(controller_ip), Some(power_port)) = (target.controller_ip, target.power_port) else {
-        return error_response(
-            StatusCode::NOT_FOUND,
-            "power_mapping_not_found",
-            "No power mapping was found for this Gen5 device",
-        );
-    };
-    let controller_port = state.config.device.edge_controller_http_port;
-    let url = match reqwest::Url::parse(&format!(
-        "http://{controller_ip}:{controller_port}/reboot-device"
-    )) {
-        Ok(url) => url,
-        Err(_) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_controller_address",
-                "Controller IP address is invalid",
-            );
-        }
-    };
-    // Edge: outbound HTTP call to EdgeController.
-    match callback_client()
-        .post(url)
-        .json(&serde_json::json!({"power": power_port}))
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => Json(serde_json::json!({
-            "success": true, "message": "Device rebooted successfully",
-        }))
-        .into_response(),
-        Ok(response) => {
-            tracing::warn!(status = %response.status(), device_id, "controller rejected device reboot");
-            error_response(
-                StatusCode::BAD_GATEWAY,
-                "reboot_failed",
-                "Controller rejected the reboot command",
-            )
-        }
-        Err(error) => {
-            tracing::warn!(%error, device_id, "controller reboot callback failed");
-            error_response(
-                StatusCode::BAD_GATEWAY,
-                "controller_unreachable",
-                "Controller reboot endpoint is unavailable",
-            )
-        }
-    }
+    // Public DUT callback from eagent (`schedule_reboot`) already issues a local soft
+    // reboot. Do not also power-cycle via EdgeController — that races the soft reboot
+    // during NFS flash / test-execution boot (G7).
+    Json(serde_json::json!({
+        "success": true,
+        "message": "Gen5 reboot acknowledged; device soft-reboot is in progress",
+    }))
+    .into_response()
 }

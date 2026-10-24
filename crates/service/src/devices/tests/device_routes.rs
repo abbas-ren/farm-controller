@@ -73,17 +73,35 @@ async fn edgecontroller_callbacks_preserve_wire_contracts() {
         ]
     );
 
-    let cancellation = events.recv().await.unwrap();
-    assert_eq!(cancellation.event, "test_execution_update");
-    assert_eq!(cancellation.payload["testId"], "test-1");
-    assert_eq!(
-        cancellation.payload["update"]["data"]["status"],
-        "cancelled"
-    );
-    let device = events.recv().await.unwrap();
-    assert_eq!(device.event, "device_state_update");
-    assert_eq!(device.payload["deviceId"], "device-1");
-    assert_eq!(device.payload["state"], "free");
+    let mut saw_cancel = false;
+    let mut saw_free = false;
+    for _ in 0..8 {
+        let event = events.recv().await.unwrap();
+        if event.event == "testExecution"
+            && event.payload["testId"] == "test-1"
+            && (event.payload["type"] == "status" || event.payload["type"] == "log")
+            && event.payload["data"]["status"] == "cancelled"
+        {
+            saw_cancel = true;
+        }
+        if event.event == "testExecutionUpdate"
+            && event.payload["testId"] == "test-1"
+            && event.payload["status"] == "cancelled"
+        {
+            saw_cancel = true;
+        }
+        if event.event == "deviceStateUpdate"
+            && event.payload["deviceId"] == "device-1"
+            && event.payload["state"] == "free"
+        {
+            saw_free = true;
+        }
+        if saw_cancel && saw_free {
+            break;
+        }
+    }
+    assert!(saw_cancel, "expected cancelled execution event");
+    assert!(saw_free, "expected device free state event");
 }
 
 /// PURPOSE: Assert frontend family and type reads require auth and return bare arrays.
@@ -290,14 +308,14 @@ async fn relay_configuration_preserves_admin_and_callback_contracts() {
             .unwrap();
     assert_eq!(body["confirmed"], true);
     let power_event = events.recv().await.unwrap();
-    assert_eq!(power_event.event, "device_power_update");
+    assert_eq!(power_event.event, "devicePowerUpdate");
     assert_eq!(power_event.payload["deviceId"], "device-1");
     let status_event = events.recv().await.unwrap();
-    assert_eq!(status_event.event, "relay_configuration_status");
+    assert_eq!(status_event.event, "relayConfigurationStatus");
     assert_eq!(status_event.payload["status"], "completed");
     assert_eq!(status_event.payload["completed"], 1);
     let controller_event = events.recv().await.unwrap();
-    assert_eq!(controller_event.event, "device_controller_changed");
+    assert_eq!(controller_event.event, "deviceControllerChanged");
     assert_eq!(controller_event.payload["controllerId"], "controller-1");
 
     let invalid = app
@@ -373,7 +391,7 @@ async fn device_power_toggle_preserves_frontend_http_and_event_contracts() {
         &["power:power-device:off"]
     );
     let event = events.recv().await.unwrap();
-    assert_eq!(event.event, "device_power_update");
+    assert_eq!(event.event, "devicePowerUpdate");
     assert_eq!(event.payload["deviceId"], "power-device");
     assert_eq!(event.payload["power"], "off");
     assert!(event.payload["changedAt"].is_string());

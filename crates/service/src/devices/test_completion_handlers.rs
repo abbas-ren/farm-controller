@@ -345,8 +345,8 @@ mod tests {
     fn rtos_event_targets_the_execution_owner() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "rtos_event_targets_the_execution_owner");
         let event = rtos_log_event("test-1", Some("build-1"), "/tmp/rtos.log", "user-1");
-        assert_eq!(event.event, "test_execution");
-        assert_eq!(event.payload["type"], "rtos_log");
+        assert_eq!(event.event, "testExecution");
+        assert_eq!(event.payload["type"], "rtosLog");
         assert_eq!(event.payload["data"]["rtosLogPath"], "/tmp/rtos.log");
     }
 }

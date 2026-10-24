@@ -403,6 +403,8 @@ async fn flash_confirmation_response(
                         progress: None,
                         message: Some(fail_message.to_owned()),
                         cancel_requested: None,
+            progress_kind: None,
+            phase: None,
                     },
                 );
             }

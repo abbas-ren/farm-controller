@@ -1,4 +1,6 @@
 //! Shared socket route paths and room/event name constants.
+//!
+//! Event names match live `FrontendMessagePayload` serde `kind` tags (camelCase).
 
 pub const EDGE_SUBPROTOCOL: &str = "web-cli-protocol";
 pub const BROWSER_SUBPROTOCOL: &str = "farm-browser-v1";
@@ -8,35 +10,35 @@ pub const WS_EVENT: WsEvent = WsEvent {
 
     HEARTBEAT: "heartbeat",
 
-    USER_DATA: "user_data",
+    USER_DATA: "userData",
 
-    SSH_INPUT: "ssh_input",
-    SSH_OUTPUT: "ssh_output",
+    SSH_INPUT: "sshInput",
+    SSH_OUTPUT: "sshOutput",
 
-    DEVICE_INTERFACE_UPDATE: "device_interface_update",
-    DEVICE_PING: "device_ping",
-    DEVICE_POWER_UPDATE: "device_power_update",
-    DEVICE_STATE_UPDATE: "device_state_update",
+    DEVICE_INTERFACE_UPDATE: "deviceInterfaceUpdate",
+    DEVICE_PING: "devicePing",
+    DEVICE_POWER_UPDATE: "devicePowerUpdate",
+    DEVICE_STATE_UPDATE: "deviceStateUpdate",
 
-    DEVICE_CONTROLLER_CHANGED: "device_controller_changed",
-    DEVICE_CONTROLLER_PING: "device_controller_ping",
+    DEVICE_CONTROLLER_CHANGED: "deviceControllerChanged",
+    DEVICE_CONTROLLER_PING: "deviceControllerPing",
 
-    TEST_EXECUTION: "test_execution",
-    TEST_EXECUTION_UPDATE: "test_execution_update",
+    TEST_EXECUTION: "testExecution",
+    TEST_EXECUTION_UPDATE: "testExecutionUpdate",
 
-    BUILD_DELETED: "build_deleted",
-    BUILD_PERFORMANCE_UPDATE: "build_performance_update",
-    BUILD_STATUS_CHANGED: "build_status_changed",
-    BUILD_TEST_EXECUTION_UPDATE: "build_test_execution_update",
-    BUILD_UPLOADED: "build_uploaded",
+    BUILD_DELETED: "buildDeleted",
+    BUILD_PERFORMANCE_UPDATE: "buildPerformanceUpdate",
+    BUILD_STATUS_CHANGED: "buildStatusChanged",
+    BUILD_TEST_EXECUTION_UPDATE: "buildTestExecutionUpdate",
+    BUILD_UPLOADED: "buildUploaded",
 
-    UPLOAD_PROGRESS: "upload_progress",
-    UPLOAD_ERROR: "upload_error",
-    UPLOAD_COMPLETE: "upload_complete",
+    UPLOAD_PROGRESS: "uploadProgress",
+    UPLOAD_ERROR: "uploadError",
+    UPLOAD_COMPLETE: "uploadComplete",
 
-    RELAY_CONFIG_STATUS: "relay_configuration_status",
+    RELAY_CONFIG_STATUS: "relayConfigurationStatus",
 
-    RTS_LOG: "rts_log",
+    RTS_LOG: "rtosLog",
 };
 
 #[allow(non_snake_case)]

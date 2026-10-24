@@ -88,12 +88,14 @@ pub async fn update_heartbeat_timeout(
             );
         }
     };
-    // Edge: outbound HTTP call to EdgeController.
-    let response = callback_client()
-        .post(url)
-        .json(&serde_json::json!({"timeout": request.value}))
-        .send()
-        .await;
+    // Edge: outbound HTTP call to eagent `/configure/heartbeat`.
+    let response = crate::external_http::with_edge_agent_auth(
+        callback_client()
+            .post(url)
+            .json(&serde_json::json!({"timeout": request.value})),
+    )
+    .send()
+    .await;
     match response {
         Ok(response) if response.status().is_success() => {}
         Ok(response) => {
@@ -231,14 +233,14 @@ pub async fn device_action(
                 );
             }
         };
-        // Edge: outbound HTTP call to EdgeController.
+        // Edge: outbound HTTP call to eagent `/approve`.
         let client = callback_client();
-        match client
-            .post(url)
-            .json(&serde_json::json!({"UID": target.device_id, "IP": target.ip_address}))
-            .send()
-            .await
-        {
+        let request = crate::external_http::with_edge_agent_auth(
+            client
+                .post(url)
+                .json(&serde_json::json!({"UID": target.device_id, "IP": target.ip_address})),
+        );
+        match request.send().await {
             Ok(response) if response.status().is_success() => {}
             Ok(response) if response.status() == reqwest::StatusCode::CONFLICT => {
                 return error_response(

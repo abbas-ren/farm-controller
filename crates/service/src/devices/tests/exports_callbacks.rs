@@ -108,7 +108,7 @@ async fn flashing_callback_is_public_and_reports_missing_devices() {
                 "Device device-1 is now marked as upgrading"
             );
             let event = events.recv().await.unwrap();
-            assert_eq!(event.event, "device_state_update");
+            assert_eq!(event.event, "deviceStateUpdate");
             assert_eq!(event.payload["deviceId"], "device-1");
             assert_eq!(event.payload["state"], "busy");
             assert_eq!(event.payload["upgrading"], true);

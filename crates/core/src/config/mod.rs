@@ -931,6 +931,15 @@ impl AppConfig {
                     .to_owned(),
             ));
         }
+        if !self.device.nfs_host_path.starts_with('/')
+            || self.device.nfs_host_path.len() < 2
+            || self.device.nfs_host_path.contains("..")
+        {
+            return Err(AppError::Configuration(
+                "device.nfs_host_path must be an absolute path (eagent rejects relative nfs roots)"
+                    .to_owned(),
+            ));
+        }
         for (family, username, password, remote_path) in [
             (
                 "Gen4",

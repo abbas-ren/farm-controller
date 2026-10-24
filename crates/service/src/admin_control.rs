@@ -733,12 +733,7 @@ async fn proxy_agent(
         reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
         url,
     );
-    if let Some(token) = std::env::var("EDGE_AGENT_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty())
-    {
-        request = request.bearer_auth(token);
-    }
+    request = crate::external_http::with_edge_agent_auth(request);
     if let Some(payload) = payload {
         request = request.json(&payload);
     }

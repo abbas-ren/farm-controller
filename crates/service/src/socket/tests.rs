@@ -151,7 +151,7 @@ fn device_heartbeat_events_follow_committed_frontend_contract() {
             .map(|event| event.event.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "device_state_update",
+            "deviceStateUpdate",
             "device:interface-update",
             "alert",
             "device:ping"

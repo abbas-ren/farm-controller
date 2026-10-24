@@ -164,14 +164,77 @@ async fn dispatch(state: &AppState, fallback: &FallbackFlash) -> Result<(), Stri
     .map_err(|error| error.to_string())?;
     let mut last_error = String::new();
     for _ in 0..crate::external_http::EXPLICIT_COMMAND_ATTEMPTS {
-        match client.post(url.clone()).json(&payload).send().await {
-            Ok(response) if response.status().is_success() => return Ok(()),
+        let request =
+            crate::external_http::with_edge_agent_auth(client.post(url.clone()).json(&payload));
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                let body = response.text().await.unwrap_or_default();
+                let rebooting = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| value.get("rebooting")?.as_bool())
+                    .unwrap_or(true);
+                // eagent returns `rebooting: false` when already on this NFS root (no env rewrite).
+                // Nudge Gen5 via EdgeController power cycle so the board still cycles onto TFTP.
+                if !rebooting
+                    && let Err(error) = nudge_gen5_power_cycle(state, &fallback.device_id).await
+                {
+                    tracing::warn!(
+                        %error,
+                        device_id = %fallback.device_id,
+                        "fallback flash skipped reboot; Gen5 power-cycle nudge failed"
+                    );
+                }
+                return Ok(());
+            }
             Ok(response) => last_error = format!("device returned {}", response.status()),
             Err(error) => last_error = error.to_string(),
         }
         tokio::time::sleep(DEVICE_COMMAND_RETRY_DELAY).await;
     }
     Err(last_error)
+}
+
+/// Best-effort Gen5 EdgeController power cycle when eagent skipped reboot.
+async fn nudge_gen5_power_cycle(state: &AppState, device_id: &str) -> Result<(), String> {
+    let Some(repository) = state.device_repository.as_ref() else {
+        return Ok(());
+    };
+    let Some(target) = repository
+        .device_reboot_target(device_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+    let family = target
+        .device_family
+        .as_deref()
+        .unwrap_or("")
+        .replace(' ', "")
+        .to_lowercase();
+    if family != "gen5" {
+        return Ok(());
+    }
+    let (Some(controller_ip), Some(power_port)) = (target.controller_ip, target.power_port) else {
+        return Ok(());
+    };
+    let controller_port = state.config.device.edge_controller_http_port;
+    let url = reqwest::Url::parse(&format!(
+        "http://{controller_ip}:{controller_port}/reboot-device"
+    ))
+    .map_err(|error| error.to_string())?;
+    let client = crate::external_http::client(Duration::from_secs(15)).map_err(|e| e.to_string())?;
+    let response = client
+        .post(url)
+        .json(&serde_json::json!({"power": power_port}))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("controller returned {}", response.status()))
+    }
 }
 
 /// Build the JSON flash body expected by the edge controller.
