@@ -2,7 +2,6 @@
 
 use socketioxide::SocketIo;
 use std::sync::OnceLock;
-use tracing::info;
 
 use crate::socket::types::{
     edge_agent::EdgeAgentMessagePayload,
@@ -79,19 +78,18 @@ impl EventHub {
     /// Emit to connected Socket.IO clients and fan out on the broadcast channel.
     ///
     /// WS event shape: `{ type: event.event, payload: event.payload }` (serde rename).
+    /// Logging stays at `trace` so default `info` stdout is not flooded by every WS fan-out.
     pub fn publish(&self, event: ServerEvent) -> Result<(), String> {
-        let event_name = event.event.clone();
-        info!("Publishing event: {}", event_name);
+        tracing::trace!(event = %event.event, "publishing socket event");
         if let Some(socket_io) = self.socket_io.get() {
             for socket in socket_io.sockets() {
                 if let Err(error) = socket.emit(&event.event, &event.payload) {
-                    tracing::debug!(%error, event = event.event, "Socket.IO client emit failed");
+                    tracing::debug!(%error, event = %event.event, "Socket.IO client emit failed");
                 }
             }
         }
 
         let _ = self.sender.send(event);
-        info!("Published event: {}", event_name);
         Ok(())
     }
 }

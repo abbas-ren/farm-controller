@@ -9,8 +9,6 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Databas
     FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
-use tracing::info;
-
 use crate::{
     devices::{FlashExecutionProgress, IplFlashingStatus},
     persistence::entity::{
@@ -159,9 +157,11 @@ pub(crate) async fn confirm_flash(
 ) -> Result<FlashConfirmationResult, DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::callback_store", "confirm_flash");
-    info!(
-        "\nStarting flash confirmation for device_type: {}, flashing_status: {:?}\n",
-        device_type, flashing_status
+    tracing::debug!(
+        %device_type,
+        percentage = flashing_status.percentage,
+        completed = flashing_status.completed,
+        "starting IPL flash confirmation"
     );
     let transaction = orm.begin().await?;
     let mut result = FlashConfirmationResult::default();
@@ -188,10 +188,7 @@ pub(crate) async fn confirm_flash(
         let test_id = job.test_id.clone();
         match flashing_status.status {
             CallbackStatus::Success => {
-                info!(
-                    "\nFlash confirmation success received for job_id: {}\n",
-                    job_id
-                );
+                tracing::debug!(%job_id, "IPL flash confirmation success");
                 if flashing_status.completed {
                     let now = Utc::now();
                     device_action_queue::ActiveModel {
@@ -216,10 +213,6 @@ pub(crate) async fn confirm_flash(
                 if let Some(test_id) = test_id.as_deref()
                     && let Some(execution) = active_execution(&transaction, test_id).await?
                 {
-                    info!(
-                        "\nUpdating flash execution progress for test_id: {}, build_id: {}\n",
-                        test_id, execution.build_id
-                    );
                     result.progress = Some(FlashExecutionProgress {
                         test_id: test_id.to_owned(),
                         build_id: execution.build_id,
@@ -233,10 +226,7 @@ pub(crate) async fn confirm_flash(
                 }
             }
             CallbackStatus::Failure => {
-                info!(
-                    "\nFlash confirmation failure received for job_id: {}\n",
-                    job_id
-                );
+                tracing::warn!(%job_id, "IPL flash confirmation failure");
                 let now = Utc::now();
                 device_action_queue::ActiveModel {
                     id: Set(job_id),
@@ -260,12 +250,12 @@ pub(crate) async fn confirm_flash(
                     insert_test_log(
                         &transaction,
                         test_id,
-                        "IPL flash confirmation failed. Test execution cancelled",
+                        "IPL flashing failed on the device. The test was cancelled — please check the hardware setup and try again.",
                     )
                     .await?;
                 }
                 if let Some(device_id) = device_id {
-                    info!("\nReleasing device with device_id: {}\n", device_id);
+                    tracing::debug!(%device_id, "releasing device after IPL failure");
                     let updated = device::Entity::update_many()
                         .col_expr(
                             device::Column::State,

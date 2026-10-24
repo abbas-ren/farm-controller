@@ -58,7 +58,7 @@ async fn run_cycle(state: &AppState) {
         let assigned = match assign_next(state).await {
             Ok(Some(assigned)) => assigned,
             Ok(None) => {
-                info!(worker = "device_action", "no queued actions available");
+                tracing::trace!(worker = "device_action", "no queued actions available");
                 break;
             }
             Err(err) => {
@@ -77,11 +77,14 @@ async fn run_cycle(state: &AppState) {
         if let Some(test_id) = assigned.action.test_id.as_deref() {
             let message = if assigned.action.ipl_flash_confirm == Some(true) {
                 format!(
-                    "Resuming test execution on device {} after IPL confirmation",
+                    "Device {} is ready after IPL. Preparing and starting the selected tests...",
                     assigned.device_id
                 )
             } else {
-                format!("Starting test execution on device {}", assigned.device_id)
+                format!(
+                    "Starting test execution on device {}",
+                    assigned.device_id
+                )
             };
             if let Err(error) =
                 crate::devices::test_log::append_test_log(state, test_id, &message).await
@@ -89,7 +92,7 @@ async fn run_cycle(state: &AppState) {
                 tracing::warn!(%error, %test_id, "failed to append assignment test log");
             }
         }
-        info!(action_id = %assigned.action.id, worker = "device_action", "dispatching action");
+        tracing::debug!(action_id = %assigned.action.id, worker = "device_action", "dispatching action");
         match dispatch(state, &assigned).await {
             Ok(()) => {
                 state.metrics.record_worker_items("device_action", 1);
@@ -98,7 +101,8 @@ async fn run_cycle(state: &AppState) {
             Err(error) => {
                 tracing::error!(%error, action_id = %assigned.action.id, worker = "device_action", "device dispatch failed");
                 if let Some(test_id) = assigned.action.test_id.as_deref() {
-                    let message = format!("Device dispatch failed: {error}");
+                    let message =
+                        crate::socket::helpers::user_friendly_dispatch_error(&error);
                     if let Err(log_error) =
                         crate::devices::test_log::append_test_log(state, test_id, &message).await
                     {
@@ -230,7 +234,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
         .one(&transaction)
         .await?;
 
-    tracing::info!("Fetched action from queue");
+    tracing::trace!(worker = "device_action", "claimed next queue action");
 
     let Some(action) = action else {
         transaction.rollback().await?;
@@ -469,11 +473,18 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
                             &assigned.device_id
                         )
                     })?;
-                tracing::info!(
-                    "Dispatching Gen4 IPL request for device {} with target {:?}",
-                    &assigned.device_id,
-                    &target
+                tracing::debug!(
+                    device_id = %assigned.device_id,
+                    "dispatching Gen4 IPL request"
                 );
+                if let Some(test_id) = assigned.action.test_id.as_deref() {
+                    let _ = crate::devices::test_log::append_test_log(
+                        state,
+                        test_id,
+                        "Starting IPL flashing on the device. Progress updates will appear below...",
+                    )
+                    .await;
+                }
                 request_gen4_ipl(state, assigned, target).await?;
                 return Ok(());
             }
@@ -481,10 +492,18 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
             if device_already_on_target_version(state, assigned).await? {
                 mark_ipl_confirm_true(state, assigned.action.id).await?;
             } else {
-                tracing::info!(
-                    "Dispatching Gen5 IPL confirmation request for device {}",
-                    &assigned.device_id
+                tracing::debug!(
+                    device_id = %assigned.device_id,
+                    "dispatching Gen5 IPL confirmation request"
                 );
+                if let Some(test_id) = assigned.action.test_id.as_deref() {
+                    let _ = crate::devices::test_log::append_test_log(
+                        state,
+                        test_id,
+                        "Starting IPL flashing on the device. Progress updates will appear below...",
+                    )
+                    .await;
+                }
                 request_gen5_ipl(state, assigned).await?;
                 return Ok(());
             }
@@ -492,7 +511,10 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
     }
 
     let (path, payload) = if let Some(test_id) = assigned.action.test_id.as_deref() {
-        let build_version = assigned.action.build_version.as_deref().unwrap_or_default();
+        // Node: buildVersion || buildId — empty build_ver is rejected by eagent (400).
+        let build_version = dispatch_build_version(&assigned.action).ok_or_else(|| {
+            "build version is missing for test-execution dispatch".to_owned()
+        })?;
         let build_path = format!("{}/{test_id}", assigned.action.device_type);
         let current_test = PathBuf::from(&state.config.device.nfs_host_path)
             .join(&build_path)
@@ -530,7 +552,12 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
             }),
         )
     } else {
-        let version = assigned.action.version.as_deref().unwrap_or_default();
+        let version = assigned
+            .action
+            .version
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "flash version is missing for flash dispatch".to_owned())?;
         let build_path = format!("{}/{version}", assigned.action.device_type);
         (
             "flash",
@@ -574,7 +601,7 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
                         .await
                         .map_err(|error| error.to_string())?;
                     let message = format!(
-                        "Test execution request sent to device {} ({})",
+                        "Selected tests were sent to device {} ({}). Waiting for the device to boot and report case results...",
                         assigned.device_id, assigned.ip_address
                     );
                     if let Err(error) =
@@ -582,15 +609,52 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
                     {
                         tracing::warn!(%error, %test_id, "failed to append test-execution dispatch log");
                     }
+                    crate::socket::helpers::publish_result_progress(
+                        state,
+                        test_id,
+                        assigned.action.build_id.as_deref(),
+                        0,
+                        crate::socket::types::frontend::TestStatus::InProgress,
+                        Some("Selected tests are starting on the device"),
+                    );
                 }
                 return Ok(());
             }
-            Ok(response) => last_error = format!("device returned {}", response.status()),
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let body = body.trim();
+                last_error = if body.is_empty() {
+                    format!("device returned {status}")
+                } else {
+                    format!("device returned {status}: {body}")
+                };
+            }
             Err(error) => last_error = error.to_string(),
         }
         tokio::time::sleep(DEVICE_COMMAND_RETRY_DELAY).await;
     }
     Err(last_error)
+}
+
+/// Resolve build_ver for device flash/test payloads (Node: buildVersion || buildId).
+fn dispatch_build_version(action: &QueuedAction) -> Option<&str> {
+    action
+        .build_version
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            action
+                .version
+                .as_deref()
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            action
+                .build_id
+                .as_deref()
+                .filter(|value| !value.is_empty())
+        })
 }
 
 #[derive(Debug)]
@@ -783,7 +847,7 @@ async fn handle_no_free_device(
                 tracing::warn!(%error, %test_id, "failed to append device-wait log");
             }
         }
-        info!(
+        tracing::debug!(
             action_id = %action.id,
             device_type = %action.device_type,
             approved = approved_ids.len(),

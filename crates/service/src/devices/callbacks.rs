@@ -10,6 +10,7 @@ use std::sync::Arc;
 use super::types::TtyEntry;
 use super::*;
 use crate::error::ErrorResponse;
+use crate::socket::helpers::{publish_frontend_event, publish_ipl_progress};
 use crate::socket::types::frontend::{AlertLevel, FrontendMessagePayload, TestStatus};
 use crate::state::AppState;
 use crate::workers::types::DeviceState;
@@ -20,7 +21,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use tracing::info;
 
 /// PURPOSE: Build the shared reqwest client for EdgeController callback HTTP calls.
 /// USE: Handlers that POST confirmation/delete/power commands to EdgeController.
@@ -272,21 +272,13 @@ pub async fn flash_confirm_gen4(
     Json(flashing_status): Json<IplFlashingStatus>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "flash_confirm_gen4");
-    info!(
-        "Received flash confirmation for Gen4 device: {} status: {:?} completed: {} message: {} generation: {} percentage: {}",
-        flashing_status.mac,
-        flashing_status.status,
-        flashing_status.completed,
-        flashing_status.message,
-        flashing_status.generation,
-        flashing_status.percentage
+    tracing::debug!(
+        mac = %flashing_status.mac,
+        percentage = flashing_status.percentage,
+        completed = flashing_status.completed,
+        "received Gen4 IPL flash confirmation"
     );
-    let response = flash_confirmation_response(&state, "v4h", flashing_status).await;
-    info!(
-        "Processed flash confirmation response: {}",
-        response.status()
-    );
-    response
+    flash_confirmation_response(&state, "v4h", flashing_status).await
 }
 
 #[utoipa::path(
@@ -378,11 +370,16 @@ async fn flash_confirmation_response(
         .await
     {
         Ok(result) => {
-            info!("\nFlash confirmation result received: {:?}\n", result);
+            tracing::debug!(
+                device_type,
+                percentage = flashing_status.percentage,
+                completed = flashing_status.completed,
+                "IPL flash confirmation applied"
+            );
             if let Some(execution) = result.cancelled_execution {
                 let test_id = execution.test_id;
                 let fail_message =
-                    "IPL flash confirmation failed. Test execution cancelled";
+                    "IPL flashing failed on the device. The test was cancelled — please check the hardware setup and try again.";
                 if let Err(error) = crate::devices::test_log::append_test_log(
                     &state,
                     &test_id,
@@ -396,8 +393,8 @@ async fn flash_confirmation_response(
                         "failed to append IPL failure test log"
                     );
                 }
-                // Publish: notify connected frontend clients via Socket.IO.
-                if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+                publish_frontend_event(
+                    state,
                     FrontendMessagePayload::TestExecutionUpdate {
                         build_id: Some(execution.build_id),
                         test_id: test_id.clone(),
@@ -406,13 +403,11 @@ async fn flash_confirmation_response(
                         message: Some(fail_message.to_owned()),
                         cancel_requested: None,
                     },
-                )) {
-                    tracing::warn!(%error, test_id, "failed to publish IPL rejection cancellation");
-                }
+                );
             }
-            // Publish: notify connected frontend clients via Socket.IO.
-            if let Some(device_id) = result.freed_device_id
-                && let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
+            if let Some(device_id) = result.freed_device_id {
+                publish_frontend_event(
+                    state,
                     FrontendMessagePayload::DeviceStateUpdate {
                         device_id: device_id.clone(),
                         state: DeviceState::Free,
@@ -420,24 +415,27 @@ async fn flash_confirmation_response(
                         flashing: false,
                         changed_at: chrono::Utc::now().to_rfc3339(),
                     },
-                ))
-            {
-                tracing::warn!(%error, device_id, "failed to publish IPL rejection device state");
+                );
             }
 
             if let Some(progress) = result.progress {
                 let test_id = progress.test_id;
                 let build_id = progress.build_id;
+                let percentage = (progress.percentage as u64).min(100);
                 let log_message = if progress.message.is_empty() {
                     if progress.completed {
-                        "Got flash confirmation success, waiting for device to come back online..."
+                        "IPL flashing finished successfully. Waiting for the device to come back online before starting the selected tests..."
                             .to_owned()
                     } else {
-                        format!(
-                            "IPL flash progress: {}%",
-                            progress.percentage
-                        )
+                        format!("IPL flashing in progress: {percentage}%")
                     }
+                } else if progress.completed
+                    && !progress.message.to_ascii_lowercase().contains("waiting")
+                {
+                    format!(
+                        "{} Waiting for the device to come back online before starting the selected tests...",
+                        progress.message.trim()
+                    )
                 } else {
                     progress.message.clone()
                 };
@@ -450,23 +448,14 @@ async fn flash_confirmation_response(
                 {
                     tracing::warn!(%error, test_id = %test_id, "failed to append IPL progress log");
                 }
-                // Publish: notify connected frontend clients via Socket.IO.
-                if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
-                    FrontendMessagePayload::TestExecutionUpdate {
-                        build_id: Some(build_id),
-                        test_id: test_id.clone(),
-                        status: Some(if progress.completed {
-                            TestStatus::Completed
-                        } else {
-                            TestStatus::InProgress
-                        }),
-                        progress: Some(progress.percentage as u64),
-                        message: Some(log_message),
-                        cancel_requested: None,
-                    },
-                )) {
-                    tracing::warn!(%error, test_id, "failed to publish IPL confirmation");
-                }
+                // Keep status inProgress at 100% — selected tests still need to run.
+                publish_ipl_progress(
+                    state,
+                    &test_id,
+                    Some(&build_id),
+                    percentage,
+                    &log_message,
+                );
             }
             // Wake workers so post-confirm requeue / cancel side effects are claimed promptly.
             state.wake_workers();

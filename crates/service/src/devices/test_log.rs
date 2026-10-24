@@ -22,7 +22,6 @@ static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 /// PURPOSE: Helper `log_file_lock` supporting device HTTP handlers (log file lock).
 /// USE: Helper used by sibling device HTTP handlers.
 fn log_file_lock() -> &'static Mutex<()> {
-    let _api_trace = crate::observability::ApiTrace::enter("devices::test_log", "log_file_lock");
     LOG_FILE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
@@ -34,7 +33,6 @@ pub(crate) async fn append_test_log(
     test_id: &str,
     message: &str,
 ) -> Result<(), String> {
-    let _api_trace = crate::observability::ApiTrace::enter("devices::test_log", "append_test_log");
     let timestamp = chrono::Utc::now().to_rfc3339();
     write_test_log_file(
         &state.config.tests.test_logs_dir,
@@ -54,7 +52,6 @@ pub(crate) async fn write_test_log_file(
     message: &str,
     timestamp: &str,
 ) -> Result<(), String> {
-    let _api_trace = crate::observability::ApiTrace::enter("devices::test_log", "write_test_log_file");
     let _guard = log_file_lock().lock().await;
     let dir = std::path::Path::new(logs_dir);
     tokio::fs::create_dir_all(dir)
@@ -76,7 +73,6 @@ pub(crate) async fn write_test_log_file(
 /// PURPOSE: Helper `test_log_event` supporting device HTTP handlers (test log event).
 /// USE: publishes Socket.IO frontend events.
 pub(crate) fn test_log_event(test_id: &str, message: &str, timestamp: &str) -> ServerEvent {
-    let _api_trace = crate::observability::ApiTrace::enter("devices::test_log", "test_log_event");
     ServerEvent::frontend(FrontendMessagePayload::TestExecution {
         test_id: test_id.to_owned(),
         r#type: TestExecutionUpdateType::Log,
@@ -99,6 +95,5 @@ fn publish_test_log(
     message: &str,
     timestamp: &str,
 ) -> Result<(), String> {
-    let _api_trace = crate::observability::ApiTrace::enter("devices::test_log", "publish_test_log");
     publisher.publish(test_log_event(test_id, message, timestamp))
 }

@@ -19,11 +19,10 @@ use crate::{
         device, device_action_queue, fallback_update, log_entry, test_case, test_execution,
     },
     socket::{
-        helpers::build_performance_event,
-        types::{
-            farm::ServerEvent,
-            frontend::{FrontendMessagePayload, TestStatus},
+        helpers::{
+            build_performance_event, publish_frontend_event, publish_result_progress,
         },
+        types::frontend::{FrontendMessagePayload, TestStatus},
     },
     state::AppState,
     test_catalog::TestResultUpdate,
@@ -56,6 +55,10 @@ pub struct ProcessedTestResult {
     pub comment: String,
     pub version: Option<String>,
     pub completed: bool,
+    /// Percent of selected cases with a recorded PASS/FAIL result.
+    pub progress_percent: u64,
+    pub completed_cases: u64,
+    pub total_cases: u64,
     catalog_results: Vec<CatalogResult>,
 }
 
@@ -247,12 +250,22 @@ pub async fn process_case(
     )
     .await?;
 
-    let incomplete = test_case::Entity::find()
+    let remaining = test_case::Entity::find()
         .filter(test_case::Column::ExecutionId.eq(test_id))
         .filter(test_case::Column::Result.is_null())
         .count(&transaction)
-        .await?
-        > 0;
+        .await?;
+    let total_cases = test_case::Entity::find()
+        .filter(test_case::Column::ExecutionId.eq(test_id))
+        .count(&transaction)
+        .await?;
+    let incomplete = remaining > 0;
+    let completed_cases = total_cases.saturating_sub(remaining);
+    let progress_percent = if total_cases > 0 {
+        ((completed_cases * 100) / total_cases) as u64
+    } else {
+        0
+    };
     if !incomplete {
         complete_execution(&transaction, test_id, &target, &state.config.device).await?;
     }
@@ -291,10 +304,23 @@ pub async fn process_case(
         comment,
         version: target.build_version,
         completed: !incomplete,
+        progress_percent,
+        completed_cases,
+        total_cases,
         catalog_results,
     };
     publish(state, &processed, target.created_by.as_deref());
-    let log_message = format!("Test case {case_id} result: {}", processed.result);
+    let log_message = match processed.result.as_str() {
+        "PASS" => format!(
+            "Test case {case_id} passed ({completed_cases}/{total_cases} complete)"
+        ),
+        "FAIL" => format!(
+            "Test case {case_id} failed ({completed_cases}/{total_cases} complete)"
+        ),
+        other => format!(
+            "Test case {case_id} finished with result {other} ({completed_cases}/{total_cases} complete)"
+        ),
+    };
     if let Err(error) =
         crate::devices::test_log::append_test_log(state, test_id, &log_message).await
     {
@@ -713,39 +739,39 @@ fn parse_output(output: &str) -> ParsedOutput {
     ParsedOutput { result, command }
 }
 
-/// Publish.
+/// Publish case + overall progress events through the centralized socket helpers.
 fn publish(state: &AppState, result: &ProcessedTestResult, _created_by: Option<&str>) {
-    let _api_trace = crate::observability::ApiTrace::enter("test_results", "publish");
-    let mut events = vec![ServerEvent::frontend(
+    publish_frontend_event(
+        state,
         FrontendMessagePayload::BuildTestExecutionUpdate {
             test_id: result.test_id.clone(),
             build_id: result.build_id.clone(),
             test_case_id: Some(result.case_id.to_string()),
             status: Some(result.result.clone()),
         },
-    )];
-
-    events.push(ServerEvent::frontend(
-        FrontendMessagePayload::TestExecutionUpdate {
-            build_id: Some(result.build_id.clone()),
-            test_id: result.test_id.clone(),
-            status: Some(if result.completed {
-                TestStatus::Completed
-            } else {
-                TestStatus::InProgress
-            }),
-            progress: if result.completed { Some(100) } else { None },
-            message: None,
-            cancel_requested: None,
-        },
+    );
+    let status = if result.completed {
+        TestStatus::Completed
+    } else {
+        TestStatus::InProgress
+    };
+    let message = Some(format!(
+        "Result progress: {}/{} test cases complete ({}%)",
+        result.completed_cases, result.total_cases, result.progress_percent
     ));
-
-    events.push(build_performance_event(&result.build_id));
-
-    for event in events {
-        if let Err(error) = state.event_publisher.publish(event) {
-            tracing::warn!(%error, "failed to publish test result event");
-        }
+    publish_result_progress(
+        state,
+        &result.test_id,
+        Some(&result.build_id),
+        result.progress_percent,
+        status,
+        message.as_deref(),
+    );
+    if let Err(error) = state
+        .event_publisher
+        .publish(build_performance_event(&result.build_id))
+    {
+        tracing::warn!(%error, "failed to publish build performance event");
     }
 }
 

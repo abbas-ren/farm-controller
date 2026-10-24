@@ -54,8 +54,11 @@ pub struct ApiTrace {
 
 impl ApiTrace {
     /// Log function entry and return a guard that logs exit on drop.
+    ///
+    /// Enter/exit are `debug` so default `info` logging stays quiet; enable with
+    /// `logging.level=debug` or an EnvFilter that includes `api_flow=debug`.
     pub fn enter(module: &'static str, fn_name: &'static str) -> Self {
-        tracing::info!(
+        tracing::debug!(
             target: "api_flow",
             module,
             fn_name,
@@ -76,7 +79,7 @@ impl Drop for ApiTrace {
                 "exit panic"
             );
         } else {
-            tracing::info!(
+            tracing::debug!(
                 target: "api_flow",
                 module = self.module,
                 fn_name = self.fn_name,
@@ -386,6 +389,8 @@ pub async fn track_request(
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert("x-request-id", value);
     }
+    // Keep default info quiet: success + routine auth failures are debug;
+    // other 4xx stay warn, 5xx stay error.
     if status.is_server_error() {
         tracing::error!(
             target: "api_flow",
@@ -395,6 +400,18 @@ pub async fn track_request(
             %method,
             %route,
             "request completed with server error"
+        );
+    } else if status == axum::http::StatusCode::UNAUTHORIZED
+        || status == axum::http::StatusCode::FORBIDDEN
+    {
+        tracing::debug!(
+            target: "api_flow",
+            duration_seconds = elapsed,
+            status = %status,
+            %request_id,
+            %method,
+            %route,
+            "request completed with client error"
         );
     } else if status.is_client_error() {
         tracing::warn!(
@@ -407,7 +424,7 @@ pub async fn track_request(
             "request completed with client error"
         );
     } else {
-        tracing::info!(
+        tracing::debug!(
             target: "api_flow",
             duration_seconds = elapsed,
             status = %status,

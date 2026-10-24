@@ -96,13 +96,90 @@ pub(crate) fn normalize_controller_id(value: &str) -> String {
     value.trim().replace([':', '-'], "").to_lowercase()
 }
 
-/// Publish frontend event.
+/// Publish frontend event through the centralized EventHub (minimal tracing).
 pub(crate) fn publish_frontend_event(state: &AppState, payload: FrontendMessagePayload) {
     if let Err(error) = state
         .event_publisher
         .publish(ServerEvent::frontend(payload))
     {
         tracing::warn!(%error, "failed to publish frontend event");
+    }
+}
+
+/// Publish IPL flash progress (`testExecutionUpdate.progress`) for the frontend bar.
+///
+/// Status stays `inProgress` even at 100% — IPL completion is not test completion.
+pub(crate) fn publish_ipl_progress(
+    state: &AppState,
+    test_id: &str,
+    build_id: Option<&str>,
+    percentage: u64,
+    message: &str,
+) {
+    publish_frontend_event(
+        state,
+        FrontendMessagePayload::TestExecutionUpdate {
+            build_id: build_id.map(str::to_owned),
+            test_id: test_id.to_owned(),
+            status: Some(TestStatus::InProgress),
+            progress: Some(percentage.min(100)),
+            message: Some(message.to_owned()),
+            cancel_requested: None,
+        },
+    );
+}
+
+/// Publish live test-case / overall result progress for the Results UI.
+pub(crate) fn publish_result_progress(
+    state: &AppState,
+    test_id: &str,
+    build_id: Option<&str>,
+    percentage: u64,
+    status: TestStatus,
+    message: Option<&str>,
+) {
+    publish_frontend_event(
+        state,
+        FrontendMessagePayload::TestExecutionUpdate {
+            build_id: build_id.map(str::to_owned),
+            test_id: test_id.to_owned(),
+            status: Some(status),
+            progress: Some(percentage.min(100)),
+            message: message.map(str::to_owned),
+            cancel_requested: None,
+        },
+    );
+}
+
+/// Map raw device/dispatch errors into short user-facing test-log lines.
+pub(crate) fn user_friendly_dispatch_error(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("relay") || lower.contains("gpio") {
+        "This device is missing relay or GPIO configuration. Ask an administrator to finish hardware setup, then retry."
+            .to_owned()
+    } else if lower.contains("400")
+        && (lower.contains("image") || lower.contains("dtb") || lower.contains("path"))
+    {
+        "The device rejected the test start request because the flash paths were invalid. Please retry once the device is online."
+            .to_owned()
+    } else if lower.contains("400") {
+        "The device could not start the selected tests (bad request). Check device logs and try again."
+            .to_owned()
+    } else if lower.contains("401") || lower.contains("unauthorized") {
+        "The device rejected the farm request (unauthorized). Check edge-agent security settings."
+            .to_owned()
+    } else if lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("connection")
+        || lower.contains("connect")
+    {
+        "Could not reach the device. It may still be rebooting after IPL — waiting for it to come back online."
+            .to_owned()
+    } else if lower.contains("build version is missing") {
+        "Cannot start tests because the build version is missing on this execution."
+            .to_owned()
+    } else {
+        format!("Could not continue the test on the device: {error}")
     }
 }
 
