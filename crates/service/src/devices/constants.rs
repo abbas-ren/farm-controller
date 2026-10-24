@@ -7,7 +7,9 @@
 
 use std::time::Duration;
 
-/// Default TCP port on edge controllers that accept device/relay commands.
+/// Numeric default used by device route tests that bind a stub edge listener.
+/// Production call sites use `AppConfig.device.edge_*_http_port` instead.
+#[cfg(test)]
 pub(crate) const EDGE_CONTROLLER_PORT: u16 = 8888;
 
 /// Hard-coded Gen3 controller id used when routing legacy Gen3 power actions.

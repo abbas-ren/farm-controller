@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    devices::{DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
+    devices::DEVICE_COMMAND_RETRY_DELAY,
     persistence::entity::{device, fallback_update, log_entry, release, test_execution},
     state::AppState,
 };
@@ -152,8 +152,9 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::
 async fn dispatch(state: &AppState, fallback: &FallbackFlash) -> Result<(), String> {
     let tftp_path = format!("{}/{}", fallback.device_type, fallback.version);
     let payload = flash_payload(fallback, &state.config.device.server_ip, &tftp_path);
+    let agent_port = state.config.device.edge_agent_http_port;
     let url = reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/flash",
+        "http://{}:{agent_port}/flash",
         fallback.ip_address
     ))
     .map_err(|error| error.to_string())?;
@@ -175,11 +176,13 @@ async fn dispatch(state: &AppState, fallback: &FallbackFlash) -> Result<(), Stri
 
 /// Build the JSON flash body expected by the edge controller.
 fn flash_payload(fallback: &FallbackFlash, server_ip: &str, tftp_path: &str) -> serde_json::Value {
+    // Leading `/` matches deployed eagent absolute-path validation (TFTP root).
+    let tftp_path = tftp_path.trim_start_matches('/');
     serde_json::json!({
         "nfs": fallback.fallback_path,
         "server_ip": server_ip,
-        "image": format!("{tftp_path}/Image"),
-        "dtb": format!("{tftp_path}/board.dtb"),
+        "image": format!("/{tftp_path}/Image"),
+        "dtb": format!("/{tftp_path}/board.dtb"),
         "build_ver": fallback.version,
         "deviceId": fallback.device_id,
     })
@@ -251,8 +254,8 @@ mod tests {
             serde_json::json!({
                 "nfs": "/nfs/gen4/1.2.3",
                 "server_ip": "192.0.2.10",
-                "image": "gen4/1.2.3/Image",
-                "dtb": "gen4/1.2.3/board.dtb",
+                "image": "/gen4/1.2.3/Image",
+                "dtb": "/gen4/1.2.3/board.dtb",
                 "build_ver": "1.2.3",
                 "deviceId": "device-1",
             })

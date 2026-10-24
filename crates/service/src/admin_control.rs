@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     auth,
     config::AppConfig,
-    devices::{ControllerListQuery, EDGE_CONTROLLER_PORT},
+    devices::ControllerListQuery,
     state::AppState,
 };
 
@@ -631,8 +631,9 @@ async fn proxy_edge(
         }
         Err(message) => return internal_error(message),
     };
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = match reqwest::Url::parse(&format!(
-        "http://{address}:{EDGE_CONTROLLER_PORT}/admin/control"
+        "http://{address}:{controller_port}/admin/control"
     )) {
         Ok(url) => url,
         Err(_) => {
@@ -711,8 +712,9 @@ async fn proxy_agent(
         }
         Err(message) => return internal_error(message),
     };
+    let agent_port = state.config.device.edge_agent_http_port;
     let url = match reqwest::Url::parse(&format!(
-        "http://{address}:{EDGE_CONTROLLER_PORT}/admin/control"
+        "http://{address}:{agent_port}/admin/control"
     )) {
         Ok(url) => url,
         Err(_) => {

@@ -23,7 +23,7 @@ use super::{
     LegacyRelayRemapRequest, MessageResponse, RelayChannelRecord, RelayConfigurationAccepted,
     RelayConfigurationConfirmation, RelayConfigurationRequest, RelayConfirmationResponse,
     RelayConflictResponse, RelayIdentityUpdateRequest, RelayIdentityUpdateResponse, RelayRecord,
-    constants::{DEVICE_CALLBACK_TIMEOUT, EDGE_CONTROLLER_PORT, RELAY_IDENTITY_TIMEOUT},
+    constants::{DEVICE_CALLBACK_TIMEOUT, RELAY_IDENTITY_TIMEOUT},
     error_response,
     repository::DeviceRepository,
     repository_error,

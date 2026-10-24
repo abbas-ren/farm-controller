@@ -61,8 +61,9 @@ pub async fn delete_device(
             "forced device deletion is skipping EdgeAgent acknowledgement"
         );
     } else {
+        let agent_port = state.config.device.edge_agent_http_port;
         let url = match reqwest::Url::parse(&format!(
-            "http://{}:{EDGE_CONTROLLER_PORT}/delete",
+            "http://{}:{agent_port}/delete",
             target.ip_address
         )) {
             Ok(url) => url,
@@ -116,8 +117,9 @@ pub async fn delete_device(
             .collect::<String>()
             .parse::<u32>()
             .unwrap_or(0);
+        let controller_port = state.config.device.edge_controller_http_port;
         if let Ok(url) = reqwest::Url::parse(&format!(
-            "http://{controller_ip}:{EDGE_CONTROLLER_PORT}/devCon/delete"
+            "http://{controller_ip}:{controller_port}/devCon/delete"
         )) {
             let mut payload =
                 serde_json::json!({"uid": controller_id, "gen": generation, "mac": device_id});
@@ -240,8 +242,9 @@ pub async fn delete_controller(
         .parse::<u32>()
         .unwrap_or(0);
     // Edge: outbound HTTP call to EdgeController.
+    let controller_port = state.config.device.edge_controller_http_port;
     if let Ok(url) = reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/devCon/delete",
+        "http://{}:{controller_port}/devCon/delete",
         target.ip_address
     )) && let Err(error) = callback_client()
         .post(url)

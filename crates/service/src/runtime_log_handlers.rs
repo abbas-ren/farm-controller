@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     auth,
-    devices::{ControllerListQuery, EDGE_CONTROLLER_PORT},
+    devices::ControllerListQuery,
     observability::{
         RuntimeLogEntry, recent_runtime_logs, runtime_log_level, set_runtime_log_level,
     },
@@ -22,7 +22,6 @@ use crate::{
 const DEFAULT_LOG_LIMIT: usize = 500;
 const MAX_LOG_LIMIT: usize = 5_000;
 const EDGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const EDGE_AGENT_PORT: u16 = 8888;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -224,7 +223,8 @@ async fn proxy_agent(
     } else {
         "logs/level"
     };
-    let mut url = match reqwest::Url::parse(&format!("http://{address}:{EDGE_AGENT_PORT}/{path}")) {
+    let agent_port = state.config.device.edge_agent_http_port;
+    let mut url = match reqwest::Url::parse(&format!("http://{address}:{agent_port}/{path}")) {
         Ok(url) => url,
         Err(_) => {
             return error(
@@ -347,8 +347,9 @@ async fn proxy_edge(
     } else {
         "logs/level"
     };
+    let controller_port = state.config.device.edge_controller_http_port;
     let mut url =
-        match reqwest::Url::parse(&format!("http://{address}:{EDGE_CONTROLLER_PORT}/{path}")) {
+        match reqwest::Url::parse(&format!("http://{address}:{controller_port}/{path}")) {
             Ok(url) => url,
             Err(_) => {
                 return error(

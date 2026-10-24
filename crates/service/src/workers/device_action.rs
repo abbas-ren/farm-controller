@@ -11,7 +11,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
-    devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
+    devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY},
     persistence::entity::{
         device, device_action_queue, device_controller, device_state_change, relay, relay_channel,
         release, test_execution,
@@ -539,13 +539,15 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
                 .await
                 .map_err(|error| error.to_string())?;
         }
+        // Leading `/` on image/dtb satisfies deployed eagents that still require
+        // absolute TFTP paths; U-Boot tftp treats them relative to the TFTP root.
         (
             "test-execution",
             serde_json::json!({
                 "nfs": format!("{}/{build_path}", state.config.device.nfs_host_path.trim_end_matches('/')),
                 "server_ip": state.config.device.server_ip,
-                "image": format!("{build_path}/Image"),
-                "dtb": format!("{build_path}/board.dtb"),
+                "image": format!("/{build_path}/Image"),
+                "dtb": format!("/{build_path}/board.dtb"),
                 "testId": test_id,
                 "build_ver": build_version,
                 "deviceId": assigned.device_id,
@@ -564,15 +566,16 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
             serde_json::json!({
                 "nfs": format!("{}/{build_path}", state.config.device.nfs_host_path.trim_end_matches('/')),
                 "server_ip": state.config.device.server_ip,
-                "image": format!("{build_path}/Image"),
-                "dtb": format!("{build_path}/board.dtb"),
+                "image": format!("/{build_path}/Image"),
+                "dtb": format!("/{build_path}/board.dtb"),
                 "build_ver": version,
                 "deviceId": assigned.device_id,
             }),
         )
     };
+    let agent_port = state.config.device.edge_agent_http_port;
     let url = reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/{path}",
+        "http://{}:{agent_port}/{path}",
         assigned.ip_address
     ))
     .map_err(|error| error.to_string())?;
@@ -1144,7 +1147,8 @@ async fn request_gen5_ipl(state: &AppState, assigned: &AssignedAction) -> Result
         "controller_ip": controller.ip_address,
         "mac": device_mac,
     });
-    let url = format!("http://{}:{EDGE_CONTROLLER_PORT}/ipl", controller.ip_address);
+    let controller_port = state.config.device.edge_controller_http_port;
+    let url = format!("http://{}:{controller_port}/ipl", controller.ip_address);
     let client = crate::external_http::client(DEVICE_ACTION_HTTP_TIMEOUT)
         .map_err(|error| error.to_string())?;
     // Fire-and-forget parity with Node askFlashConfirmation (timeouts still return Ok).
@@ -1356,7 +1360,8 @@ async fn request_gen4_ipl(
         "serial": target.relay_serial,
         "channel": target.channel_number,
     });
-    let base = format!("http://{}:{EDGE_CONTROLLER_PORT}", target.controller_ip);
+    let controller_port = state.config.device.edge_controller_http_port;
+    let base = format!("http://{}:{controller_port}", target.controller_ip);
     let client = crate::external_http::client(DEVICE_ACTION_HTTP_TIMEOUT)
         .map_err(|error| error.to_string())?;
     let mode_response = client

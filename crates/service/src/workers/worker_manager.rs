@@ -43,11 +43,11 @@ impl WorkerManager {
             && state.config.module_enabled(Module::Device)
         {
             // Relay sync mpsc consumer (HTTP enqueues; this drains).
-            handles.push(
-                state
-                    .relay_sync
-                    .start_worker(cancellation.child_token(), state.event_publisher.clone()),
-            );
+            handles.push(state.relay_sync.start_worker(
+                cancellation.child_token(),
+                state.event_publisher.clone(),
+                state.config.device.edge_controller_http_port,
+            ));
             if state.database.is_some() {
                 let worker_state = state.clone();
                 let worker_cancellation = cancellation.child_token();

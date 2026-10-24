@@ -92,8 +92,9 @@ pub async fn register_controller(
             {
                 tracing::error!(%error, controller_id = %result.controller.device_controller_id, "failed to synchronize IPL payloads to registered controller");
             }
+            let controller_port = state.config.device.edge_controller_http_port;
             if let Ok(url) = reqwest::Url::parse(&format!(
-                "http://{}:{EDGE_CONTROLLER_PORT}/confirmation",
+                "http://{}:{controller_port}/confirmation",
                 result.controller.ip_address
             )) {
                 // Edge: outbound HTTP call to EdgeController.

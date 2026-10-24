@@ -20,8 +20,7 @@ use crate::{
 };
 
 use super::{
-    DeviceFlashingResponse, EDGE_CONTROLLER_PORT, error_response, repository_error,
-    repository_types::RtosCaptureTarget,
+    DeviceFlashingResponse, error_response, repository_error, repository_types::RtosCaptureTarget,
 };
 
 const RTOS_START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -73,7 +72,11 @@ pub async fn mark_device_flashing(
                 }
             }
             if let Some(target) = result.rtos_target
-                && let Err(error) = start_rtos_capture(&target).await
+                && let Err(error) = start_rtos_capture(
+                    &target,
+                    state.config.device.edge_controller_http_port,
+                )
+                .await
             {
                 tracing::warn!(%error, device_id, "best-effort RTOS capture start failed");
             }
@@ -91,10 +94,13 @@ pub async fn mark_device_flashing(
 
 /// PURPOSE: Ask EdgeController to start RTOS UART capture while flashing.
 /// USE: mark_device_flashing path.
-async fn start_rtos_capture(target: &RtosCaptureTarget) -> Result<(), String> {
+async fn start_rtos_capture(
+    target: &RtosCaptureTarget,
+    controller_port: u16,
+) -> Result<(), String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "start_rtos_capture");
     let url = reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/rtos/start",
+        "http://{}:{controller_port}/rtos/start",
         target.controller_ip
     ))
     .map_err(|error| error.to_string())?;

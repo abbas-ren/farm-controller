@@ -112,8 +112,9 @@ pub(crate) async fn update_relay_identity(
         // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to load relay identity target"),
     };
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = match reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/relay/identity",
+        "http://{}:{controller_port}/relay/identity",
         target.controller_ip
     )) {
         Ok(url) => url,
@@ -243,8 +244,9 @@ pub(crate) async fn relay_device_state(
             "Stored relay channel is outside the supported range",
         );
     }
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = match reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/relay/status",
+        "http://{}:{controller_port}/relay/status",
         target.controller_ip
     )) {
         Ok(url) => url,

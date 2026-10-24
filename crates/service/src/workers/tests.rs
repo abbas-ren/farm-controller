@@ -46,7 +46,7 @@ async fn relay_sync_worker_is_bounded_and_cancellable() {
     let cancellation = CancellationToken::new();
     let event_publisher = Arc::new(EventHub::default());
     let mut events = event_publisher.subscribe();
-    let handle = service.start_worker(cancellation.clone(), event_publisher);
+    let handle = service.start_worker(cancellation.clone(), event_publisher, 8888);
     service
         .enqueue(
             vec![RelayControllerAction::Remove {

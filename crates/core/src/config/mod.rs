@@ -264,6 +264,12 @@ pub struct DeviceConfig {
     pub faulty_report_max_bytes: u64,
     #[serde(default = "default_device_server_ip")]
     pub server_ip: String,
+    /// TCP port for eagent HTTP on the DUT (`/flash`, `/test-execution`, `/cancel`, …).
+    #[serde(default = "default_edge_http_port")]
+    pub edge_agent_http_port: u16,
+    /// TCP port for EdgeController HTTP on the controller host (`/ipl`, UART, relay, …).
+    #[serde(default = "default_edge_http_port")]
+    pub edge_controller_http_port: u16,
     #[serde(default = "default_device_request_timeout")]
     pub request_timeout_seconds: u64,
     #[serde(default = "default_terminal_username")]
@@ -320,6 +326,8 @@ impl Default for DeviceConfig {
             faulty_report_upload_dir: default_faulty_report_upload_dir(),
             faulty_report_max_bytes: default_faulty_report_max_bytes(),
             server_ip: default_device_server_ip(),
+            edge_agent_http_port: default_edge_http_port(),
+            edge_controller_http_port: default_edge_http_port(),
             request_timeout_seconds: default_device_request_timeout(),
             terminal_username: default_terminal_username(),
             terminal_connect_timeout_seconds: default_terminal_connect_timeout(),
@@ -391,6 +399,11 @@ fn default_faulty_report_max_bytes() -> u64 {
 /// FarmController address advertised to controllers/devices.
 fn default_device_server_ip() -> String {
     "127.0.0.1".to_owned()
+}
+
+/// Shared legacy default: both eagent and EdgeController historically listen on 8888.
+fn default_edge_http_port() -> u16 {
+    8888
 }
 
 /// Short HTTP timeout (seconds) for device-controller calls.
@@ -910,9 +923,12 @@ impl AppConfig {
         if self.device.ipl_transfer_timeout_seconds == 0
             || self.device.gen4_ipl_port == 0
             || self.device.gen5_ipl_port == 0
+            || self.device.edge_agent_http_port == 0
+            || self.device.edge_controller_http_port == 0
         {
             return Err(AppError::Configuration(
-                "device IPL transfer timeout and ports must be greater than zero".to_owned(),
+                "device IPL transfer timeout and edge HTTP ports must be greater than zero"
+                    .to_owned(),
             ));
         }
         for (family, username, password, remote_path) in [

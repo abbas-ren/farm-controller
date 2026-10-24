@@ -74,8 +74,9 @@ pub async fn update_heartbeat_timeout(
         // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to load device"),
     };
+    let agent_port = state.config.device.edge_agent_http_port;
     let url = match reqwest::Url::parse(&format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/configure/heartbeat",
+        "http://{}:{agent_port}/configure/heartbeat",
         target.ip_address,
     )) {
         Ok(url) => url,
@@ -216,8 +217,9 @@ pub async fn device_action(
                 "Device is no longer awaiting approval",
             );
         }
+        let agent_port = state.config.device.edge_agent_http_port;
         let url = match reqwest::Url::parse(&format!(
-            "http://{}:{EDGE_CONTROLLER_PORT}/approve",
+            "http://{}:{agent_port}/approve",
             target.ip_address
         )) {
             Ok(url) => url,

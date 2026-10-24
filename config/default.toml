@@ -69,6 +69,10 @@ faulty_report_upload_dir = "./uploads/faulty-reports"
 faulty_report_max_bytes = 10485760
 # Possible: FarmController IPv4 address reachable by devices for TFTP/callback workflows; example: "192.0.2.10".
 server_ip = "127.0.0.1"
+# Possible: TCP port 1..=65535 for eagent on the DUT (/flash, /test-execution, /cancel, /approve); example: 8888.
+edge_agent_http_port = 8888
+# Possible: TCP port 1..=65535 for EdgeController on the controller host (/ipl, UART, relay); example: 8888.
+edge_controller_http_port = 8888
 # Possible: timeout in seconds as an unsigned integer; use a value greater than 0, for example 10.
 request_timeout_seconds = 2
 # Possible: nonempty SSH username when events/terminals are enabled; example: "root".

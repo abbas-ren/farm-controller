@@ -9,7 +9,6 @@ use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    devices::EDGE_CONTROLLER_PORT,
     persistence::entity::{
         device, device_action_queue, device_controller, device_state_change, fallback_update,
         gen5_reboot_attempt, log_entry, test_execution,
@@ -509,8 +508,9 @@ async fn send_reboot(
     controller_ip: &str,
     power_port: &str,
 ) -> Result<(), String> {
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = reqwest::Url::parse(&format!(
-        "http://{controller_ip}:{EDGE_CONTROLLER_PORT}/reboot-device"
+        "http://{controller_ip}:{controller_port}/reboot-device"
     ))
     .map_err(|error| error.to_string())?;
     crate::external_http::client(Duration::from_secs(

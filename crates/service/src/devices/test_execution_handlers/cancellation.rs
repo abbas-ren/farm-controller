@@ -5,7 +5,7 @@
 use super::*;
 use crate::{
     auth,
-    devices::{EDGE_CONTROLLER_PORT, TEST_CANCELLATION_TIMEOUT},
+    devices::TEST_CANCELLATION_TIMEOUT,
     error::ErrorResponse,
     socket::types::{
         farm::ServerEvent,
@@ -66,7 +66,12 @@ pub async fn cancel(
             }
             if result.terminalized {
                 if let Some(device_ip) = result.device_ip.as_deref() {
-                    send_device_cancellation(device_ip, &test_id).await;
+                    send_device_cancellation(
+                        device_ip,
+                        &test_id,
+                        state.config.device.edge_agent_http_port,
+                    )
+                    .await;
                 }
                 if let Some(device_type) = result.cleanup_device_type.as_deref() {
                     cleanup_cancelled_preparation(&state, device_type, &test_id).await;
@@ -112,9 +117,9 @@ pub async fn cancel(
 
 /// PURPOSE: Ask EdgeController/EdgeAgent to abort the running test.
 /// USE: cancel handler after marking cancellation requested.
-async fn send_device_cancellation(device_ip: &str, test_id: &str) {
+async fn send_device_cancellation(device_ip: &str, test_id: &str, agent_port: u16) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "send_device_cancellation");
-    let Ok(url) = reqwest::Url::parse(&format!("http://{device_ip}:{EDGE_CONTROLLER_PORT}/cancel"))
+    let Ok(url) = reqwest::Url::parse(&format!("http://{device_ip}:{agent_port}/cancel"))
     else {
         tracing::warn!(
             device_ip,

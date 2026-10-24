@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::{auth, error::ErrorResponse, state::AppState};
 
 use super::{
-    EDGE_CONTROLLER_PORT, UART_CONFIGURATION_TIMEOUT, UartConfigurationRequest,
+    UART_CONFIGURATION_TIMEOUT, UartConfigurationRequest,
     UartConfigurationResponse, error_response,
 };
 
@@ -311,8 +311,9 @@ pub(crate) async fn configure_uart(
         Ok(value) => value,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, "validation", message),
     };
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = format!(
-        "http://{}:{EDGE_CONTROLLER_PORT}/uart/config",
+        "http://{}:{controller_port}/uart/config",
         context.controller_address
     );
     let client = match reqwest::Client::builder()

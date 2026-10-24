@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    devices::{EDGE_CONTROLLER_PORT, RELAY_CONTROLLER_TIMEOUT, RelayControllerAction},
+    devices::{RELAY_CONTROLLER_TIMEOUT, RelayControllerAction},
     persistence::entity::{pending_relay_config, relay, relay_channel},
     socket::{
         helpers::relay_timeout_event,
@@ -64,6 +64,7 @@ impl RelaySyncService {
         &self,
         cancellation: CancellationToken,
         event_publisher: Arc<EventHub>,
+        edge_controller_http_port: u16,
     ) -> JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
@@ -74,7 +75,14 @@ impl RelaySyncService {
                 tokio::select! {
                     _ = cancellation.cancelled() => break,
                     job = receiver.recv() => match job {
-                        Some(job) => dispatch_relay_actions(job, &event_publisher).await,
+                        Some(job) => {
+                            dispatch_relay_actions(
+                                job,
+                                &event_publisher,
+                                edge_controller_http_port,
+                            )
+                            .await
+                        }
                         None => break,
                     },
                 }
@@ -85,7 +93,11 @@ impl RelaySyncService {
 }
 
 /// Execute each controller action in a job and publish per-action status events.
-async fn dispatch_relay_actions(job: RelaySyncJob, event_publisher: &EventHub) {
+async fn dispatch_relay_actions(
+    job: RelaySyncJob,
+    event_publisher: &EventHub,
+    edge_controller_http_port: u16,
+) {
     let total = job.actions.len();
     let has_config_actions = job
         .actions
@@ -130,7 +142,7 @@ async fn dispatch_relay_actions(job: RelaySyncJob, event_publisher: &EventHub) {
             ),
         };
         let Ok(url) = reqwest::Url::parse(&format!(
-            "http://{controller_address}:{EDGE_CONTROLLER_PORT}/{path}"
+            "http://{controller_address}:{edge_controller_http_port}/{path}"
         )) else {
             let error = format!("Invalid controller address for {path}: {controller_address}");
             tracing::warn!(%controller_address, path, "invalid controller address for relay synchronization");

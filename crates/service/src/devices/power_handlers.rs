@@ -92,8 +92,9 @@ pub async fn toggle_device_power(
             serde_json::json!({"serial": serial, "state": next_state, "channel": channel}),
         )
     };
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = match reqwest::Url::parse(&format!(
-        "http://{controller_ip}:{EDGE_CONTROLLER_PORT}/{path}"
+        "http://{controller_ip}:{controller_port}/{path}"
     )) {
         Ok(url) => url,
         Err(_) => {
@@ -204,8 +205,9 @@ pub async fn reboot_device(
             "No power mapping was found for this Gen5 device",
         );
     };
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = match reqwest::Url::parse(&format!(
-        "http://{controller_ip}:{EDGE_CONTROLLER_PORT}/reboot-device"
+        "http://{controller_ip}:{controller_port}/reboot-device"
     )) {
         Ok(url) => url,
         Err(_) => {

@@ -27,8 +27,8 @@ use crate::{
 };
 
 use super::{
-    EDGE_CONTROLLER_PORT, TestCompletionQuery, TestCompletionResponse, error_response,
-    repository_error, repository_types::TestCompletionTarget,
+    TestCompletionQuery, TestCompletionResponse, error_response, repository_error,
+    repository_types::TestCompletionTarget,
 };
 
 const RTOS_END_TIMEOUT: Duration = Duration::from_secs(60);
@@ -114,8 +114,9 @@ async fn collect_rtos_log(
     let Some((controller_ip, payload)) = rtos_request(target) else {
         return Ok(());
     };
+    let controller_port = state.config.device.edge_controller_http_port;
     let url = reqwest::Url::parse(&format!(
-        "http://{controller_ip}:{EDGE_CONTROLLER_PORT}/rtos/end"
+        "http://{controller_ip}:{controller_port}/rtos/end"
     ))
     .map_err(|error| error.to_string())?;
     let client =

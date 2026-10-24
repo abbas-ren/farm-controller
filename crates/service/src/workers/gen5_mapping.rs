@@ -11,7 +11,6 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    devices::EDGE_CONTROLLER_PORT,
     persistence::entity::{device, device_controller, gen5_mapping_queue},
     state::AppState,
 };
@@ -439,7 +438,11 @@ async fn cancel_and_delete_device(
 
 /// HTTP call to the device controller to start MAC mapping.
 async fn trigger_mapping(state: &AppState, controller_ip: &str, mac: &str) -> Result<(), String> {
-    let url = controller_url(controller_ip, "gen5/tty_entry")?;
+    let url = controller_url(
+        controller_ip,
+        "gen5/tty_entry",
+        state.config.device.edge_controller_http_port,
+    )?;
     let client = mapping_client(state, 1)?;
     client
         .post(url)
@@ -454,7 +457,11 @@ async fn trigger_mapping(state: &AppState, controller_ip: &str, mac: &str) -> Re
 
 /// Read how many mapping entries the controller currently reports.
 async fn mapping_entry_count(state: &AppState, controller_ip: &str) -> Result<i32, String> {
-    let url = controller_url(controller_ip, "mapping/entry")?;
+    let url = controller_url(
+        controller_ip,
+        "mapping/entry",
+        state.config.device.edge_controller_http_port,
+    )?;
     let client = mapping_client(
         state,
         state.config.workers.gen5_mapping_request_timeout_seconds,
@@ -478,11 +485,9 @@ async fn mapping_entry_count(state: &AppState, controller_ip: &str) -> Result<i3
 }
 
 /// Build an absolute URL for a controller HTTP path.
-fn controller_url(controller_ip: &str, path: &str) -> Result<reqwest::Url, String> {
-    reqwest::Url::parse(&format!(
-        "http://{controller_ip}:{EDGE_CONTROLLER_PORT}/{path}"
-    ))
-    .map_err(|error| error.to_string())
+fn controller_url(controller_ip: &str, path: &str, port: u16) -> Result<reqwest::Url, String> {
+    reqwest::Url::parse(&format!("http://{controller_ip}:{port}/{path}"))
+        .map_err(|error| error.to_string())
 }
 
 /// reqwest client with the mapping timeout from config.
@@ -503,10 +508,10 @@ mod tests {
     use super::*;
 
     #[test]
-    /// Assert mapping HTTP URLs target the edge-controller port.
+    /// Assert mapping HTTP URLs target the configured edge-controller port.
     fn controller_routes_are_scoped_to_the_edgecontroller_port() {
         assert_eq!(
-            controller_url("192.0.2.1", "mapping/entry")
+            controller_url("192.0.2.1", "mapping/entry", 8888)
                 .unwrap()
                 .as_str(),
             "http://192.0.2.1:8888/mapping/entry"

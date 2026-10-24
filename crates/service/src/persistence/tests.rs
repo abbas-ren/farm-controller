@@ -26,26 +26,22 @@ fn retention_targets_reject_unreviewed_identifiers() {
     assert!(matches!(error, RetentionError::UnsupportedTarget(_, _)));
 }
 
-/// PURPOSE: Assert queue retention SQL only deletes terminal jobs with SKIP LOCKED.
-/// USE: Locks the delete_sql shape for device_action_queue cleanup.
+/// PURPOSE: Assert queue retention maps onto the device_action_queue target.
+/// USE: Guards allow-list wiring after SeaORM `delete_batch` replaced raw SQL.
 #[test]
-fn queue_cleanup_only_targets_terminal_jobs() {
+fn queue_cleanup_resolves_device_action_queue_target() {
     let target = RetentionTarget::from_policy(&policy("device_action_queue", "updatedAt")).unwrap();
-    let sql = target.delete_sql();
-    assert!(sql.contains("FOR UPDATE SKIP LOCKED"));
-    assert!(sql.contains("'completed', 'cancelled'"));
-    assert!(!sql.contains("'failed'"));
-    assert!(sql.contains("LIMIT $2"));
+    assert_eq!(target, RetentionTarget::DeviceActionQueue);
 }
 
-/// PURPOSE: Confirm alerts retention SQL uses snake_case `created_at`.
-/// USE: Prevents regressions that would emit camelCase `"createdAt"` for alerts.
+/// PURPOSE: Confirm alerts retention still keys off legacy snake_case `created_at`.
+/// USE: Prevents regressions that would require camelCase `"createdAt"` for alerts.
 #[test]
-fn alert_cleanup_uses_legacy_snake_case_timestamp() {
+fn alert_cleanup_resolves_legacy_snake_case_timestamp() {
     let target = RetentionTarget::from_policy(&policy("alerts", "created_at")).unwrap();
-    let sql = target.delete_sql();
-    assert!(sql.contains("created_at"));
-    assert!(!sql.contains("\"createdAt\""));
+    assert_eq!(target, RetentionTarget::Alerts);
+    let rejected = RetentionTarget::from_policy(&policy("alerts", "createdAt")).unwrap_err();
+    assert!(matches!(rejected, RetentionError::UnsupportedTarget(_, _)));
 }
 
 /// PURPOSE: Ensure the embedded sqlx migrator still finds expected migrations.
