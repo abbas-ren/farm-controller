@@ -33,7 +33,8 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub device_id: String,
-    pub state: DeviceStateChangeState,
+    /// Nullable in `tables.sql` (default `unknown`).
+    pub state: Option<DeviceStateChangeState>,
     pub changed_at: DateTimeUtc,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,

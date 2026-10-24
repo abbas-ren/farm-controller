@@ -28,7 +28,7 @@ impl PostgresDeviceRepository {
             reference_id: Set(request.reference_id.clone()),
             data: Set(request.data.clone()),
             level: Set(level),
-            timestamp: Set(timestamp),
+            timestamp: Set(Some(timestamp)),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()

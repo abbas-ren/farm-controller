@@ -150,9 +150,9 @@ pub async fn process_case(
         .filter(test_case::Column::TestCaseId.eq(case_id))
         .lock(LockType::Update)
         .select_only()
-        .column(test_case::Column::Title)
-        .column(test_case::Column::ScriptFile)
-        .column(test_case::Column::SuiteName)
+        .column_as(test_case::Column::Title, "title")
+        .column_as(test_case::Column::ScriptFile, "script_file")
+        .column_as(test_case::Column::SuiteName, "suite_name")
         .into_model::<CaseRow>()
         .one(&transaction)
         .await?
@@ -325,15 +325,15 @@ async fn lock_execution(
         )
         .lock(LockType::Update)
         .select_only()
-        .column(test_execution::Column::BuildId)
-        .column(test_execution::Column::BuildVersion)
-        .column(test_execution::Column::DeviceFamily)
-        .column(test_execution::Column::DeviceType)
-        .column(test_execution::Column::DeviceId)
-        .column(test_execution::Column::CreatedBy)
-        .column(test_execution::Column::TestCycleId)
-        .column(test_execution::Column::TestPlanName)
-        .column(test_execution::Column::Name)
+        .column_as(test_execution::Column::BuildId, "build_id")
+        .column_as(test_execution::Column::BuildVersion, "build_version")
+        .column_as(test_execution::Column::DeviceFamily, "device_family")
+        .column_as(test_execution::Column::DeviceType, "device_type")
+        .column_as(test_execution::Column::DeviceId, "device_id")
+        .column_as(test_execution::Column::CreatedBy, "created_by")
+        .column_as(test_execution::Column::TestCycleId, "test_cycle_id")
+        .column_as(test_execution::Column::TestPlanName, "test_plan_name")
+        .column_as(test_execution::Column::Name, "name")
         .into_model::<ExecutionTarget>()
         .one(transaction)
         .await?;
@@ -447,10 +447,10 @@ async fn catalog_results(
         .filter(test_case::Column::ExecutionId.eq(test_id))
         .order_by_asc(test_case::Column::Id)
         .select_only()
-        .column(test_case::Column::TestCaseId)
-        .column(test_case::Column::Result)
-        .column(test_case::Column::Comment)
-        .column(test_case::Column::JiraDefect)
+        .column_as(test_case::Column::TestCaseId, "test_case_id")
+        .column_as(test_case::Column::Result, "result")
+        .column_as(test_case::Column::Comment, "comment")
+        .column_as(test_case::Column::JiraDefect, "jira_defect")
         .into_model::<CatalogRow>()
         .all(transaction)
         .await?
@@ -582,7 +582,7 @@ async fn insert_log(
         reference_id: Set(test_id.to_owned()),
         data: Set(data),
         level: Set(log_entry::LogEntryLevel::Info),
-        timestamp: Set(now),
+        timestamp: Set(Some(now)),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()

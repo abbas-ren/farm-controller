@@ -454,7 +454,7 @@ async fn fail_stuck_device(
                 reference_id: Set(test.test_id.clone()),
                 data: Set(serde_json::json!({ "message": reason })),
                 level: Set(log_entry::LogEntryLevel::Error),
-                timestamp: Set(now),
+                timestamp: Set(Some(now)),
                 created_at: Set(now),
                 updated_at: Set(now),
                 ..Default::default()
@@ -479,7 +479,7 @@ async fn fail_stuck_device(
         .map_err(|error| error.to_string())?;
     device_state_change::ActiveModel {
         device_id: Set(device.device_id.clone()),
-        state: Set(device_state_change::DeviceStateChangeState::Free),
+        state: Set(Some(device_state_change::DeviceStateChangeState::Free)),
         changed_at: Set(now),
         created_at: Set(now),
         updated_at: Set(now),

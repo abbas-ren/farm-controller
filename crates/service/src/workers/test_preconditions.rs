@@ -48,7 +48,7 @@ pub(super) async fn device_satisfies(
         //
         // do not contribute to the interface count.
         if matches!(
-            interface.status.unwrap_or_default(),
+            interface.status,
             device_interface::DeviceInterfaceStatus::Disconnected
                 | device_interface::DeviceInterfaceStatus::Down
                 | device_interface::DeviceInterfaceStatus::Unknown

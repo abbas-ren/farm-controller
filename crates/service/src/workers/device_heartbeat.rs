@@ -150,7 +150,7 @@ async fn run_cycle(state: &AppState) {
         }
         if let Err(error) = (device_state_change::ActiveModel {
             device_id: Set(stale.device_id.clone()),
-            state: Set(change_state),
+            state: Set(Some(change_state)),
             changed_at: Set(now),
             created_at: Set(now),
             updated_at: Set(now),
@@ -257,7 +257,7 @@ fn classify_stale_device(
     last_seen: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Option<StaleDevice> {
-    let timer = device_row.heartbeat_timer.max(1) as i64;
+    let timer = i64::from(device_row.heartbeat_timer.unwrap_or(5).max(1));
     // Legacy HeartbeatTimeouts: NOT_REACHABLE = 6× timer, FAULTY = 12× timer (seconds).
     let not_reachable_after = chrono::Duration::seconds(timer * 6);
     let faulty_after = chrono::Duration::seconds(timer * 12);

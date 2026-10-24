@@ -219,7 +219,7 @@ async fn fail(
             "message": format!("Fallback flash dispatch failed: {error}")
         })),
         level: Set(log_entry::LogEntryLevel::Error),
-        timestamp: Set(now),
+        timestamp: Set(Some(now)),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()

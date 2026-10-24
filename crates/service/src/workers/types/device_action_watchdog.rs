@@ -7,10 +7,15 @@ use crate::socket::types::farm::ServerEvent;
 pub struct StaleAction {
     pub id: uuid::Uuid,
     pub job_type: String,
+    #[sea_orm(alias = "testId")]
     pub test_id: Option<String>,
+    #[sea_orm(alias = "releaseId")]
     pub release_id: Option<uuid::Uuid>,
+    /// Projected from `targetDeviceId` via `column_as(..., "device_id")`.
     pub device_id: Option<String>,
+    #[sea_orm(alias = "deviceType")]
     pub device_type: String,
+    #[sea_orm(alias = "userId")]
     pub user_id: String,
     pub build_id: Option<String>,
     pub created_by: Option<String>,

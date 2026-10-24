@@ -190,7 +190,7 @@ pub(crate) async fn register_device(
                 .await?;
             device_state_change::ActiveModel {
                 device_id: Set(device_id.clone()),
-                state: Set(device_state_change::DeviceStateChangeState::Unknown),
+                state: Set(Some(device_state_change::DeviceStateChangeState::Unknown)),
                 changed_at: Set(now),
                 created_at: Set(now),
                 updated_at: Set(now),
@@ -210,7 +210,7 @@ pub(crate) async fn register_device(
                 device_family: Set(registration.device_family.clone()),
                 device_type: Set(registration.device_type.clone()),
                 build_id: Set(registration.build_id.clone()),
-                heartbeat_timer: Set(registration.timeout as i32),
+                heartbeat_timer: Set(Some(registration.timeout as i32)),
                 software_version: Set(registration.software_version.clone()),
                 nfs_path: Set(registration.nfs_path.clone()),
                 state: Set(Some(state)),
@@ -253,7 +253,7 @@ pub(crate) async fn register_device(
             device_id: Set(device_id.clone()),
             interface_id: Set(interface.interface_id),
             r#type: Set(Some(interface.interface_type)),
-            status: Set(Some(device_interface::DeviceInterfaceStatus::Unknown)),
+            status: Set(device_interface::DeviceInterfaceStatus::Unknown),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
@@ -342,7 +342,7 @@ pub(crate) async fn register_device(
                 id: Set(Uuid::new_v4()),
                 mac_address: Set(registration.mac_address.clone()),
                 user_id: Set("system".to_owned()),
-                status: Set(gen5_mapping_queue::QueueJobStatus::Queued),
+                status: Set(Some(gen5_mapping_queue::QueueJobStatus::Queued)),
                 retry_count: Set(0),
                 last_error: Set(None),
                 failure_dc_ip: Set(None),

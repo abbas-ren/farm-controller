@@ -49,7 +49,8 @@ pub struct Model {
     pub name: Option<String>,
     /// Coarse category (ethernet, usb, uart, …). Maps to Sequelize `type`.
     pub r#type: Option<String>,
-    pub status: Option<DeviceInterfaceStatus>,
+    /// Link state; NOT NULL in `tables.sql` (default `unknown`).
+    pub status: DeviceInterfaceStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

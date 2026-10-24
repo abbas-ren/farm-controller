@@ -135,7 +135,7 @@ pub(crate) async fn device_usage(
             .push(change);
         if matches!(
             change.state,
-            device_state_change::DeviceStateChangeState::Free
+            Some(device_state_change::DeviceStateChangeState::Free)
         ) {
             created_at
                 .entry(change.device_id.clone())
@@ -241,12 +241,12 @@ fn device_state_str(state: Option<&device::DeviceState>) -> Option<&'static str>
 
 /// PURPOSE: Serialize `change state str` to the camelCase API JSON/string shape.
 /// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
-fn change_state_str(state: &device_state_change::DeviceStateChangeState) -> &'static str {
+fn change_state_str(state: &Option<device_state_change::DeviceStateChangeState>) -> &'static str {
     match state {
-        device_state_change::DeviceStateChangeState::Busy => "busy",
-        device_state_change::DeviceStateChangeState::NotReachable => "not_reachable",
-        device_state_change::DeviceStateChangeState::Free => "free",
-        device_state_change::DeviceStateChangeState::Faulty => "faulty",
-        device_state_change::DeviceStateChangeState::Unknown => "unknown",
+        Some(device_state_change::DeviceStateChangeState::Busy) => "busy",
+        Some(device_state_change::DeviceStateChangeState::NotReachable) => "not_reachable",
+        Some(device_state_change::DeviceStateChangeState::Free) => "free",
+        Some(device_state_change::DeviceStateChangeState::Faulty) => "faulty",
+        Some(device_state_change::DeviceStateChangeState::Unknown) | None => "unknown",
     }
 }

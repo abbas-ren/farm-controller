@@ -206,21 +206,25 @@ async fn load_existing_mapping(
     device_id: &str,
     channel_id: Uuid,
 ) -> Result<Option<ExistingMapping>, DeviceRepositoryError> {
-    let Some((channel, Some(relay_row))) = relay_channel::Entity::find()
+    // Lock the channel row alone — find_also_related uses LEFT JOIN and Postgres
+    // rejects FOR UPDATE on the nullable related side.
+    let Some(channel) = relay_channel::Entity::find()
         .filter(relay_channel::Column::DeviceId.eq(device_id))
         .filter(relay_channel::Column::Id.ne(channel_id))
         .filter(relay_channel::Column::DeletedAt.is_null())
-        .find_also_related(relay::Entity)
-        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(transaction)
         .await?
     else {
         return Ok(None);
     };
-    if relay_row.deleted_at.is_some() {
+    let Some(relay_row) = relay::Entity::find_by_id(channel.relay_id)
+        .filter(relay::Column::DeletedAt.is_null())
+        .one(transaction)
+        .await?
+    else {
         return Ok(None);
-    }
+    };
     Ok(Some(ExistingMapping {
         channel_id: channel.id,
         relay_serial: relay_row.serial_number,

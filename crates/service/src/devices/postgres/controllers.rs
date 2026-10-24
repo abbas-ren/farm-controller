@@ -122,7 +122,7 @@ impl ControllerRepository for PostgresDeviceRepository {
                         "timestamp": now,
                     })),
                     level: Set(log_entry::LogEntryLevel::Info),
-                    timestamp: Set(now),
+                    timestamp: Set(Some(now)),
                     created_at: Set(now),
                     updated_at: Set(now),
                     ..Default::default()
@@ -171,7 +171,7 @@ impl ControllerRepository for PostgresDeviceRepository {
                 device_value = device_json(&refreshed);
                 device_state_change::ActiveModel {
                     device_id: Set(device_id.to_owned()),
-                    state: Set(device_state_change::DeviceStateChangeState::Free),
+                    state: Set(Some(device_state_change::DeviceStateChangeState::Free)),
                     changed_at: Set(now),
                     created_at: Set(now),
                     updated_at: Set(now),

@@ -139,6 +139,8 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
             device_action_queue::Relation::Release.def(),
         )
         .select_only()
+        // Queue columns keep Sequelize camelCase names; QueuedAction maps them via
+        // #[sea_orm(alias = "...")]. Joined execution fields use snake_case aliases.
         .column(device_action_queue::Column::Id)
         .column(device_action_queue::Column::TestId)
         .column(device_action_queue::Column::ReleaseId)
@@ -362,7 +364,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
 
     let action_model = device_action_queue::ActiveModel {
         id: Set(action.id),
-        status: Set(device_action_queue::QueueJobStatus::Running),
+        status: Set(Some(device_action_queue::QueueJobStatus::Running)),
         target_device_id: Set(Some(device_id.clone())),
         updated_at: Set(chrono::Utc::now()),
         ..Default::default()
@@ -406,7 +408,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
 
     device_state_change::ActiveModel {
         device_id: Set(device_id.clone()),
-        state: Set(device_state_change::DeviceStateChangeState::Busy),
+        state: Set(Some(device_state_change::DeviceStateChangeState::Busy)),
         changed_at: Set(now),
         created_at: Set(now),
         updated_at: Set(now),
@@ -1217,7 +1219,7 @@ async fn fail_dispatch(
 
     device_state_change::ActiveModel {
         device_id: Set(assigned.device_id.clone()),
-        state: Set(device_state_change::DeviceStateChangeState::Free),
+        state: Set(Some(device_state_change::DeviceStateChangeState::Free)),
         changed_at: Set(now),
         created_at: Set(now),
         updated_at: Set(now),

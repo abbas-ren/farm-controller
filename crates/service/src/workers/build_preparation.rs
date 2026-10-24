@@ -93,7 +93,7 @@ pub(super) async fn enqueue_official_build(
         device_type: Set(device_type.to_owned()),
         user_id: Set(user_id.to_owned()),
         r#type: Set(device_action_queue::QueueJobType::Flash),
-        status: Set(device_action_queue::QueueJobStatus::Queued),
+        status: Set(Some(device_action_queue::QueueJobStatus::Queued)),
         mode: Set(device_action_queue::QueueDispatchMode::DeviceType),
         release_id: Set(Some(release_id)),
         version: Set(Some(version.to_owned())),

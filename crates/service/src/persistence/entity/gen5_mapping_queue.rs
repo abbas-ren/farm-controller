@@ -38,7 +38,8 @@ pub struct Model {
     /// Controller MAC used to locate the mapping target.
     pub mac_address: String,
     pub user_id: String,
-    pub status: QueueJobStatus,
+    /// Nullable in `tables.sql` (default `queued` when omitted on insert).
+    pub status: Option<QueueJobStatus>,
     pub retry_count: i32,
     pub last_error: Option<String>,
     /// Device-controller IP observed at last failure (for diagnostics).

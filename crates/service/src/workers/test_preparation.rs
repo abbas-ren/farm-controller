@@ -323,7 +323,7 @@ async fn prepare(
             device_type: Set(preparation.device_type.clone()),
             user_id: Set(preparation.created_by.clone()),
             r#type: Set(device_action_queue::QueueJobType::Test),
-            status: Set(device_action_queue::QueueJobStatus::Queued),
+            status: Set(Some(device_action_queue::QueueJobStatus::Queued)),
             mode: Set(device_action_queue::QueueDispatchMode::DeviceType),
             release_id: Set(release_id),
             created_at: Set(now),

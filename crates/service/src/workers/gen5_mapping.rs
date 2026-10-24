@@ -41,7 +41,9 @@ impl From<gen5_mapping_queue::Model> for MappingJob {
         Self {
             id: model.id,
             mac_address: model.mac_address,
-            status: model.status,
+            status: model
+                .status
+                .unwrap_or(gen5_mapping_queue::QueueJobStatus::Queued),
             retry_count: model.retry_count,
             failure_dc_ip: model.failure_dc_ip,
             baseline_mapping_count: model.baseline_mapping_count,

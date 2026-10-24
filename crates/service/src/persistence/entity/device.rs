@@ -105,8 +105,8 @@ pub struct Model {
     pub last_execution_status: Option<TestStatus>,
     pub state_updated_at: Option<DateTimeUtc>,
     pub build_id: Option<String>,
-    /// Expected heartbeat interval in seconds for liveness checks.
-    pub heartbeat_timer: i32,
+    /// Expected heartbeat interval in seconds for liveness checks (nullable in DB).
+    pub heartbeat_timer: Option<i32>,
     pub upgrading: Option<bool>,
     pub flashing: Option<bool>,
     pub software_version: Option<String>,

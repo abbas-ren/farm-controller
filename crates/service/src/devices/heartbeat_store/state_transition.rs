@@ -95,7 +95,7 @@ pub(super) async fn process_device_post_update(
         .await?;
     if let Some(action) = completed_flash {
         let mut active = action.into_active_model();
-        active.status = Set(device_action_queue::QueueJobStatus::Completed);
+        active.status = Set(Some(device_action_queue::QueueJobStatus::Completed));
         active.updated_at = Set(now);
         active.update(transaction).await?;
 
@@ -161,7 +161,7 @@ pub(super) async fn process_device_post_update(
 
         if can_requeue {
             let mut active = action.into_active_model();
-            active.status = Set(device_action_queue::QueueJobStatus::Queued);
+            active.status = Set(Some(device_action_queue::QueueJobStatus::Queued));
             active.mode = Set(device_action_queue::QueueDispatchMode::DeviceSpecific);
             active.target_device_id = Set(Some(device_id.to_owned()));
             active.updated_at = Set(now);
@@ -299,7 +299,7 @@ async fn insert_test_log(
         reference_id: Set(test_id.to_owned()),
         data: Set(serde_json::json!({ "message": message })),
         level: Set(log_entry::LogEntryLevel::Info),
-        timestamp: Set(now),
+        timestamp: Set(Some(now)),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()

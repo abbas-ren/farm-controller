@@ -7,9 +7,10 @@ use super::*;
 use crate::persistence::entity::{
     device, device_action_queue, fallback_update, log_entry, test_execution,
 };
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait,
-    Set, TransactionTrait,
-    sea_query::{Expr, LockType},
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, QueryTrait,
+    RelationTrait, Set, TransactionTrait,
+    sea_query::{Alias, Expr, LockType},
 };
 
 impl PostgresDeviceRepository {
@@ -24,10 +25,8 @@ impl PostgresDeviceRepository {
         let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::cancellation", "request_test_cancellation_inner");
         let transaction = self.orm().begin().await?;
 
-        let row = test_execution::Entity::find()
+        let mut cancel_query = test_execution::Entity::find()
             .filter(test_execution::Column::TestId.eq(test_id))
-            // Row lock: serialize concurrent updates on this controller/device/relay.
-            .lock(LockType::Update)
             .join(
                 JoinType::LeftJoin,
                 test_execution::Relation::Device.def(),
@@ -43,7 +42,13 @@ impl PostgresDeviceRepository {
             .column(test_execution::Column::TestCycleId)
             .column(test_execution::Column::CreatedBy)
             .column_as(device::Column::IpAddress, "device_ip")
-            .column_as(device::Column::NfsPath, "device_nfs_path")
+            .column_as(device::Column::NfsPath, "device_nfs_path");
+        // FOR UPDATE OF execution only — Postgres rejects locking the nullable LEFT JOIN side.
+        QueryTrait::query(&mut cancel_query).lock_with_tables(
+            LockType::Update,
+            [Alias::new("test_executions")],
+        );
+        let row = cancel_query
             .into_tuple::<(
                 Option<bool>,
                 Option<test_execution::TestStatus>,
@@ -134,7 +139,7 @@ impl PostgresDeviceRepository {
                     "message": format!("Cancel requested during phase: {phase_text}")
                 })),
                 level: Set(log_entry::LogEntryLevel::Info),
-                timestamp: Set(now),
+                timestamp: Set(Some(now)),
                 created_at: Set(now),
                 updated_at: Set(now),
                 ..Default::default()
@@ -231,7 +236,7 @@ impl PostgresDeviceRepository {
                     "message": "This test has been cancelled successfully"
                 })),
                 level: Set(log_entry::LogEntryLevel::Info),
-                timestamp: Set(now),
+                timestamp: Set(Some(now)),
                 created_at: Set(now),
                 updated_at: Set(now),
                 ..Default::default()

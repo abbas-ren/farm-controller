@@ -8,22 +8,32 @@ use uuid::Uuid;
 use crate::persistence::entity::device_action_queue;
 
 /// Row projected from `device_action_queue` (+ joined test/release fields) while claiming.
+///
+/// CamelCase `alias` attributes match Sequelize column names returned by `.column()`.
+/// Joined execution fields are selected with snake_case `column_as` aliases in the worker.
 #[derive(Debug, sea_orm::FromQueryResult)]
 pub struct QueuedAction {
     pub id: Uuid,
+    #[sea_orm(alias = "testId")]
     pub test_id: Option<String>,
+    #[sea_orm(alias = "releaseId")]
     pub release_id: Option<Uuid>,
     pub version: Option<String>,
+    #[sea_orm(alias = "deviceType")]
     pub device_type: String,
+    #[sea_orm(alias = "userId")]
     pub user_id: String,
     pub mode: device_action_queue::QueueDispatchMode,
+    #[sea_orm(alias = "targetDeviceId")]
     pub target_device_id: Option<String>,
     /// When true, this is a post-IPL re-dispatch rather than a fresh queue claim.
+    #[sea_orm(alias = "iplFlashConfirm")]
     pub ipl_flash_confirm: Option<bool>,
     pub build_id: Option<String>,
     pub build_version: Option<String>,
     pub created_by: Option<String>,
     /// Used to throttle "waiting for device" frontend logs.
+    #[sea_orm(alias = "updatedAt")]
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 

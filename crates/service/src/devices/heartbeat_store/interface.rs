@@ -49,19 +49,18 @@ pub(super) fn parse_interface_status(
 /// PURPOSE: Serialize `interface status str` to the camelCase API JSON/string shape.
 /// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(super) fn interface_status_str(
-    status: Option<&device_interface::DeviceInterfaceStatus>,
+    status: &device_interface::DeviceInterfaceStatus,
 ) -> String {
     match status {
-        Some(device_interface::DeviceInterfaceStatus::Up) => "up",
-        Some(device_interface::DeviceInterfaceStatus::Down) => "down",
-        Some(device_interface::DeviceInterfaceStatus::Plugged) => "plugged",
-        Some(device_interface::DeviceInterfaceStatus::Unplugged) => "unplugged",
-        Some(device_interface::DeviceInterfaceStatus::Connected) => "connected",
-        Some(device_interface::DeviceInterfaceStatus::Disconnected) => "disconnected",
-        Some(device_interface::DeviceInterfaceStatus::Unknown) => "unknown",
-        Some(device_interface::DeviceInterfaceStatus::Available) => "available",
-        Some(device_interface::DeviceInterfaceStatus::NotAvailable) => "not_available",
-        None => "unknown",
+        device_interface::DeviceInterfaceStatus::Up => "up",
+        device_interface::DeviceInterfaceStatus::Down => "down",
+        device_interface::DeviceInterfaceStatus::Plugged => "plugged",
+        device_interface::DeviceInterfaceStatus::Unplugged => "unplugged",
+        device_interface::DeviceInterfaceStatus::Connected => "connected",
+        device_interface::DeviceInterfaceStatus::Disconnected => "disconnected",
+        device_interface::DeviceInterfaceStatus::Unknown => "unknown",
+        device_interface::DeviceInterfaceStatus::Available => "available",
+        device_interface::DeviceInterfaceStatus::NotAvailable => "not_available",
     }
     .to_owned()
 }

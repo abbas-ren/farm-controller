@@ -41,7 +41,6 @@ pub(crate) async fn record_device(
     let device_row = device::Entity::find()
         .filter(device::Column::DeviceId.eq(device_id))
         .filter(device::Column::DeletedAt.is_null())
-        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
         // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
@@ -50,6 +49,21 @@ pub(crate) async fn record_device(
         transaction.rollback().await?;
         return Ok(None);
     };
+    if device_row.status != Some(device::DeviceStatus::Approved) {
+        let status = match device_row.status.as_ref() {
+            Some(device::DeviceStatus::Requested) => "requested",
+            Some(device::DeviceStatus::Declined) => "declined",
+            Some(device::DeviceStatus::Approved) => "approved",
+            None => "unknown",
+        };
+        tracing::warn!(
+            device_id,
+            status,
+            "ignoring heartbeat for non-approved device"
+        );
+        transaction.rollback().await?;
+        return Ok(None);
+    }
     let previous_state = match device_row.state.as_ref() {
         Some(device::DeviceState::Busy) => "busy",
         Some(device::DeviceState::NotReachable) => "not_reachable",
@@ -143,7 +157,7 @@ pub(crate) async fn record_device(
     };
     device_state_change::ActiveModel {
         device_id: Set(device_id.to_owned()),
-        state: Set(change_state),
+        state: Set(Some(change_state)),
         changed_at: Set(now),
         created_at: Set(now),
         updated_at: Set(now),
@@ -190,7 +204,7 @@ pub(crate) async fn record_device(
                 .await?;
             match existing {
                 Some(row) => {
-                    let previous = interface::interface_status_str(row.status.as_ref());
+                    let previous = interface::interface_status_str(&row.status);
                     if previous != interface_status.status {
                         interface::update_interface_status(
                             &transaction,
@@ -212,7 +226,7 @@ pub(crate) async fn record_device(
                         device_id: Set(device_id.to_owned()),
                         interface_id: Set(interface_id.to_owned()),
                         r#type: Set(Some(interface_status.interface_type.clone())),
-                        status: Set(Some(status)),
+                        status: Set(status),
                         created_at: Set(now),
                         updated_at: Set(now),
                         ..Default::default()
@@ -236,7 +250,7 @@ pub(crate) async fn record_device(
                 .all(&transaction)
                 .await?;
             for row in existing {
-                let previous = interface::interface_status_str(row.status.as_ref());
+                let previous = interface::interface_status_str(&row.status);
                 if previous == interface_status.status {
                     continue;
                 }

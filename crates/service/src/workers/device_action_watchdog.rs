@@ -60,6 +60,7 @@ async fn run_cycle(state: &AppState) {
             device_action_queue::Relation::Release.def(),
         )
         .select_only()
+        // StaleAction maps camelCase queue columns via #[sea_orm(alias = "...")].
         .column(device_action_queue::Column::Id)
         .column_as(Expr::cust(r#""device_action_queue"."type"::text"#), "job_type")
         .column(device_action_queue::Column::TestId)

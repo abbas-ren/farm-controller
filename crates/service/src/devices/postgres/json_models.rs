@@ -95,7 +95,7 @@ pub(crate) fn interface_json(model: &device_interface::Model) -> serde_json::Val
         "deviceId": model.device_id,
         "name": model.name,
         "type": model.r#type,
-        "status": model.status.as_ref().map(|s| match s {
+        "status": match model.status {
             device_interface::DeviceInterfaceStatus::Up => "up",
             device_interface::DeviceInterfaceStatus::Down => "down",
             device_interface::DeviceInterfaceStatus::Plugged => "plugged",
@@ -105,7 +105,7 @@ pub(crate) fn interface_json(model: &device_interface::Model) -> serde_json::Val
             device_interface::DeviceInterfaceStatus::Unknown => "unknown",
             device_interface::DeviceInterfaceStatus::Available => "available",
             device_interface::DeviceInterfaceStatus::NotAvailable => "not_available",
-        }),
+        },
         "createdAt": model.created_at,
         "updatedAt": model.updated_at,
     })

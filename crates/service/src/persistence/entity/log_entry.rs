@@ -54,8 +54,8 @@ pub struct Model {
     /// Structured message / payload JSON.
     pub data: Json,
     pub level: LogEntryLevel,
-    /// Event time used by retention cleanup.
-    pub timestamp: DateTimeUtc,
+    /// Event time used by retention cleanup (nullable in `tables.sql`).
+    pub timestamp: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

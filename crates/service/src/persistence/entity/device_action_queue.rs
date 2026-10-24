@@ -79,7 +79,8 @@ pub struct Model {
     pub release_id: Option<Uuid>,
     pub version: Option<String>,
     pub target_device_id: Option<String>,
-    pub status: QueueJobStatus,
+    /// Nullable in `tables.sql` (default `queued` when omitted on insert).
+    pub status: Option<QueueJobStatus>,
     pub user_id: String,
     pub mode: QueueDispatchMode,
     /// Operator confirmed IPL flash step when required by Gen5 flow.

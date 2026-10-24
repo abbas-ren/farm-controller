@@ -93,7 +93,7 @@ pub(crate) async fn save_gen5_mapping(
                 let now = Utc::now();
                 gen5_mapping_queue::ActiveModel {
                     id: Set(job.id),
-                    status: Set(gen5_mapping_queue::QueueJobStatus::Completed),
+                    status: Set(Some(gen5_mapping_queue::QueueJobStatus::Completed)),
                     last_error: Set(None),
                     failure_dc_ip: Set(None),
                     baseline_mapping_count: Set(None),
@@ -130,7 +130,7 @@ pub(crate) async fn save_gen5_mapping(
                 let now = Utc::now();
                 gen5_mapping_queue::ActiveModel {
                     id: Set(job.id),
-                    status: Set(gen5_mapping_queue::QueueJobStatus::FailurePolling),
+                    status: Set(Some(gen5_mapping_queue::QueueJobStatus::FailurePolling)),
                     failure_dc_ip: Set(Some(caller_ip.to_owned())),
                     baseline_mapping_count: Set(Some(baseline_count)),
                     next_retry_at: Set(Some(now + Duration::minutes(5))),
@@ -241,7 +241,7 @@ pub(crate) async fn confirm_flash(
                 device_action_queue::ActiveModel {
                     id: Set(job_id),
                     ipl_flash_confirm: Set(Some(false)),
-                    status: Set(device_action_queue::QueueJobStatus::Cancelled),
+                    status: Set(Some(device_action_queue::QueueJobStatus::Cancelled)),
                     updated_at: Set(now),
                     ..Default::default()
                 }
@@ -282,7 +282,7 @@ pub(crate) async fn confirm_flash(
                         let now = Utc::now();
                         device_state_change::ActiveModel {
                             device_id: Set(device_id.clone()),
-                            state: Set(device_state_change::DeviceStateChangeState::Free),
+                            state: Set(Some(device_state_change::DeviceStateChangeState::Free)),
                             changed_at: Set(now),
                             created_at: Set(now),
                             updated_at: Set(now),
@@ -321,8 +321,8 @@ async fn active_execution(
             test_execution::TestStatus::Failed,
         ]))
         .select_only()
-        .column(test_execution::Column::BuildId)
-        .column(test_execution::Column::CreatedBy)
+        .column_as(test_execution::Column::BuildId, "build_id")
+        .column_as(test_execution::Column::CreatedBy, "created_by")
         .into_model::<ExecutionProgressRow>()
         .one(transaction)
         .await?)
@@ -374,7 +374,7 @@ async fn insert_test_log(
         reference_id: Set(test_id.to_owned()),
         data: Set(serde_json::json!({"message": message})),
         level: Set(log_entry::LogEntryLevel::Info),
-        timestamp: Set(now),
+        timestamp: Set(Some(now)),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
