@@ -1,3 +1,8 @@
+//! Device interface precondition evaluation for queued test actions.
+//!
+//! Used by the device-action worker to skip devices that lack required interfaces
+//! (USB, HDMI, etc.) before assignment.
+
 use std::collections::BTreeMap;
 
 use sea_orm::{ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter};
@@ -20,6 +25,7 @@ struct Condition {
     value: i64,
 }
 
+/// Return true if the device's interface counts satisfy the precondition expression.
 pub(super) async fn device_satisfies(
     transaction: &DatabaseTransaction,
     device_id: &str,
@@ -74,6 +80,7 @@ pub(super) async fn device_satisfies(
         .all(|expression| evaluate(&expression, &counts)))
 }
 
+/// Evaluate a boolean expression over interface-type counts.
 fn evaluate(expression: &str, counts: &BTreeMap<String, i64>) -> bool {
     let tokens = expression
         .split(':')
@@ -117,6 +124,7 @@ fn evaluate(expression: &str, counts: &BTreeMap<String, i64>) -> bool {
     result
 }
 
+/// Parse a single interface requirement token into a Condition.
 fn condition(interface_type: &str, requirement: &str) -> Option<Condition> {
     let interface_type = interface_type.trim().to_lowercase();
 
@@ -145,6 +153,7 @@ fn condition(interface_type: &str, requirement: &str) -> Option<Condition> {
     })
 }
 
+/// Check one Condition against aggregated interface counts.
 fn matches_condition(condition: &Condition, counts: &BTreeMap<String, i64>) -> bool {
     let count = counts
         .get(&condition.interface_type)
@@ -164,6 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Unit test: precondition expression evaluation parity with legacy.
     fn evaluates_legacy_interface_count_rules() {
         let counts = BTreeMap::from([("uart".to_owned(), 2), ("usb".to_owned(), 1)]);
 

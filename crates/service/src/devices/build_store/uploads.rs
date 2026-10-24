@@ -1,3 +1,8 @@
+//! Build upload init/start/fail/finalize persistence and alert JSON.
+//!
+//! Used by TUS/multipart upload handlers and `BuildRepository`. Ports Node
+//! `BuildService` upload lifecycle against the releases table.
+
 use std::path::Path;
 
 use chrono::Utc;
@@ -15,6 +20,8 @@ use super::super::{
     repository_types::{BuildUploadFinalization, BuildUploadResult},
 };
 
+/// PURPOSE: Ingest uploaded archive, insert release row, and build alert JSON.
+/// USE: TUS/multipart completion after bytes are fully received.
 pub(crate) async fn finalize_upload(
     orm: &DatabaseConnection,
     request: &BuildUploadFinalization,
@@ -231,6 +238,8 @@ pub(crate) async fn finalize_upload(
     Ok(BuildUploadResult { release, alert })
 }
 
+/// PURPOSE: Implement `init_upload` domain/persistence logic.
+/// USE: Called as `init_upload` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn init_upload(
     orm: &DatabaseConnection,
     file_count: i32,
@@ -256,6 +265,8 @@ pub(crate) async fn init_upload(
     Ok(upload_id)
 }
 
+/// PURPOSE: Mutate persisted state for `mark upload started`.
+/// USE: Update handlers and workers after side effects succeed.
 pub(crate) async fn mark_upload_started(
     orm: &DatabaseConnection,
     upload_id: &str,
@@ -287,6 +298,8 @@ pub(crate) async fn mark_upload_started(
     Ok(())
 }
 
+/// PURPOSE: Mutate persisted state for `mark upload failed`.
+/// USE: Update handlers and workers after side effects succeed.
 pub(crate) async fn mark_upload_failed(
     orm: &DatabaseConnection,
     upload_id: &str,
@@ -313,6 +326,8 @@ pub(crate) async fn mark_upload_failed(
     Ok(())
 }
 
+/// PURPOSE: Serialize `release json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(super) fn release_json(model: &release::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -342,6 +357,8 @@ pub(super) fn release_json(model: &release::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Serialize `alert json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(super) fn alert_json(model: &alert::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,

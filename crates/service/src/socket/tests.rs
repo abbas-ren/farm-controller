@@ -1,3 +1,8 @@
+//! Socket helper and route contract tests.
+//!
+//! Guards browser auth, EdgeController heartbeat decoding, device heartbeat fan-out,
+//! and public user-message dispatch against the committed Socket.IO / native WS contracts.
+
 use std::sync::Arc;
 
 use axum::{Router, body::Body, http::Request, routing::post};
@@ -23,6 +28,8 @@ use crate::{
     state::AppState,
 };
 
+/// PURPOSE: Admin terminal mode requires the frontend client query flag.
+/// USE: guards native socket BrowserAuthorization admin gating.
 #[test]
 fn admin_terminal_mode_requires_the_frontend_client() {
     use super::types::farm::{BrowserAuthorization, NativeSocketQuery};
@@ -49,6 +56,8 @@ fn admin_terminal_mode_requires_the_frontend_client() {
     assert!(browser_authorization(&query(Some("cli"), true)).is_err());
 }
 
+/// PURPOSE: Browser websocket subprotocol supplies bearer authentication.
+/// USE: regression for farm-browser-v1 + bearer token subprotocol parsing.
 #[test]
 fn browser_websocket_subprotocol_supplies_bearer_authentication() {
     use axum::http::{HeaderMap, HeaderValue, header};
@@ -67,11 +76,15 @@ fn browser_websocket_subprotocol_supplies_bearer_authentication() {
     );
 }
 
+/// PURPOSE: Controller identity normalization matches registration.
+/// USE: keeps socket heartbeat IDs aligned with device registration MAC normalization.
 #[test]
 fn controller_identity_normalization_matches_registration() {
     assert_eq!(normalize_controller_id("AA:BB:CC:DD:EE:FF"), "aabbccddeeff");
 }
 
+/// PURPOSE: EdgeController binary heartbeat payload decodes to frontend metrics event.
+/// USE: regression for controller ping Socket.IO payload shaping.
 #[test]
 fn edgecontroller_binary_payload_decodes() {
     let payload = serde_json::json!({
@@ -109,6 +122,8 @@ fn edgecontroller_binary_payload_decodes() {
     assert_eq!(event.payload["metrics"]["disk"]["total"], "32.0 GB");
 }
 
+/// PURPOSE: Device heartbeat events follow the committed frontend contract.
+/// USE: guards state/interface/alert/ping event fan-out from heartbeat results.
 #[test]
 fn device_heartbeat_events_follow_committed_frontend_contract() {
     let events = device_heartbeat_events(
@@ -148,6 +163,8 @@ fn device_heartbeat_events_follow_committed_frontend_contract() {
     assert_eq!(events[3].payload["deviceId"], "device-1");
 }
 
+/// PURPOSE: User message dispatch preserves the public event contract.
+/// USE: regression for `/ws/send/message` → `user` Socket.IO publish.
 #[tokio::test]
 async fn user_message_dispatch_preserves_public_event_contract() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

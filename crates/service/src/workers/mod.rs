@@ -1,3 +1,14 @@
+//! Background workers that drive queues, watchdogs, scanners, and metrics.
+//!
+//! Spawned by [`worker_manager::WorkerManager::start`] when the corresponding
+//! config modules (`Workers`, `Device`, `Events`) are enabled. Each worker loops
+//! on a poll interval (or mpsc channel), claims work under Postgres locking where
+//! needed, and publishes farm WebSocket events / metrics as side effects.
+//!
+//! Legacy Node counterparts: `DeviceActionQueueService`, `HeartbeatQueueService`,
+//! `Gen5MappingQueueService`, `Gen5RebootWatchdogService`,
+//! `RelayConfigTimeoutService`, `ArtifactsScanner`, plus reports-service workers.
+
 #[cfg(test)]
 pub mod tests;
 

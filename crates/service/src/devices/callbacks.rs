@@ -1,3 +1,10 @@
+//! Public EdgeController callback HTTP handlers (no bearer auth).
+//!
+//! Ports Node `DeviceController` routes used by edge hardware at boot and during IPL:
+//! `POST /api/v1/device/controller`, `POST /mapping-gen5`, and Gen4/Gen5
+//! `flash-confirm` / `flash-confirm-gen4` (GET query and POST body variants) from
+//! `farm_controller_old/device-service` `deviceRoutes.ts`.
+
 use std::sync::Arc;
 
 use super::types::TtyEntry;
@@ -15,6 +22,8 @@ use axum::{
 };
 use tracing::info;
 
+/// PURPOSE: Build the shared reqwest client for EdgeController callback HTTP calls.
+/// USE: Handlers that POST confirmation/delete/power commands to EdgeController.
 pub(super) fn callback_client() -> reqwest::Client {
     let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "callback_client");
     crate::external_http::client(DEVICE_CALLBACK_TIMEOUT)
@@ -41,12 +50,15 @@ pub(super) fn callback_client() -> reqwest::Client {
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Register or refresh an EdgeController and replace its relay inventory.
+/// USE: Called by EdgeController at boot (public, no bearer); publishes frontend alerts and syncs IPL.
 pub async fn register_controller(
     State(state): State<Arc<AppState>>,
     Json(registration): Json<ControllerRegistration>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "register_controller");
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -57,6 +69,7 @@ pub async fn register_controller(
         Ok(result) => {
             let action = if result.created { "added" } else { "updated" };
             publish_controller_changed(&state, action, &result.controller.device_controller_id);
+            // Publish: notify connected frontend clients via Socket.IO.
             if result.created
                 && let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
                     FrontendMessagePayload::AlertDataPayload {
@@ -83,6 +96,7 @@ pub async fn register_controller(
                 "http://{}:{EDGE_CONTROLLER_PORT}/confirmation",
                 result.controller.ip_address
             )) {
+                // Edge: outbound HTTP call to EdgeController.
                 match callback_client()
                     .post(url)
                     .json(&serde_json::json!({
@@ -117,6 +131,7 @@ pub async fn register_controller(
             )
                 .into_response()
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to register device controller"),
     }
 }
@@ -140,6 +155,8 @@ pub async fn register_controller(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Persist a Gen5 UART/power mapping result from EdgeController.
+/// USE: Public EdgeController callback during Gen5 mapping workflows.
 pub async fn mapping_gen5(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -195,6 +212,8 @@ pub async fn mapping_gen5(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Commit Gen5 IPL flash progress/outcome from EdgeController.
+/// USE: Public EdgeController POST callback during Gen5 IPL flashing.
 pub async fn flash_confirm(
     State(state): State<Arc<AppState>>,
     Json(flashing_status): Json<IplFlashingStatus>,
@@ -203,7 +222,6 @@ pub async fn flash_confirm(
     flash_confirmation_response(&state, "x5h", flashing_status).await
 }
 
-/// Legacy Node/EdgeController compatibility: `GET /flash-confirm?status=success|failure`.
 #[utoipa::path(
     get,
     path = "/api/v1/device/flash-confirm",
@@ -216,6 +234,8 @@ pub async fn flash_confirm(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Legacy Gen5 IPL flash confirmation via query-string status.
+/// USE: Older EdgeController/Node clients that GET /flash-confirm.
 pub async fn flash_confirm_get(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FlashConfirmationQuery>,
@@ -245,6 +265,8 @@ pub async fn flash_confirm_get(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Commit Gen4 IPL flash progress/outcome from EdgeController.
+/// USE: Public EdgeController POST callback during Gen4 IPL flashing.
 pub async fn flash_confirm_gen4(
     State(state): State<Arc<AppState>>,
     Json(flashing_status): Json<IplFlashingStatus>,
@@ -267,7 +289,6 @@ pub async fn flash_confirm_gen4(
     response
 }
 
-/// Legacy Node/EdgeController compatibility: `GET /flash-confirm-gen4?status=success|failure`.
 #[utoipa::path(
     get,
     path = "/api/v1/device/flash-confirm-gen4",
@@ -280,6 +301,8 @@ pub async fn flash_confirm_gen4(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Legacy Gen4 IPL flash confirmation via query-string status.
+/// USE: Older EdgeController/Node clients that GET /flash-confirm-gen4.
 pub async fn flash_confirm_gen4_get(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FlashConfirmationQuery>,
@@ -289,6 +312,8 @@ pub async fn flash_confirm_gen4_get(
     flash_confirmation_response(&state, "v4h", legacy_flash_status(query.status, 4)).await
 }
 
+/// PURPOSE: Synthesize an IplFlashingStatus body from a legacy GET query status.
+/// USE: GET flash-confirm handlers before calling flash_confirmation_response.
 fn legacy_flash_status(status: CallbackStatus, generation: u8) -> IplFlashingStatus {
     IplFlashingStatus {
         status,
@@ -300,6 +325,8 @@ fn legacy_flash_status(status: CallbackStatus, generation: u8) -> IplFlashingSta
     }
 }
 
+/// PURPOSE: Run a repository callback and return the standard success/error JSON envelope.
+/// USE: mapping_gen5 and similar public callbacks.
 async fn callback_response<F, Fut>(
     state: &AppState,
     operation: F,
@@ -311,6 +338,7 @@ where
 {
     let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "callback_response");
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -324,10 +352,13 @@ where
             message,
         })
         .into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Callback failed"),
     }
 }
 
+/// PURPOSE: Persist flash confirmation, cancel/update executions, and publish frontend events.
+/// USE: All Gen4/Gen5 flash-confirm HTTP entry points.
 async fn flash_confirmation_response(
     state: &AppState,
     device_type: &str,
@@ -335,6 +366,7 @@ async fn flash_confirmation_response(
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "flash_confirmation_response");
     let Some(repository) = state.device_repository.as_ref() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -364,6 +396,7 @@ async fn flash_confirmation_response(
                         "failed to append IPL failure test log"
                     );
                 }
+                // Publish: notify connected frontend clients via Socket.IO.
                 if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
                     FrontendMessagePayload::TestExecutionUpdate {
                         build_id: Some(execution.build_id),
@@ -377,6 +410,7 @@ async fn flash_confirmation_response(
                     tracing::warn!(%error, test_id, "failed to publish IPL rejection cancellation");
                 }
             }
+            // Publish: notify connected frontend clients via Socket.IO.
             if let Some(device_id) = result.freed_device_id
                 && let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
                     FrontendMessagePayload::DeviceStateUpdate {
@@ -416,6 +450,7 @@ async fn flash_confirmation_response(
                 {
                     tracing::warn!(%error, test_id = %test_id, "failed to append IPL progress log");
                 }
+                // Publish: notify connected frontend clients via Socket.IO.
                 if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
                     FrontendMessagePayload::TestExecutionUpdate {
                         build_id: Some(build_id),
@@ -442,11 +477,14 @@ async fn flash_confirmation_response(
         }
         Err(error) => {
             tracing::error!(%error, "Callback failed");
+            // Map: translate repository failure into the legacy HTTP error envelope.
             repository_error(error, "Callback failed")
         }
     }
 }
 
+/// PURPOSE: Parse optional tty_entry JSON (object or stringified) into TtyEntry.
+/// USE: mapping_gen5 request validation.
 fn parse_tty_entry(value: Option<&serde_json::Value>) -> Result<Option<TtyEntry>, String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "parse_tty_entry");
     match value {

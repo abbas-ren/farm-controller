@@ -1,5 +1,13 @@
+//! Faulty-build reports (`faulty_reports` table).
+//!
+//! Ports `FaultyReport.ts` / `FaultyReportService`. Operators file these when a
+//! release misbehaves on a device type; approval workflow can mark the release
+//! faulty and attach evidence paths.
+
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
+
+/// Review workflow status for a faulty report.
 #[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(
     rs_type = "String",
@@ -14,6 +22,8 @@ pub enum FaultyStatus {
     #[sea_orm(string_value = "rejected")]
     Rejected,
 }
+
+/// One operator-submitted faulty report against a release.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "faulty_reports", rename_all = "camelCase")]
 pub struct Model {
@@ -31,6 +41,7 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -46,14 +57,21 @@ pub enum Relation {
     )]
     TestExecution,
 }
+
 impl Related<super::release::Entity> for Entity {
+    /// PURPOSE: Join path to the implicated release.
+    /// USE: Load release version/tag when reviewing or listing faulty reports.
     fn to() -> RelationDef {
         Relation::Release.def()
     }
 }
+
 impl Related<super::test_execution::Entity> for Entity {
+    /// PURPOSE: Join path to the last related test execution.
+    /// USE: Attach execution context and logs when investigating a report.
     fn to() -> RelationDef {
         Relation::TestExecution.def()
     }
 }
+
 impl ActiveModelBehavior for ActiveModel {}

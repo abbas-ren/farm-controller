@@ -1,3 +1,8 @@
+//! Flag, status-update, and delete mutations for release rows.
+//!
+//! Used by build HTTP handlers after authorization. Ports Node `BuildService`
+//! flag/status/delete that emit admin alerts.
+
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, DatabaseConnection, EntityTrait, Set, TransactionTrait,
@@ -12,6 +17,8 @@ use super::super::{
 };
 use super::uploads::alert_json;
 
+/// PURPOSE: Mutate persisted state for `update build status`.
+/// USE: Update handlers and workers after side effects succeed.
 pub(crate) async fn update_build_status(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -77,6 +84,8 @@ pub(crate) async fn update_build_status(
     }))
 }
 
+/// PURPOSE: Implement `flag_build` domain/persistence logic.
+/// USE: Called as `flag_build` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn flag_build(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -151,6 +160,8 @@ pub(crate) async fn flag_build(
     }))
 }
 
+/// PURPOSE: Delete `delete build` from persistence.
+/// USE: Delete handlers after edge cleanup when required.
 pub(crate) async fn delete_build(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -206,6 +217,8 @@ pub(crate) async fn delete_build(
     }))
 }
 
+/// PURPOSE: Parse API/DB string into the `parse release status` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_release_status(status: &str) -> Result<release::ReleaseTestStatus, DeviceRepositoryError> {
     match status {
         "untested" => Ok(release::ReleaseTestStatus::Untested),

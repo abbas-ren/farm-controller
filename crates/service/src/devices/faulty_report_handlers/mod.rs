@@ -1,4 +1,7 @@
 //! Faulty-report HTTP handlers grouped by write, record, and download behavior.
+//!
+//! Ports Node `faultyRoutes.ts` / `FaultyReportController` under `/api/v1/device/faulty/report*`.
+//! Admin frontend creates, lists, downloads, and updates faulty DUT reports.
 
 use std::{
     path::{Path as FilePath, PathBuf},

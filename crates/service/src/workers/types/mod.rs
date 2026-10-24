@@ -1,3 +1,9 @@
+//! Shared DTOs and helpers for background workers.
+//!
+//! Types here are the claim/query shapes and transition payloads that workers
+//! exchange with Postgres and the socket event hub. Runtime entrypoints live in
+//! sibling worker modules; this package only carries data contracts.
+
 mod common;
 mod device_action;
 mod device_action_watchdog;
@@ -20,6 +26,11 @@ pub use sys_metrics::*;
 pub use test_prep::*;
 pub use worker_manager::*;
 
+/// Map a SeaORM [`DbErr`](sea_orm::DbErr) into an `sqlx::Error` for metrics/logging paths
+/// that already speak sqlx.
+///
+/// Prefer this when a worker already records failures with sqlx-shaped errors
+/// (legacy metric helpers) but queried via SeaORM.
 pub fn err_seaorm_to_sqlx(err: sea_orm::DbErr) -> sqlx::Error {
     use sea_orm::{DbErr, RuntimeErr};
 

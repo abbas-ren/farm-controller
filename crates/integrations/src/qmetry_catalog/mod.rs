@@ -1,3 +1,10 @@
+//! QMetry test-case catalog HTTP adapter.
+//!
+//! Ports QMetry folder/case fetching formerly done via Axios in
+//! `farm_controller_old` device-service test helpers. Exposes a
+//! [`QmetryCatalog`] trait so the service crate can depend on the port without
+//! hard-wiring HTTP; response keys (`script_file`, labels) stay UI-compatible.
+
 #[cfg(test)]
 pub mod tests;
 
@@ -7,18 +14,26 @@ use async_trait::async_trait;
 
 use crate::config::TestsConfig;
 
+/// Errors from QMetry HTTP calls or URL construction.
 #[derive(Debug, thiserror::Error)]
 pub enum QmetryError {
     #[error("Qmetry request failed: {0}")]
     Request(String),
 }
 
+/// Port for reading QMetry cases by plan or folder.
 #[async_trait]
 pub trait QmetryCatalog: Send + Sync {
+/// PURPOSE: Return cases for each child folder under a QMetry plan.
+/// USE: UI/API when expanding a plan into suite→cases maps (labels included).
     async fn cases_by_plan(&self, plan_id: u64) -> Result<serde_json::Value, QmetryError>;
+
+/// PURPOSE: Return cases for a single folder without label enrichment.
+/// USE: Narrow lookups when the caller already knows the folder id.
     async fn cases_by_folder(&self, folder_id: u64) -> Result<serde_json::Value, QmetryError>;
 }
 
+/// HTTP implementation of [`QmetryCatalog`] using configured base URL + API key.
 pub struct HttpQmetryCatalog {
     config: TestsConfig,
     client: reqwest::Client,
@@ -26,6 +41,8 @@ pub struct HttpQmetryCatalog {
 }
 
 impl HttpQmetryCatalog {
+    /// PURPOSE: Construct an Arc'd catalog or `None` when QMetry URL is empty.
+    /// USE: Service bootstrap; returns `Ok(None)` so callers can skip QMetry.
     pub fn configured(config: TestsConfig) -> Result<Option<Arc<dyn QmetryCatalog>>, QmetryError> {
         if config.qmetry_base_url.trim().is_empty() {
             return Ok(None);
@@ -42,6 +59,8 @@ impl HttpQmetryCatalog {
         })))
     }
 
+    /// PURPOSE: List testcase folders for the configured Jira project id.
+    /// USE: Internal prerequisite for resolving a plan's children.
     async fn folders(&self) -> Result<serde_json::Value, QmetryError> {
         let url = self
             .base
@@ -64,6 +83,9 @@ impl HttpQmetryCatalog {
             .map_err(request_error)
     }
 
+    /// PURPOSE: Search cases in a folder and normalize to farm JSON shape.
+    /// USE: Shared by plan and folder queries. Maps QMetry custom field
+    /// "Script File" into `script_file`; optionally copies label titles.
     async fn folder_cases(
         &self,
         folder_id: u64,
@@ -77,6 +99,7 @@ impl HttpQmetryCatalog {
             .query(&[("fields", "seqNo,key,version,summary,priority,status")])
             .json(&serde_json::json!({"filter": {"projectId": self.config.jira_project_id, "folderId": folder_id}}))
             .send().await.map_err(request_error)?.error_for_status().map_err(request_error)?.json().await.map_err(request_error)?;
+        // Preserve the legacy response keys expected by the UI (`script_file`, etc.).
         Ok(value.get("data").and_then(serde_json::Value::as_array).into_iter().flatten().map(|case| {
             let script = case.get("customFields").and_then(serde_json::Value::as_object).and_then(|fields| fields.values().find(|field| field.get("name").and_then(serde_json::Value::as_str) == Some("Script File"))).and_then(|field| field.get("value")).and_then(serde_json::Value::as_str).unwrap_or_default();
             let mut output = serde_json::json!({"id": case.get("id"), "name": case.get("summary"), "script_file": script, "key": case.get("key"), "seqNo": case.get("seqNo"), "version": case.get("version")});
@@ -88,8 +111,11 @@ impl HttpQmetryCatalog {
 
 #[async_trait]
 impl QmetryCatalog for HttpQmetryCatalog {
+/// PURPOSE: Return cases for each child folder under a QMetry plan.
+/// USE: UI/API when expanding a plan into suite→cases maps (labels included).
     async fn cases_by_plan(&self, plan_id: u64) -> Result<serde_json::Value, QmetryError> {
         let folders = self.folders().await?;
+        // Plan node children are the suite/folders we expand into case lists.
         let children = folders
             .get("data")
             .and_then(serde_json::Value::as_array)
@@ -112,6 +138,8 @@ impl QmetryCatalog for HttpQmetryCatalog {
         serde_json::to_value(result).map_err(|error| QmetryError::Request(error.to_string()))
     }
 
+/// PURPOSE: Return cases for a single folder without label enrichment.
+/// USE: Narrow lookups when the caller already knows the folder id.
     async fn cases_by_folder(&self, folder_id: u64) -> Result<serde_json::Value, QmetryError> {
         Ok(serde_json::Value::Array(
             self.folder_cases(folder_id, false).await?,
@@ -119,6 +147,8 @@ impl QmetryCatalog for HttpQmetryCatalog {
     }
 }
 
+/// PURPOSE: Map reqwest failures into [`QmetryError::Request`].
+/// USE: All HTTP helpers in HttpQmetryCatalog.
 fn request_error(error: reqwest::Error) -> QmetryError {
     QmetryError::Request(error.to_string())
 }

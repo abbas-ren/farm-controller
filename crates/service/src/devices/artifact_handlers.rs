@@ -1,3 +1,9 @@
+//! Default artifact copy configuration handler.
+//!
+//! Ports Node `DeviceController.copyDefaultArtifacts`
+//! (`PUT /api/v1/device/config/artifacts/default`) from `deviceRoutes.ts`.
+//! Admin frontend seeds default artifact sets onto devices.
+
 use std::sync::Arc;
 
 use axum::{
@@ -14,6 +20,8 @@ use super::{
     repository_error,
 };
 
+/// PURPOSE: Copy default device artifacts
+/// USE: Frontend admin UI (bearer + admin role).
 #[utoipa::path(put, path = "/api/v1/device/config/artifacts/default", tag = "Devices", summary = "Copy default device artifacts", description = "Downloads configured default archives with explicit limits, validates contained paths, and installs safe files into the NFS/TFTP artifact roots.", params(DefaultArtifactCopyQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Default artifacts copied", body = DefaultArtifactCopyResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 500, description = "Artifact download or installation failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn copy_default_artifacts(
     State(state): State<Arc<AppState>>,
@@ -21,11 +29,13 @@ pub(crate) async fn copy_default_artifacts(
     Query(query): Query<DefaultArtifactCopyQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_handlers", "copy_default_artifacts");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -35,6 +45,7 @@ pub(crate) async fn copy_default_artifacts(
     let entries = match repository.artifact_folders().await {
         Ok(entries) => entries,
         Err(error) => {
+            // Map: translate repository failure into the legacy HTTP error envelope.
             return repository_error(error, "Failed to load default artifact configuration");
         }
     };

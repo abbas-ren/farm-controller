@@ -1,7 +1,13 @@
+//! In-memory `FaultyReportRepository` fake for device route tests.
+//!
+//! Stands in for production faulty-report create/list/status/delete persistence.
+
 use super::*;
 
 #[async_trait]
 impl FaultyReportRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `FaultyReportRepository::create_faulty_report`.
+    /// USE: device route tests exercising faulty report persistence without a live database.
     async fn create_faulty_report(
         &self,
         request: &FaultyReportCreate,
@@ -14,6 +20,8 @@ impl FaultyReportRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `FaultyReportRepository::finalize_faulty_report`.
+    /// USE: device route tests exercising faulty report persistence without a live database.
     async fn finalize_faulty_report(
         &self,
         report_id: Uuid,
@@ -49,6 +57,8 @@ impl FaultyReportRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `FaultyReportRepository::faulty_reports`.
+    /// USE: device route tests exercising faulty report persistence without a live database.
     async fn faulty_reports(&self) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
         Ok(vec![serde_json::json!({
             "id": "11111111-1111-4111-8111-111111111111",
@@ -57,6 +67,8 @@ impl FaultyReportRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `FaultyReportRepository::faulty_report_by_id`.
+    /// USE: device route tests exercising faulty report persistence without a live database.
     async fn faulty_report_by_id(
         &self,
         report_id: Uuid,
@@ -85,6 +97,8 @@ impl FaultyReportRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `FaultyReportRepository::update_faulty_report_status`.
+    /// USE: device route tests exercising faulty report persistence without a live database.
     async fn update_faulty_report_status(
         &self,
         report_id: Uuid,
@@ -98,6 +112,8 @@ impl FaultyReportRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `FaultyReportRepository::delete_faulty_report`.
+    /// USE: device route tests exercising faulty report persistence without a live database.
     async fn delete_faulty_report(&self, report_id: Uuid) -> Result<bool, DeviceRepositoryError> {
         Ok(report_id != Uuid::nil())
     }

@@ -1,3 +1,8 @@
+//! Discover, download, and install default artifact trees per device type.
+//!
+//! Used by artifact HTTP handlers and workers that seed NFS artifact folders.
+//! Ports Node ArtifactsScanner / artifact copy helpers from device-service.
+
 use std::{
     io,
     path::{Component, Path, PathBuf},
@@ -11,6 +16,8 @@ use crate::config::DeviceConfig;
 
 use super::{DeviceTypeFolder, constants::DEVICE_CALLBACK_TIMEOUT};
 
+/// PURPOSE: Implement `discover_versions` domain/persistence logic.
+/// USE: Called as `discover_versions` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn discover_versions(base_url: &str, folder_keyword: &str) -> Vec<String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "discover_versions");
     let Ok(base_url) = reqwest::Url::parse(base_url) else {
@@ -44,6 +51,8 @@ pub(crate) async fn discover_versions(base_url: &str, folder_keyword: &str) -> V
         .map_or_else(|_| Vec::new(), |html| html_directories(&html))
 }
 
+/// PURPOSE: Implement `html_directories` domain/persistence logic.
+/// USE: Called as `html_directories` from handlers, repository impls, or sibling helpers.
 fn html_directories(html: &str) -> Vec<String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "html_directories");
     let link = regex::Regex::new(r#"(?i)href\s*=\s*["']([^"']+/)["']"#)
@@ -59,6 +68,8 @@ fn html_directories(html: &str) -> Vec<String> {
         .collect()
 }
 
+/// PURPOSE: Copy default artifact trees into per-device-type folders.
+/// USE: Artifact copy HTTP handler / scanner seeding.
 pub(crate) async fn copy_defaults(
     config: &DeviceConfig,
     entries: &[DeviceTypeFolder],
@@ -120,6 +131,8 @@ pub(crate) async fn copy_defaults(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// PURPOSE: Implement `install_entry` domain/persistence logic.
+/// USE: Called as `install_entry` from handlers, repository impls, or sibling helpers.
 async fn install_entry(
     client: &reqwest::Client,
     version_url: &reqwest::Url,
@@ -159,6 +172,8 @@ async fn install_entry(
     copy_if_needed(&staging.join(dtb), &tftp.join("board.dtb"), force).await
 }
 
+/// PURPOSE: Fetch a single record for `get text`.
+/// USE: Detail handlers and repository lookups.
 async fn get_text(client: &reqwest::Client, url: reqwest::Url) -> Result<String, String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "get_text");
     client
@@ -173,6 +188,8 @@ async fn get_text(client: &reqwest::Client, url: reqwest::Url) -> Result<String,
         .map_err(|error| error.to_string())
 }
 
+/// PURPOSE: Implement `download` domain/persistence logic.
+/// USE: Called as `download` from handlers, repository impls, or sibling helpers.
 async fn download(client: &reqwest::Client, url: reqwest::Url, path: &Path) -> Result<(), String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "download");
     let response = client
@@ -190,6 +207,8 @@ async fn download(client: &reqwest::Client, url: reqwest::Url, path: &Path) -> R
     file.flush().await.map_err(io_error)
 }
 
+/// PURPOSE: Implement `extract_archive` domain/persistence logic.
+/// USE: Called as `extract_archive` from handlers, repository impls, or sibling helpers.
 async fn extract_archive(archive: PathBuf, destination: PathBuf) -> Result<(), String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "extract_archive");
     tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -214,6 +233,8 @@ async fn extract_archive(archive: PathBuf, destination: PathBuf) -> Result<(), S
     .map_err(|error| error.to_string())?
 }
 
+/// PURPOSE: Implement `directory_is_empty` domain/persistence logic.
+/// USE: Called as `directory_is_empty` from handlers, repository impls, or sibling helpers.
 async fn directory_is_empty(path: &Path) -> Result<bool, String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "directory_is_empty");
     Ok(tokio::fs::read_dir(path)
@@ -225,12 +246,16 @@ async fn directory_is_empty(path: &Path) -> Result<bool, String> {
         .is_none())
 }
 
+/// PURPOSE: Implement `replace_directory` domain/persistence logic.
+/// USE: Called as `replace_directory` from handlers, repository impls, or sibling helpers.
 async fn replace_directory(path: &Path) -> Result<(), String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "replace_directory");
     tokio::fs::remove_dir_all(path).await.map_err(io_error)?;
     tokio::fs::create_dir_all(path).await.map_err(io_error)
 }
 
+/// PURPOSE: Implement `copy_if_needed` domain/persistence logic.
+/// USE: Called as `copy_if_needed` from handlers, repository impls, or sibling helpers.
 async fn copy_if_needed(source: &Path, destination: &Path, force: bool) -> Result<(), String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "copy_if_needed");
     if force || !tokio::fs::try_exists(destination).await.map_err(io_error)? {
@@ -241,6 +266,8 @@ async fn copy_if_needed(source: &Path, destination: &Path, force: bool) -> Resul
     Ok(())
 }
 
+/// PURPOSE: Implement `html_files` domain/persistence logic.
+/// USE: Called as `html_files` from handlers, repository impls, or sibling helpers.
 fn html_files(html: &str) -> Vec<String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "html_files");
     let link = regex::Regex::new(r#"(?i)href\s*=\s*["']([^"'/]+)["']"#)
@@ -252,6 +279,8 @@ fn html_files(html: &str) -> Vec<String> {
         .collect()
 }
 
+/// PURPOSE: Validate `validate segment` input before persistence.
+/// USE: Handlers/stores before insert or update.
 fn validate_segment(segment: &str) -> Result<(), String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "validate_segment");
     let path = Path::new(segment);
@@ -264,11 +293,15 @@ fn validate_segment(segment: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// PURPOSE: Implement `io_error` domain/persistence logic.
+/// USE: Called as `io_error` from handlers, repository impls, or sibling helpers.
 fn io_error(error: io::Error) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "io_error");
     error.to_string()
 }
 
+/// PURPOSE: Implement `staging_name` domain/persistence logic.
+/// USE: Called as `staging_name` from handlers, repository impls, or sibling helpers.
 fn staging_name() -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "staging_name");
     uuid::Uuid::new_v4().simple().to_string()
@@ -279,6 +312,8 @@ mod tests {
     use super::{html_directories, html_files, validate_segment};
 
     #[test]
+    /// PURPOSE: Implement `directory_listing_ignores_parent_and_files` domain/persistence logic.
+    /// USE: Called as `directory_listing_ignores_parent_and_files` from handlers, repository impls, or sibling helpers.
     fn directory_listing_ignores_parent_and_files() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "directory_listing_ignores_parent_and_files");
         let html = r#"<a href="../">parent</a><a href="v1/">v1</a><a href="Image">file</a>"#;
@@ -286,6 +321,8 @@ mod tests {
     }
 
     #[test]
+    /// PURPOSE: Implement `file_listing_keeps_only_single_path_segments` domain/persistence logic.
+    /// USE: Called as `file_listing_keeps_only_single_path_segments` from handlers, repository impls, or sibling helpers.
     fn file_listing_keeps_only_single_path_segments() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "file_listing_keeps_only_single_path_segments");
         let html = r#"<a href="../">parent</a><a href="Image">image</a><a href="board.dtb">dtb</a><a href="nested/file">bad</a>"#;
@@ -293,6 +330,8 @@ mod tests {
     }
 
     #[test]
+    /// PURPOSE: Implement `artifact_path_segments_reject_traversal` domain/persistence logic.
+    /// USE: Called as `artifact_path_segments_reject_traversal` from handlers, repository impls, or sibling helpers.
     fn artifact_path_segments_reject_traversal() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "artifact_path_segments_reject_traversal");
         assert!(validate_segment("device-v1").is_ok());

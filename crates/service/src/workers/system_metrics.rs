@@ -1,3 +1,8 @@
+//! Host system metrics publisher for the farm UI (legacy SystemMetricsService).
+//!
+//! Every few seconds samples CPU/memory/disk/network via `sysinfo` and publishes
+//! a `system_metrics_update` WebSocket event through the farm `EventHub`.
+
 use std::{sync::Arc, time::Duration};
 
 use chrono::{SecondsFormat, Utc};
@@ -11,10 +16,12 @@ use crate::{
 
 const METRICS_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Spawn the metrics publish loop at the default 5s interval.
 pub(super) async fn worker(event_publisher: Arc<EventHub>, cancellation: CancellationToken) {
     worker_with_interval(event_publisher, cancellation, METRICS_INTERVAL).await;
 }
 
+/// Publish `system_metrics_update` events until cancellation.
 async fn worker_with_interval(
     event_publisher: Arc<EventHub>,
     cancellation: CancellationToken,
@@ -37,6 +44,7 @@ async fn worker_with_interval(
 }
 
 impl SystemMetricsSampler {
+    /// Construct the typed handle (channel, sampler, scanner, etc.).
     fn new() -> Self {
         Self {
             system: System::new_all(),
@@ -45,6 +53,7 @@ impl SystemMetricsSampler {
         }
     }
 
+    /// Refresh counters and build the frontend metrics WS payload.
     fn sample_event(&mut self) -> ServerEvent {
         self.system.refresh_cpu_all();
         self.system.refresh_memory();
@@ -111,6 +120,7 @@ impl SystemMetricsSampler {
     }
 }
 
+/// Round used/total to a 0–100 percent integer.
 fn percentage(used: u64, total: u64) -> u64 {
     if total == 0 {
         0
@@ -119,6 +129,7 @@ fn percentage(used: u64, total: u64) -> u64 {
     }
 }
 
+/// Format byte counts with legacy decimal SI units (KB=1000).
 fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1_000.0;
     const MB: f64 = 1_000_000.0;
@@ -138,6 +149,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Format a bytes/sec counter as `{bytes}/s`.
 fn format_speed(bytes_per_second: u64) -> String {
     format!("{}/s", format_bytes(bytes_per_second))
 }
@@ -147,6 +159,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Unit test: metrics event field names match the UI contract.
     fn metrics_payload_preserves_frontend_contract() {
         let event = SystemMetricsSampler::new().sample_event();
         assert_eq!(event.event, "system_metrics_update");
@@ -172,6 +185,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: byte/speed formatting matches legacy SI decimals.
     fn metric_units_match_legacy_decimal_formatting() {
         assert_eq!(format_bytes(999), "999 B");
         assert_eq!(format_bytes(1_500), "1.5 KB");
@@ -182,6 +196,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Unit test: metrics worker publishes then stops on cancel.
     async fn metrics_worker_is_bounded_and_cancellable() {
         let event_publisher = Arc::new(EventHub::default());
         let mut events = event_publisher.subscribe();

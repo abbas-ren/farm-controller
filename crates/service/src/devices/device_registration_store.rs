@@ -1,3 +1,9 @@
+//! Upsert device inventory rows from registration callbacks.
+//!
+//! Used by the device-registration HTTP handler / `DeviceRegistrationRepository`.
+//! Ports Node `DeviceService.registerDevice`, including interface rewrite,
+//! status/state parsing, and Gen3 controller mapping side effects.
+
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
@@ -19,6 +25,8 @@ use super::{
     validation::{device_interfaces, validate_device_registration},
 };
 
+/// PURPOSE: Parse API/DB string into the `parse device status` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_device_status(status: &str) -> Result<device::DeviceStatus, DeviceRepositoryError> {
     match status {
         "approved" => Ok(device::DeviceStatus::Approved),
@@ -30,6 +38,8 @@ fn parse_device_status(status: &str) -> Result<device::DeviceStatus, DeviceRepos
     }
 }
 
+/// PURPOSE: Parse API/DB string into the `parse device state` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_device_state(state: &str) -> Result<device::DeviceState, DeviceRepositoryError> {
     match state {
         "busy" => Ok(device::DeviceState::Busy),
@@ -43,6 +53,8 @@ fn parse_device_state(state: &str) -> Result<device::DeviceState, DeviceReposito
     }
 }
 
+/// PURPOSE: Upsert a device and rewrite its interfaces from a registration payload.
+/// USE: Device registration HTTP handler after validation/MAC normalize.
 pub(crate) async fn register_device(
     orm: &DatabaseConnection,
     registration: &DeviceRegistration,
@@ -55,6 +67,7 @@ pub(crate) async fn register_device(
     let transaction = orm.begin().await?;
     let existing = device::Entity::find()
         .filter(device::Column::DeviceId.eq(&device_id))
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?;
@@ -378,6 +391,8 @@ pub(crate) async fn register_device(
     })
 }
 
+/// PURPOSE: Implement `add_gen3_controller_mapping` domain/persistence logic.
+/// USE: Called as `add_gen3_controller_mapping` from handlers, repository impls, or sibling helpers.
 async fn add_gen3_controller_mapping(
     orm: &DatabaseConnection,
     device_id: &str,

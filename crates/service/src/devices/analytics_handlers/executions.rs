@@ -1,5 +1,11 @@
+//! Execution analytics handlers (recent, daily, by id).
+//!
+//! Ports Node `/analytics/execution*` routes from `analyticsRoutes.ts`.
+
 use super::*;
 
+/// PURPOSE: List recent user test executions
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/execution", tag = "Devices", summary = "List recent user test executions", description = "Returns the current user's most recent execution activity, bounded by the requested count.", params(RecentExecutionQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Recent test execution activity"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn recent_executions(
     State(state): State<Arc<AppState>>,
@@ -17,10 +23,13 @@ pub(crate) async fn recent_executions(
         .await
     {
         Ok(executions) => (context.response_headers, Json(executions)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to fetch recent test executions"),
     }
 }
 
+/// PURPOSE: Summarize user executions by day
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/execution/daily", tag = "Devices", summary = "Summarize user executions by day", description = "Aggregates the current user's execution statuses over an inclusive UTC date range; defaults to the trailing seven days.", params(ExecutionDailyQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Daily execution status summary"), (status = 400, description = "Invalid date", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn daily_executions(
     State(state): State<Arc<AppState>>,
@@ -53,10 +62,13 @@ pub(crate) async fn daily_executions(
         .await
     {
         Ok(summary) => (context.response_headers, Json(summary)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to fetch execution status daily summary"),
     }
 }
 
+/// PURPOSE: Get execution activity by test id
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/execution/{testId}", tag = "Devices", summary = "Get execution activity by test id", description = "Returns the historical execution activity projection for one test ID; legacy behavior is not owner-scoped.", params(("testId" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Test execution activity"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Test execution not found"), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn execution_by_id(
     State(state): State<Arc<AppState>>,
@@ -75,6 +87,7 @@ pub(crate) async fn execution_by_id(
             Json(serde_json::json!({"message": "Test execution not found"})),
         )
             .into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to fetch test execution by id"),
     }
 }

@@ -1,4 +1,12 @@
+//! Controller/device registration and EdgeController mapping tests.
+//!
+//! Covers public registration wire contracts, identity normalization, and pending-user
+//! frontend events from legacy `deviceRoutes` / controller onboarding paths.
+
 use super::*;
+
+/// PURPOSE: Assert edgecontroller state map becomes channel inventory.
+/// USE: regression guard for legacy/API wire contracts covered by `controllers`.
 #[test]
 fn edgecontroller_state_map_becomes_channel_inventory() {
     let relay = RelayRegistration {
@@ -12,6 +20,8 @@ fn edgecontroller_state_map_becomes_channel_inventory() {
     assert_eq!(channels[1].channel_number, 8);
 }
 
+/// PURPOSE: Assert controller identity normalizes common mac formats.
+/// USE: regression guard for legacy/API wire contracts covered by `controllers`.
 #[test]
 fn controller_identity_normalizes_common_mac_formats() {
     assert_eq!(
@@ -24,6 +34,8 @@ fn controller_identity_normalizes_common_mac_formats() {
     );
 }
 
+/// PURPOSE: Assert edgecontroller registration is create then idempotent update.
+/// USE: regression guard for legacy/API wire contracts covered by `controllers`.
 #[tokio::test]
 async fn edgecontroller_registration_is_create_then_idempotent_update() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -84,6 +96,8 @@ async fn edgecontroller_registration_is_create_then_idempotent_update() {
     }
 }
 
+/// PURPOSE: Assert controller list accepts optional trailing slash.
+/// USE: regression guard for legacy/API wire contracts covered by `controllers`.
 #[tokio::test]
 async fn controller_list_accepts_optional_trailing_slash() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -116,6 +130,8 @@ async fn controller_list_accepts_optional_trailing_slash() {
     }
 }
 
+/// PURPOSE: Assert registration request publishes pending user frontend event.
+/// USE: regression guard for legacy/API wire contracts covered by `controllers`.
 #[tokio::test]
 async fn registration_request_publishes_pending_user_frontend_event() {
     let mut config = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
@@ -157,6 +173,8 @@ async fn registration_request_publishes_pending_user_frontend_event() {
     assert!(event.payload["timestamp"].is_string());
 }
 
+/// PURPOSE: Assert device registration is public and preserves wire contract.
+/// USE: regression guard for legacy/API wire contracts covered by `controllers`.
 #[tokio::test]
 async fn device_registration_is_public_and_preserves_wire_contract() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -202,6 +220,8 @@ async fn device_registration_is_public_and_preserves_wire_contract() {
     }
 }
 
+/// PURPOSE: Assert device registration maps invalid and missing fields to bad request.
+/// USE: regression guard for legacy/API wire contracts covered by `controllers`.
 #[tokio::test]
 async fn device_registration_maps_invalid_and_missing_fields_to_bad_request() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

@@ -7,6 +7,7 @@ use regex::Regex;
 
 use super::TestCaseRecord;
 
+/// Append log.
 pub(crate) async fn append_log(
     root: &Path,
     level: &str,
@@ -23,6 +24,7 @@ pub(crate) async fn append_log(
         .await
 }
 
+/// Write suite artifacts.
 pub(crate) async fn write_suite_artifacts(
     root: &Path,
     cases: &[TestCaseRecord],
@@ -111,6 +113,7 @@ pub(crate) async fn write_suite_artifacts(
     Ok(())
 }
 
+/// Write sanity analysis.
 pub(crate) async fn write_sanity_analysis(root: &Path) -> Result<(), std::io::Error> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "write_sanity_analysis");
     let results = root.join("sanity_commands_results");
@@ -202,6 +205,7 @@ pub(crate) async fn write_sanity_analysis(root: &Path) -> Result<(), std::io::Er
     Ok(())
 }
 
+/// File name.
 pub(crate) fn file_name(path: Option<&str>, test_case_id: i64) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "file_name");
     path.and_then(|value| Path::new(value).file_name())
@@ -209,6 +213,7 @@ pub(crate) fn file_name(path: Option<&str>, test_case_id: i64) -> String {
         .map_or_else(|| format!("test_{test_case_id}_result.txt"), str::to_owned)
 }
 
+/// Jira cell.
 pub(crate) fn jira_cell(value: Option<&str>) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "jira_cell");
     let value = value.unwrap_or("").trim();
@@ -220,6 +225,7 @@ pub(crate) fn jira_cell(value: Option<&str>) -> String {
     }
 }
 
+/// Escape html.
 pub(crate) fn escape_html(value: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "escape_html");
     value
@@ -230,6 +236,7 @@ pub(crate) fn escape_html(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Report artifact href.
 pub(crate) fn report_artifact_href(report_url: Option<&str>, relative_path: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "report_artifact_href");
     report_url.map_or_else(
@@ -238,6 +245,7 @@ pub(crate) fn report_artifact_href(report_url: Option<&str>, relative_path: &str
     )
 }
 
+/// Parse first number.
 pub(crate) fn parse_first_number(value: &str) -> Option<f64> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "parse_first_number");
     Regex::new(r"([0-9]+(?:\.[0-9]+)?)")

@@ -12,6 +12,7 @@ use super::{
     },
 };
 
+/// Write combined report.
 pub(crate) async fn write_combined_report(
     root: &Path,
     request: &ReportRequest,
@@ -200,6 +201,7 @@ pub(crate) async fn write_combined_report(
     tokio::fs::write(root.join("report.html"), html).await
 }
 
+/// Parse boottime total.
 fn parse_boottime_total(content: &str) -> Option<f64> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::combined_report", "parse_boottime_total");
     let document = Html::parse_document(content);

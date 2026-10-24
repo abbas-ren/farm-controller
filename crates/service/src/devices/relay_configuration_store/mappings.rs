@@ -1,7 +1,13 @@
+//! GPIO mapping JSON helpers for controller `mappings` columns.
+//!
+//! Shared by apply/confirm when updating Gen5-style GPIO maps.
+
 use serde_json::{Map, Value};
 
 use super::super::VoltageLevel;
 
+/// PURPOSE: Normalize `normalized mapping key` (MAC/keys) for stable lookups.
+/// USE: Registration, mapping, and heartbeat correlation paths.
 fn normalized_mapping_key(value: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "normalized_mapping_key");
     value
@@ -11,6 +17,8 @@ fn normalized_mapping_key(value: &str) -> String {
         .collect()
 }
 
+/// PURPOSE: Implement `matching_mapping_key` domain/persistence logic.
+/// USE: Called as `matching_mapping_key` from handlers, repository impls, or sibling helpers.
 fn matching_mapping_key(mappings: &Map<String, Value>, mac: &str) -> Option<String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "matching_mapping_key");
     let normalized_mac = normalized_mapping_key(mac);
@@ -20,6 +28,8 @@ fn matching_mapping_key(mappings: &Map<String, Value>, mac: &str) -> Option<Stri
         .cloned()
 }
 
+/// PURPOSE: Implement `clear_gpio_mapping` domain/persistence logic.
+/// USE: Called as `clear_gpio_mapping` from handlers, repository impls, or sibling helpers.
 pub(super) fn clear_gpio_mapping(mappings: &mut Value, mac: &str) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "clear_gpio_mapping");
     let Some(mappings) = mappings.as_object_mut() else {
@@ -41,6 +51,8 @@ pub(super) fn clear_gpio_mapping(mappings: &mut Value, mac: &str) {
     }
 }
 
+/// PURPOSE: Implement `upsert_gpio_mapping` domain/persistence logic.
+/// USE: Called as `upsert_gpio_mapping` from handlers, repository impls, or sibling helpers.
 pub(super) fn upsert_gpio_mapping(
     mappings: &mut Value,
     mac: &str,
@@ -90,6 +102,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// PURPOSE: Implement `gpio_updates_preserve_uart_and_power_mapping` domain/persistence logic.
+    /// USE: Called as `gpio_updates_preserve_uart_and_power_mapping` from handlers, repository impls, or sibling helpers.
     fn gpio_updates_preserve_uart_and_power_mapping() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "gpio_updates_preserve_uart_and_power_mapping");
         let mut mappings = json!({"AA-BB": {

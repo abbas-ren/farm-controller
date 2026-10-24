@@ -1,3 +1,8 @@
+//! Fallback flash queue worker for Gen5 recovery flashes.
+//!
+//! Claims `fallback_update` rows stuck in queued/flashing states under
+//! SKIP LOCKED and dispatches TFTP flash payloads to the device controller.
+
 use std::{sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
@@ -26,6 +31,7 @@ struct FallbackFlash {
     version: String,
 }
 
+/// Poll loop claiming and dispatching fallback flash jobs.
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
         state.config.workers.device_action_poll_seconds,
@@ -40,6 +46,7 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "fallback_flash", "worker stopped");
 }
 
+/// Claim one fallback update and dispatch; record success/failure metrics.
 async fn run_cycle(state: &AppState) {
     let fallback = match claim_next(state).await {
         Ok(Some(fallback)) => fallback,
@@ -65,6 +72,7 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
+/// SKIP LOCKED claim of the next queued/eligible `fallback_update` row.
 async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
     let transaction = database.orm().begin().await?;
@@ -88,6 +96,7 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::
         ))
         .order_by_asc(fallback_update::Column::CreatedAt)
         .limit(1)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .one(&transaction)
         .await?;
@@ -140,6 +149,7 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::
     Ok(Some(fallback))
 }
 
+/// POST the TFTP flash payload to the device controller for this fallback.
 async fn dispatch(state: &AppState, fallback: &FallbackFlash) -> Result<(), String> {
     let tftp_path = format!("{}/{}", fallback.device_type, fallback.version);
     let payload = flash_payload(fallback, &state.config.device.server_ip, &tftp_path);
@@ -164,6 +174,7 @@ async fn dispatch(state: &AppState, fallback: &FallbackFlash) -> Result<(), Stri
     Err(last_error)
 }
 
+/// Build the JSON flash body expected by the edge controller.
 fn flash_payload(fallback: &FallbackFlash, server_ip: &str, tftp_path: &str) -> serde_json::Value {
     serde_json::json!({
         "nfs": fallback.fallback_path,
@@ -175,6 +186,7 @@ fn flash_payload(fallback: &FallbackFlash, server_ip: &str, tftp_path: &str) -> 
     })
 }
 
+/// Mark the fallback row failed and clear related device flashing flags.
 async fn fail(
     state: &AppState,
     fallback: &FallbackFlash,
@@ -224,6 +236,7 @@ mod tests {
     use super::{FallbackFlash, flash_payload};
 
     #[test]
+    /// Unit test: fallback flash JSON matches direct-flash contract.
     fn payload_matches_direct_flash_contract() {
         let fallback = FallbackFlash {
             id: 1,

@@ -1,3 +1,7 @@
+//! Record controller heartbeats and emit reachability alerts.
+//!
+//! Ports Node `ControllerHeartbeatQueueService` persistence.
+
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
@@ -17,6 +21,8 @@ use super::super::{
     ControllerHeartbeat, error::DeviceRepositoryError, validation::normalized_controller_id,
 };
 
+/// PURPOSE: Persist controller heartbeat and emit reachability alerts on change.
+/// USE: Controller heartbeat worker (Node ControllerHeartbeatQueueService).
 pub(crate) async fn record_controller(
     orm: &DatabaseConnection,
     heartbeat: &ControllerHeartbeat,
@@ -33,6 +39,7 @@ pub(crate) async fn record_controller(
     let controller = device_controller::Entity::find()
         .filter(device_controller::Column::DeviceControllerId.eq(&controller_id))
         .filter(device_controller::Column::DeletedAt.is_null())
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?;
@@ -79,6 +86,7 @@ pub(crate) async fn record_controller(
         .order_by_desc(device_controller_metrics::Column::UpdatedAt)
         .order_by_desc(device_controller_metrics::Column::Id)
         .limit(1)
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?;
@@ -166,6 +174,8 @@ pub(crate) async fn record_controller(
     })
 }
 
+/// PURPOSE: Serialize `controller alert json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn controller_alert_json(model: &alert::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,

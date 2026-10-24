@@ -1,9 +1,18 @@
+//! Command-line interface for the FarmController process.
+//!
+//! Complements TOML/env configuration with operator overrides for modules,
+//! bind address, and logging. Parsed once in `farmcontroller-app` and passed
+//! into [`crate::config::AppConfig::load`].
+
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
 
 use crate::config::{LogStream, ModuleSelection};
 
+/// CLI arguments for `farmcontroller`.
+///
+/// Every flag also has a matching `FARMCONTROLLER_*` env var for container use.
 #[derive(Debug, Parser)]
 #[command(name = "farmcontroller", version, about)]
 pub struct Cli {

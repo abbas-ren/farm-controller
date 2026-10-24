@@ -1,3 +1,8 @@
+//! IPL payload staging and SSH/SFTP distribution to device controllers.
+//!
+//! Prepares family-specific IPL trees, syncs them to controllers, and removes
+//! obsolete remote builds when releases are deleted.
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -28,6 +33,7 @@ struct SshClient {
 impl client::Handler for SshClient {
     type Error = russh::Error;
 
+    /// SSH host-key callback for controller connections.
     async fn check_server_key(
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
@@ -62,6 +68,7 @@ enum IplFamily {
 }
 
 impl IplFamily {
+    /// Parse an IPL family token from a device-family string.
     fn parse(value: &str) -> Option<Self> {
         match value
             .chars()
@@ -76,6 +83,7 @@ impl IplFamily {
         }
     }
 
+    /// Canonical DB/token form for this IPL family.
     fn database_token(self) -> &'static str {
         match self {
             Self::Gen4 => "gen4",
@@ -83,6 +91,7 @@ impl IplFamily {
         }
     }
 
+    /// Filesystem path segment used for this family's IPL tree.
     fn storage_segment(self) -> &'static str {
         match self {
             Self::Gen4 => "Gen4",
@@ -98,6 +107,7 @@ struct TransferTarget<'a> {
     remote_path: &'a str,
 }
 
+/// Stage IPL payloads for a device family/version and upload to controllers.
 pub(super) async fn prepare_and_distribute(
     state: &AppState,
     artifact_paths: &[PathBuf; 3],
@@ -160,6 +170,7 @@ pub(super) async fn prepare_and_distribute(
     }
 }
 
+/// Resolve SSH target + remote root for a given IPL family.
 fn transfer_target(family: IplFamily, config: &DeviceConfig) -> Option<TransferTarget<'_>> {
     let target = match family {
         IplFamily::Gen4 => TransferTarget {
@@ -178,6 +189,7 @@ fn transfer_target(family: IplFamily, config: &DeviceConfig) -> Option<TransferT
     (!target.username.is_empty()).then_some(target)
 }
 
+/// Copy prepared IPL files into the local staging directory for upload.
 fn stage_payload(
     artifact_paths: &[PathBuf; 3],
     device_family: &str,
@@ -228,6 +240,7 @@ fn stage_payload(
     result.map(|()| destination)
 }
 
+/// Recursively copy a directory tree.
 fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -249,6 +262,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy one file, creating parents as needed.
 fn copy_file(source: &Path, destination: &Path) -> Result<(), String> {
     fs::copy(source, destination).map_err(|error| error.to_string())?;
     let permissions = fs::metadata(source)
@@ -257,6 +271,7 @@ fn copy_file(source: &Path, destination: &Path) -> Result<(), String> {
     fs::set_permissions(destination, permissions).map_err(|error| error.to_string())
 }
 
+/// SFTP the staged payload to one controller.
 async fn upload_to_controller(
     host: &str,
     target: &TransferTarget<'_>,
@@ -296,6 +311,7 @@ async fn upload_to_controller(
     sftp.close().await.map_err(|error| error.to_string())
 }
 
+/// Open an SSH+SFTP session with the configured credentials.
 async fn open_sftp(
     host: &str,
     target: &TransferTarget<'_>,
@@ -335,6 +351,7 @@ async fn open_sftp(
         .map_err(|error| error.to_string())
 }
 
+/// Re-sync all local IPL versions to one controller (registration hook).
 pub(crate) async fn sync_controller(
     state: &AppState,
     host: &str,
@@ -373,6 +390,7 @@ pub(crate) async fn sync_controller(
     }
 }
 
+/// Delete a version tree remotely (and optionally locally) across controllers.
 pub(crate) async fn remove_build(
     state: &AppState,
     device_family: &str,
@@ -424,6 +442,7 @@ pub(crate) async fn remove_build(
     }
 }
 
+/// List controllers that should receive IPL sync for a family.
 async fn active_controllers(
     orm: &sea_orm::DatabaseConnection,
     family: IplFamily,
@@ -450,6 +469,7 @@ async fn active_controllers(
         .map_err(|error| error.to_string())
 }
 
+/// Recursively remove a remote SFTP directory.
 async fn remove_remote_tree(sftp: &SftpSession, path: &str) -> Result<(), String> {
     validate_remote_path(path)?;
     if !sftp
@@ -486,6 +506,7 @@ async fn remove_remote_tree(sftp: &SftpSession, path: &str) -> Result<(), String
     Ok(())
 }
 
+/// Enumerate local version directories under an IPL root.
 fn version_directories(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     if !root.is_dir() {
         return Ok(Vec::new());
@@ -507,6 +528,7 @@ fn version_directories(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(versions)
 }
 
+/// mkdir -p equivalent over SFTP.
 async fn ensure_remote_directory(sftp: &SftpSession, path: &str) -> Result<(), String> {
     validate_remote_path(path)?;
     let mut current = String::new();
@@ -526,6 +548,7 @@ async fn ensure_remote_directory(sftp: &SftpSession, path: &str) -> Result<(), S
     Ok(())
 }
 
+/// Reject empty or traversal-prone remote paths.
 fn validate_remote_path(path: &str) -> Result<(), String> {
     if !path.starts_with('/') {
         return Err(format!("remote IPL path must be absolute: {path}"));
@@ -540,7 +563,9 @@ fn validate_remote_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Walk a staged payload into (relative, absolute, is_dir) entries.
 fn payload_entries(root: &Path) -> Result<Vec<(PathBuf, PathBuf, bool)>, String> {
+    /// Directory walk visitor collecting payload file entries.
     fn visit(
         root: &Path,
         directory: &Path,
@@ -583,6 +608,7 @@ fn payload_entries(root: &Path) -> Result<Vec<(PathBuf, PathBuf, bool)>, String>
 mod tests {
     use super::*;
 
+    /// Test helper returning the three standard IPL artifact paths.
     fn artifacts(root: &Path) -> [PathBuf; 3] {
         [
             root.join("Image"),
@@ -592,6 +618,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: Gen4 staging layout by family/version.
     fn stages_gen4_payload_by_family_and_version() {
         let directory = tempfile::tempdir().unwrap();
         let release = directory.path().join("release");
@@ -614,6 +641,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: Gen5 script + nested payload staging.
     fn stages_gen5_script_and_nested_payload() {
         let directory = tempfile::tempdir().unwrap();
         let release = directory.path().join("release");
@@ -639,6 +667,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: family normalize + remote path validation.
     fn normalizes_families_and_rejects_unsafe_remote_paths() {
         assert!(IplFamily::parse("Gen 4") == Some(IplFamily::Gen4));
         assert!(IplFamily::parse("other").is_none());
@@ -648,6 +677,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: incomplete version dirs are skipped.
     fn enumerates_only_complete_version_directories() {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir(directory.path().join("v2")).unwrap();

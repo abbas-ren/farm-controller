@@ -1,3 +1,7 @@
+//! `ControllerRepository` impl: device actions, controller list/edit/delete.
+//!
+//! Ports Node `DeviceService` controller and device-action persistence.
+
 use super::*;
 use super::json_models::{
     controller_json, device_json, mappings_without_normalized_key, normalize_mapping_lookup_key,
@@ -14,6 +18,8 @@ use sea_orm::{
     sea_query::{Expr, LockType, extension::postgres::PgExpr},
 };
 
+/// PURPOSE: Build SeaORM filter/order clauses for `controller list filters`.
+/// USE: Shared by count and page queries.
 fn controller_list_filters(
     mut select: sea_orm::Select<device_controller::Entity>,
     status: &str,
@@ -52,6 +58,8 @@ fn controller_list_filters(
 
 #[async_trait]
 impl ControllerRepository for PostgresDeviceRepository {
+    /// PURPOSE: Resolve edge/controller targets for `device action target`.
+    /// USE: Handlers/workers before outbound edge HTTP.
     async fn device_action_target(
         &self,
         device_id: &str,
@@ -78,6 +86,8 @@ impl ControllerRepository for PostgresDeviceRepository {
             }))
     }
 
+    /// PURPOSE: Mutate persisted state for `apply device action`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn apply_device_action(
         &self,
         device_id: &str,
@@ -92,6 +102,7 @@ impl ControllerRepository for PostgresDeviceRepository {
         let device = device::Entity::find()
             .filter(device::Column::DeviceId.eq(device_id))
             .filter(device::Column::DeletedAt.is_null())
+            // Row lock: serialize concurrent updates on this controller/device/relay.
             .lock(LockType::Update)
             .one(&transaction)
             .await?;
@@ -175,6 +186,8 @@ impl ControllerRepository for PostgresDeviceRepository {
         Ok(Some(device_value))
     }
 
+    /// PURPOSE: List/filter `list controllers` rows for the API.
+    /// USE: HTTP list handlers and repository trait methods.
     async fn list_controllers(
         &self,
         query: &ControllerListQuery,
@@ -342,6 +355,8 @@ impl ControllerRepository for PostgresDeviceRepository {
         })
     }
 
+    /// PURPOSE: Implement `edit_controller` domain/persistence logic.
+    /// USE: Called as `edit_controller` from handlers, repository impls, or sibling helpers.
     async fn edit_controller(
         &self,
         controller_id: &str,
@@ -354,6 +369,8 @@ impl ControllerRepository for PostgresDeviceRepository {
         controller_store::edit(self.orm(), controller_id, request).await
     }
 
+    /// PURPOSE: Resolve edge/controller targets for `controller delete target`.
+    /// USE: Handlers/workers before outbound edge HTTP.
     async fn controller_delete_target(
         &self,
         controller_id: &str,
@@ -365,6 +382,8 @@ impl ControllerRepository for PostgresDeviceRepository {
         controller_store::delete_target(self.orm(), controller_id).await
     }
 
+    /// PURPOSE: Delete `delete controller` from persistence.
+    /// USE: Delete handlers after edge cleanup when required.
     async fn delete_controller(&self, controller_id: &str) -> Result<bool, DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::postgres::controllers",
@@ -373,6 +392,8 @@ impl ControllerRepository for PostgresDeviceRepository {
         controller_store::delete(self.orm(), controller_id).await
     }
 
+    /// PURPOSE: Resolve edge/controller targets for `device delete target`.
+    /// USE: Handlers/workers before outbound edge HTTP.
     async fn device_delete_target(
         &self,
         device_id: &str,
@@ -447,6 +468,8 @@ impl ControllerRepository for PostgresDeviceRepository {
         }))
     }
 
+    /// PURPOSE: Delete `delete device` from persistence.
+    /// USE: Delete handlers after edge cleanup when required.
     async fn delete_device(&self, device_id: &str) -> Result<bool, DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::postgres::controllers",

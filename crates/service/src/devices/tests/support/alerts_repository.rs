@@ -1,7 +1,13 @@
+//! In-memory `AlertRepository` fake for device route tests.
+//!
+//! Stands in for production alert list/read persistence used by notification handlers.
+
 use super::*;
 
 #[async_trait]
 impl AlertRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `AlertRepository::admin_alerts`.
+    /// USE: device route tests exercising alerts persistence without a live database.
     async fn admin_alerts(
         &self,
         page: i64,
@@ -24,6 +30,8 @@ impl AlertRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `AlertRepository::all_alerts`.
+    /// USE: device route tests exercising alerts persistence without a live database.
     async fn all_alerts(
         &self,
         page: i64,
@@ -40,10 +48,14 @@ impl AlertRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `AlertRepository::mark_alert_read`.
+    /// USE: device route tests exercising alerts persistence without a live database.
     async fn mark_alert_read(&self, alert_id: &str) -> Result<bool, DeviceRepositoryError> {
         Ok(alert_id != "missing")
     }
 
+    /// PURPOSE: In-memory stand-in for `AlertRepository::mark_all_alerts_read`.
+    /// USE: device route tests exercising alerts persistence without a live database.
     async fn mark_all_alerts_read(&self) -> Result<(), DeviceRepositoryError> {
         Ok(())
     }

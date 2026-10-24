@@ -1,3 +1,7 @@
+//! Create test executions and linked test-case rows.
+//!
+//! Ports Node `TestService.createTestExecution`.
+
 use super::*;
 
 use crate::{
@@ -14,6 +18,8 @@ use sea_orm::{
 use uuid::Uuid;
 
 impl PostgresDeviceRepository {
+    /// PURPOSE: Create/persist `create test execution inner`.
+    /// USE: Create handlers after validation.
     pub(super) async fn create_test_execution_inner(
         &self,
         execution: &ExecutionCreation,
@@ -136,6 +142,8 @@ impl PostgresDeviceRepository {
         Ok(created)
     }
 
+    /// PURPOSE: Implement `test_execution_build_version_inner` domain/persistence logic.
+    /// USE: Called as `test_execution_build_version_inner` from handlers, repository impls, or sibling helpers.
     pub(super) async fn test_execution_build_version_inner(
         &self,
         test_id: &str,
@@ -154,6 +162,8 @@ impl PostgresDeviceRepository {
             .flatten())
     }
 
+    /// PURPOSE: Implement `executions_by_build_inner` domain/persistence logic.
+    /// USE: Called as `executions_by_build_inner` from handlers, repository impls, or sibling helpers.
     pub(super) async fn executions_by_build_inner(
         &self,
         build_id: &str,
@@ -195,6 +205,8 @@ impl PostgresDeviceRepository {
         }))
     }
 
+    /// PURPOSE: Implement `test_results_inner` domain/persistence logic.
+    /// USE: Called as `test_results_inner` from handlers, repository impls, or sibling helpers.
     pub(super) async fn test_results_inner(
         &self,
         test_id: &str,

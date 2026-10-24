@@ -1,5 +1,11 @@
+//! Device usage (state duration) analytics handlers.
+//!
+//! Ports Node `/analytics/usage/daily` and `/usage/summary` from `analyticsRoutes.ts`.
+
 use super::*;
 
+/// PURPOSE: Summarize device state durations
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/usage/daily", tag = "Devices", summary = "Summarize device state durations", description = "Calculates approved-device state durations for one UTC day or the trailing 24 hours, with optional device and family filters.", params(DeviceUsageQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Device state duration analytics"), (status = 400, description = "Invalid day", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn daily_device_usage(
     State(state): State<Arc<AppState>>,
@@ -32,10 +38,13 @@ pub(crate) async fn daily_device_usage(
         .await
     {
         Ok(usage) => (context.response_headers, Json(usage)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to fetch device usage analytics"),
     }
 }
 
+/// PURPOSE: Summarize device usage by week and month
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/usage/summary", tag = "Devices", summary = "Summarize device usage by week and month", description = "Returns four UTC weekly periods and four UTC monthly periods of approved-device usage.", security(("bearer_auth" = [])), responses((status = 200, description = "Weekly and monthly device usage analytics"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn device_usage_summary(
     State(state): State<Arc<AppState>>,
@@ -67,6 +76,7 @@ pub(crate) async fn device_usage_summary(
             .await
         {
             Ok(usage) => usage,
+            // Map: translate repository failure into the legacy HTTP error envelope.
             Err(error) => return repository_error(error, "Failed to fetch device usage summary"),
         };
         weekly.push(with_period(
@@ -91,6 +101,7 @@ pub(crate) async fn device_usage_summary(
             .await
         {
             Ok(usage) => usage,
+            // Map: translate repository failure into the legacy HTTP error envelope.
             Err(error) => return repository_error(error, "Failed to fetch device usage summary"),
         };
         monthly.push(with_period(
@@ -108,11 +119,15 @@ pub(crate) async fn device_usage_summary(
         .into_response()
 }
 
+/// PURPOSE: Helper `day_bounds` supporting device HTTP handlers (day bounds).
+/// USE: HTTP handler invoked via `devices::routes`.
 fn day_bounds(day: NaiveDate) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::usage", "day_bounds");
     day_range(day, day)
 }
 
+/// PURPOSE: Helper `day_range` supporting device HTTP handlers (day range).
+/// USE: HTTP handler invoked via `devices::routes`.
 fn day_range(start: NaiveDate, end: NaiveDate) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::usage", "day_range");
     let start = start.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc();
@@ -125,6 +140,8 @@ fn day_range(start: NaiveDate, end: NaiveDate) -> (chrono::DateTime<Utc>, chrono
     (start, end)
 }
 
+/// PURPOSE: Helper `with_period` supporting device HTTP handlers (with period).
+/// USE: HTTP handler invoked via `devices::routes`.
 fn with_period(
     mut usage: serde_json::Value,
     start_key: &str,

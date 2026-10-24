@@ -1,3 +1,8 @@
+//! Router composition and health/ready contract tests.
+//!
+//! Guards CORS/security headers, operational route mounting, module gating, and
+//! gateway/TUS preflight composition on the shared Axum router.
+
 use axum::{body::Body, http::Request};
 use clap::Parser;
 use http_body_util::BodyExt;
@@ -6,6 +11,8 @@ use tower::ServiceExt;
 use super::*;
 use crate::{cli::Cli, config::AppConfig, observability::Metrics};
 
+/// PURPOSE: Build a minimal AppState from CLI args for router tests.
+/// USE: test setup only; not used on production request paths.
 fn test_state(arguments: &[&str]) -> Arc<AppState> {
     let cli = Cli::try_parse_from(arguments).unwrap();
     Arc::new(AppState::without_dependencies(
@@ -14,6 +21,8 @@ fn test_state(arguments: &[&str]) -> Arc<AppState> {
     ))
 }
 
+/// PURPOSE: Configured CORS and security headers are enforced on responses.
+/// USE: regression for CORS allow-list and security header middleware.
 #[tokio::test]
 async fn configured_cors_and_security_headers_are_enforced() {
     let mut state = match Arc::try_unwrap(test_state(&["farmcontroller", "--enable", "events"])) {
@@ -75,6 +84,8 @@ async fn configured_cors_and_security_headers_are_enforced() {
     );
 }
 
+/// PURPOSE: Operational routes share one composed router.
+/// USE: guards health/ready/metrics mounting when modules are enabled.
 #[tokio::test]
 async fn operational_routes_share_one_router() {
     let app = router(test_state(&["farmcontroller"]));
@@ -344,6 +355,8 @@ async fn operational_routes_share_one_router() {
     assert_eq!(response.headers()["location"], "/swagger-ui/");
 }
 
+/// PURPOSE: Disabled module routes are not exposed.
+/// USE: ensures module gating removes endpoints from the router.
 #[tokio::test]
 async fn disabled_route_is_not_exposed() {
     let app = router(test_state(&["farmcontroller", "--disable", "metrics"]));
@@ -356,6 +369,8 @@ async fn disabled_route_is_not_exposed() {
     assert!(String::from_utf8_lossy(&body).contains("not_found"));
 }
 
+/// PURPOSE: Gateway prefixes and TUS preflight mount directly.
+/// USE: regression for gateway/TUS route composition.
 #[tokio::test]
 async fn gateway_prefixes_and_tus_preflight_mount_directly() {
     let mut state = match Arc::try_unwrap(test_state(&["farmcontroller"])) {

@@ -6,6 +6,7 @@ use plotters::prelude::*;
 
 use super::CategoryMetrics;
 
+/// Render radar.
 pub(super) fn render_radar(
     output: &Path,
     categories: &[CategoryMetrics],
@@ -102,6 +103,7 @@ pub(super) fn render_radar(
     root.present().map_err(plot_error)
 }
 
+/// Render bars.
 pub(super) fn render_bars(
     output: &Path,
     category: &CategoryMetrics,
@@ -169,6 +171,7 @@ pub(super) fn render_bars(
     root.present().map_err(plot_error)
 }
 
+/// Plot error.
 fn plot_error(error: impl std::fmt::Display) -> io::Error {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::rendering", "plot_error");
     io::Error::other(error.to_string())

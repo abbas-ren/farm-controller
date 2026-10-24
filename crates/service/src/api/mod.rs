@@ -1,3 +1,8 @@
+//! Root HTTP router: health, metrics, OpenAPI, and module mounts.
+//!
+//! Wires auth, devices, reports, admin, sockets, and observability middleware
+//! behind feature-module gates from `AppConfig`.
+
 #[cfg(test)]
 pub mod tests;
 
@@ -314,6 +319,7 @@ struct ApiDoc;
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
+    /// Modify.
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         let _api_trace = crate::observability::ApiTrace::enter("api::mod", "modify");
         use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -349,6 +355,7 @@ struct ReadinessResponse {
     modules: Vec<String>,
 }
 
+/// Build the full service Router for the given AppState (module-gated mounts).
 pub fn router(state: Arc<AppState>) -> Router {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "router");
     let request_id_header = HeaderName::from_static("x-request-id");
@@ -426,6 +433,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+/// Cors layer.
 fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "cors_layer");
     if allowed_origins.is_empty() {
@@ -441,6 +449,7 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
         .allow_headers(Any)
 }
 
+/// Security headers.
 async fn security_headers(request: Request<Body>, next: Next) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "security_headers");
     let mut response = next.run(request).await;
@@ -457,6 +466,7 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response {
     response
 }
 
+/// Tus options headers.
 async fn tus_options_headers(request: Request<Body>, next: Next) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "tus_options_headers");
     let is_tus_options = request.method() == axum::http::Method::OPTIONS
@@ -489,6 +499,7 @@ async fn tus_options_headers(request: Request<Body>, next: Next) -> Response {
     description = "Returns success when the FarmController process and HTTP event loop are alive.",
     responses((status = 200, description = "Process is alive", body = HealthResponse, example = json!({"status": "ok"})))
 )]
+/// Liveness probe — process is up.
 async fn health() -> Json<HealthResponse> {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "health");
     Json(HealthResponse { status: "ok" })
@@ -502,6 +513,7 @@ async fn health() -> Json<HealthResponse> {
     description = "Returns success after every dependency required by the enabled runtime modules is ready.",
     responses((status = 200, description = "Enabled modules are ready", body = ReadinessResponse), (status = 503, description = "A required dependency is not ready", body = ReadinessResponse))
 )]
+/// Readiness probe — required dependencies are available.
 async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "ready");
     let modules = state
@@ -542,6 +554,7 @@ async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         (status = 500, description = "Metric encoding failed", body = ErrorResponse)
     )
 )]
+/// Prometheus exposition endpoint.
 async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "metrics");
     let database_pool =
@@ -581,6 +594,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
+/// Not found.
 async fn not_found(request: Request<Body>) -> impl IntoResponse {
     let _api_trace = crate::observability::ApiTrace::enter("api::mod", "not_found");
     (

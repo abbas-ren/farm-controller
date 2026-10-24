@@ -1,3 +1,8 @@
+//! Spawns and shuts down the farm-controller background worker set.
+//!
+//! Module gates (`Events`, `Workers`, `Device`) and database presence decide
+//! which loops start. Reports owns its own optional worker via `ReportsService`.
+
 use std::sync::Arc;
 
 use farmcontroller_core::config::Module;
@@ -13,8 +18,12 @@ use crate::{
 };
 
 impl WorkerManager {
+    /// Start all enabled workers as Tokio tasks under a shared cancellation tree.
+    ///
+    /// Does not block; call [`Self::shutdown`] on process stop to cancel and join.
     pub fn start(state: Arc<AppState>, cancellation: CancellationToken) -> Self {
         let mut handles = Vec::new();
+        // Host CPU/mem/disk/net → `system_metrics_update` WS events (Events module).
         if state.config.module_enabled(Module::Events) {
             let event_publisher = state.event_publisher.clone();
             let worker_cancellation = cancellation.child_token();
@@ -22,6 +31,7 @@ impl WorkerManager {
                 system_metrics::worker(event_publisher, worker_cancellation).await;
             }));
         }
+        // Table retention policies (Workers module + DB).
         if state.config.module_enabled(Module::Workers) && state.database.is_some() {
             let worker_state = state.clone();
             let worker_cancellation = cancellation.child_token();
@@ -32,6 +42,7 @@ impl WorkerManager {
         if state.config.module_enabled(Module::Workers)
             && state.config.module_enabled(Module::Device)
         {
+            // Relay sync mpsc consumer (HTTP enqueues; this drains).
             handles.push(
                 state
                     .relay_sync
@@ -41,6 +52,7 @@ impl WorkerManager {
                 let worker_state = state.clone();
                 let worker_cancellation = cancellation.child_token();
                 handles.push(tokio::spawn(async move {
+                    // Legacy RelayConfigTimeoutService.
                     relay_service::relay_configuration_timeout_worker(
                         worker_state,
                         worker_cancellation,
@@ -59,6 +71,7 @@ impl WorkerManager {
                 let worker_state = state.clone();
                 let worker_cancellation = cancellation.child_token();
                 handles.push(tokio::spawn(async move {
+                    // Legacy HeartbeatQueueService timeout path.
                     device_heartbeat::worker(worker_state, worker_cancellation).await;
                 }));
                 let worker_state = state.clone();
@@ -74,11 +87,13 @@ impl WorkerManager {
                 let worker_state = state.clone();
                 let worker_cancellation = cancellation.child_token();
                 handles.push(tokio::spawn(async move {
+                    // Legacy ArtifactsScanner.
                     artifact_scanner::worker(worker_state, worker_cancellation).await;
                 }));
                 let worker_state = state.clone();
                 let worker_cancellation = cancellation.child_token();
                 handles.push(tokio::spawn(async move {
+                    // Legacy DeviceActionQueueService.
                     device_action::worker(worker_state, worker_cancellation).await;
                 }));
                 let worker_state = state.clone();
@@ -89,11 +104,13 @@ impl WorkerManager {
                 let worker_state = state.clone();
                 let worker_cancellation = cancellation.child_token();
                 handles.push(tokio::spawn(async move {
+                    // Legacy Gen5MappingQueueService.
                     gen5_mapping::worker(worker_state, worker_cancellation).await;
                 }));
                 let worker_state = state.clone();
                 let worker_cancellation = cancellation.child_token();
                 handles.push(tokio::spawn(async move {
+                    // Legacy Gen5RebootWatchdogService.
                     gen5_reboot_watchdog::worker(worker_state, worker_cancellation).await;
                 }));
             }
@@ -109,6 +126,7 @@ impl WorkerManager {
         }
     }
 
+    /// Cancel all child tokens and await every spawned task.
     pub async fn shutdown(self) {
         self.cancellation.cancel();
         for handle in self.handles {
@@ -118,6 +136,7 @@ impl WorkerManager {
         }
     }
 
+    /// Number of currently tracked worker tasks (for health / diagnostics).
     pub fn task_count(&self) -> usize {
         self.handles.len()
     }

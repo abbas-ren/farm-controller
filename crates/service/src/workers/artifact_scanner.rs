@@ -1,3 +1,8 @@
+//! Remote artifact mirror scanner (legacy `ArtifactsScanner`).
+//!
+//! Periodically crawls configured HTTP artifact roots, downloads new versions,
+//! upserts `release` rows, prepares builds, and optionally soft-deletes removed ones.
+
 use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
@@ -49,6 +54,7 @@ struct Scanner {
     compute_sha256: bool,
 }
 
+/// Poll loop crawling remote artifact roots and persisting new releases.
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let base_url = state.config.device.artifacts_base_url.trim();
     if base_url.is_empty() {
@@ -82,6 +88,7 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "artifact_scanner", "worker stopped");
 }
 
+/// Scan once: discover versions, download, persist, prepare, cleanup removed.
 async fn run_cycle(state: &AppState, scanner: &Scanner) {
     match scanner.scan_once().await {
         Ok(results) => {
@@ -111,6 +118,7 @@ async fn run_cycle(state: &AppState, scanner: &Scanner) {
 }
 
 impl Scanner {
+    /// Construct an HTTP scanner bound to the configured root URL and options.
     fn new(base_url: &str, timeout_seconds: u64, compute_sha256: bool) -> Result<Self, String> {
         let mut root = Url::parse(base_url).map_err(|error| error.to_string())?;
         if !root.path().ends_with('/') {
@@ -125,6 +133,7 @@ impl Scanner {
         })
     }
 
+    /// Crawl folder/version listings once and return discovered artifact sets.
     async fn scan_once(&self) -> Result<Vec<ScanResult>, String> {
         let mut results = Vec::new();
         for folder_href in self.directory_links(&self.root).await? {
@@ -183,6 +192,7 @@ impl Scanner {
         Ok(results)
     }
 
+    /// `directory_links` helper used by this worker.
     async fn directory_links(&self, url: &Url) -> Result<Vec<String>, String> {
         Ok(self
             .index_links(url)
@@ -192,6 +202,7 @@ impl Scanner {
             .collect())
     }
 
+    /// `collect_nested_artifacts` helper used by this worker.
     async fn collect_nested_artifacts(
         &self,
         directory: Url,
@@ -238,6 +249,7 @@ impl Scanner {
         Ok(artifacts)
     }
 
+    /// `index_links` helper used by this worker.
     async fn index_links(&self, url: &Url) -> Result<Vec<String>, String> {
         let response = self
             .client
@@ -258,6 +270,7 @@ impl Scanner {
             .collect())
     }
 
+    /// `scoped_url` helper used by this worker.
     fn scoped_url(&self, base: &Url, href: &str) -> Result<Url, String> {
         let url = base.join(href).map_err(|error| error.to_string())?;
         if url.origin() != self.root.origin() || !url.path().starts_with(self.root.path()) {
@@ -266,6 +279,7 @@ impl Scanner {
         Ok(url)
     }
 
+    /// `file_metadata` helper used by this worker.
     async fn file_metadata(&self, url: &Url) -> Option<(u64, DateTime<Utc>)> {
         let response = match self.client.head(url.clone()).send().await {
             Ok(response) if response.status().is_success() => response,
@@ -304,6 +318,7 @@ impl Scanner {
         Some((size, mtime))
     }
 
+    /// `sidecar_checksums` helper used by this worker.
     async fn sidecar_checksums(&self, base: &Url, hrefs: &[String]) -> Vec<(String, String)> {
         let mut checksums = Vec::new();
         for href in hrefs.iter().filter(|href| is_checksum_sidecar(href)) {
@@ -328,6 +343,7 @@ impl Scanner {
         checksums
     }
 
+    /// `file_sha256` helper used by this worker.
     async fn file_sha256(&self, url: &Url) -> Option<String> {
         let response = self.client.get(url.clone()).send().await.ok()?;
         if !response.status().is_success() {
@@ -341,6 +357,7 @@ impl Scanner {
         Some(format!("{:x}", hash.finalize()))
     }
 
+    /// `relative_path` helper used by this worker.
     fn relative_path(&self, url: &Url) -> String {
         url.path()
             .strip_prefix(self.root.path())
@@ -349,6 +366,7 @@ impl Scanner {
     }
 }
 
+/// Upsert scanned versions into `release` / folder tables and prepare builds.
 async fn persist_results(
     state: &AppState,
     scanner: &Scanner,
@@ -503,6 +521,7 @@ async fn persist_results(
     cleanup_removed(state, &seen).await
 }
 
+/// Download missing artifacts locally then run build preparation.
 async fn prepare_scanned_build(
     state: &AppState,
     scanner: &Scanner,
@@ -630,6 +649,7 @@ async fn prepare_scanned_build(
     outcome
 }
 
+/// Resolve the on-disk path for a scanned artifact under the download root.
 fn local_artifact_path(
     destination: &std::path::Path,
     name: &str,
@@ -653,6 +673,7 @@ fn local_artifact_path(
     }
 }
 
+/// Reject path traversal in artifact names.
 fn safe_relative_artifact_path(name: &str) -> Result<PathBuf, String> {
     let path = std::path::Path::new(name);
     if path.is_absolute()
@@ -665,6 +686,7 @@ fn safe_relative_artifact_path(name: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
+/// True when all required artifacts are present locally with matching size.
 fn required_local_artifacts_exist(
     artifacts: &serde_json::Value,
     rootfs_archive_extension: &str,
@@ -705,6 +727,7 @@ fn required_local_artifacts_exist(
             })
 }
 
+/// Detect size/mtime drift between DB artifact JSON and a fresh scan.
 fn artifact_metadata_changed(existing: &serde_json::Value, scanned: &[ArtifactInfo]) -> bool {
     let Some(existing) = existing.as_array() else {
         return true;
@@ -726,6 +749,7 @@ fn artifact_metadata_changed(existing: &serde_json::Value, scanned: &[ArtifactIn
     })
 }
 
+/// Stream an artifact URL to `destination`.
 async fn download(client: &Client, url: &Url, destination: PathBuf) -> Result<PathBuf, String> {
     let response = client
         .get(url.clone())
@@ -747,6 +771,7 @@ async fn download(client: &Client, url: &Url, destination: PathBuf) -> Result<Pa
     Ok(destination)
 }
 
+/// Soft-delete or remove DB releases not seen in this scan (per config).
 async fn cleanup_removed(state: &AppState, seen: &HashSet<(String, String)>) -> Result<(), String> {
     let cleanup = state.config.workers.artifact_scan_cleanup_removed;
     if cleanup == ArtifactCleanup::Off {
@@ -794,6 +819,7 @@ async fn cleanup_removed(state: &AppState, seen: &HashSet<(String, String)>) -> 
     Ok(())
 }
 
+/// Filter scanned files down to those required for a build type.
 fn required_artifacts<'a>(
     artifacts: &'a [ArtifactInfo],
     rootfs_archive_extension: &str,
@@ -818,6 +844,7 @@ fn required_artifacts<'a>(
     Ok([image, dtb, rootfs])
 }
 
+/// Last non-empty path segment of a URL.
 fn final_path_segment(url: &Url) -> Result<String, String> {
     let segment = url
         .path_segments()
@@ -829,6 +856,7 @@ fn final_path_segment(url: &Url) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
+/// True for custom/user-upload version folder names that scanner should ignore.
 fn is_custom_version(version: &str) -> bool {
     version.split_once('-').is_some_and(|(_, suffix)| {
         suffix
@@ -838,6 +866,7 @@ fn is_custom_version(version: &str) -> bool {
     })
 }
 
+/// True if the filename is a `.sha256` sidecar.
 fn is_checksum_sidecar(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".sha256")
@@ -846,6 +875,7 @@ fn is_checksum_sidecar(name: &str) -> bool {
         || lower.ends_with(".sha256sum.txt")
 }
 
+/// Strip the checksum suffix to get the primary artifact name.
 fn sidecar_artifact_name(name: &str) -> String {
     let lower = name.to_ascii_lowercase();
     for suffix in [".sha256sum.txt", ".sha256.txt", ".sha256sum", ".sha256"] {
@@ -856,6 +886,7 @@ fn sidecar_artifact_name(name: &str) -> String {
     name.to_owned()
 }
 
+/// Parse `sha256  filename` lines from a sidecar or checksums file.
 fn parse_checksums(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|line| {
@@ -870,6 +901,7 @@ fn parse_checksums(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// True if the string looks like a 64-hex SHA-256 digest.
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -884,6 +916,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// `parses_checksum_formats_and_build_types` helper used by this worker.
     fn parses_checksum_formats_and_build_types() {
         let hash = "A".repeat(64);
         assert_eq!(
@@ -896,6 +929,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Unit test: HTML indexes yield folder/version/artifact structure.
     async fn scans_structured_directory_indexes() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -965,6 +999,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: refresh is skipped when local required artifacts are missing.
     fn scanner_refresh_requires_current_local_artifacts() {
         let directory = tempfile::tempdir().unwrap();
         for name in ["Image", "board.dtb", "root.tar.bz2"] {

@@ -1,3 +1,9 @@
+//! Controller registration and reported relay inventory sync.
+//!
+//! Used when an edge controller registers or heartbeats with its relay list.
+//! Ports Node `DeviceService` / `RelayService` controller registration that
+//! upserts relays/channels and soft-deletes hardware no longer reported.
+
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
@@ -14,6 +20,8 @@ use super::{
     validation::{normalized_controller_id, relay_channels, validate_registration},
 };
 
+/// PURPOSE: Upsert a controller and sync reported relay inventory.
+/// USE: Controller registration callback / DeviceRegistrationRepository.
 pub(crate) async fn register_controller(
     orm: &DatabaseConnection,
     registration: &ControllerRegistration,
@@ -115,6 +123,8 @@ pub(crate) async fn register_controller(
     })
 }
 
+/// PURPOSE: Implement `sync_relay_inventory` domain/persistence logic.
+/// USE: Called as `sync_relay_inventory` from handlers, repository impls, or sibling helpers.
 async fn sync_relay_inventory(
     transaction: &impl ConnectionTrait,
     controller_id: &str,
@@ -132,6 +142,7 @@ async fn sync_relay_inventory(
             let existing_ids = relay::Entity::find()
                 .filter(relay::Column::SerialNumber.eq(serial_number))
                 .filter(relay::Column::DeletedAt.is_null())
+                // Row lock: serialize concurrent updates on this controller/device/relay.
                 .lock(LockType::Update)
                 .all(transaction)
                 .await?
@@ -152,6 +163,7 @@ async fn sync_relay_inventory(
     let extra_ids = relay::Entity::find()
         .filter(relay::Column::DeviceControllerId.eq(controller_id))
         .filter(relay::Column::SerialNumber.is_not_in(reported_serials))
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .all(transaction)
         .await?
@@ -170,6 +182,7 @@ async fn sync_relay_inventory(
             .order_by_with_nulls(relay::Column::DeletedAt, Order::Asc, NullOrdering::First)
             .order_by_desc(relay::Column::UpdatedAt)
             .limit(1)
+            // Row lock: serialize concurrent updates on this controller/device/relay.
             .lock(LockType::Update)
             .one(transaction)
             .await?;
@@ -195,6 +208,8 @@ async fn sync_relay_inventory(
     Ok(())
 }
 
+/// PURPOSE: Validate `validate relay serial` input before persistence.
+/// USE: Handlers/stores before insert or update.
 fn validate_relay_serial(serial_number: &str) -> Result<(), DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::registration_store", "validate_relay_serial");
@@ -207,6 +222,8 @@ fn validate_relay_serial(serial_number: &str) -> Result<(), DeviceRepositoryErro
     }
 }
 
+/// PURPOSE: Create/persist `create relay`.
+/// USE: Create handlers after validation.
 async fn create_relay(
     transaction: &impl ConnectionTrait,
     controller_id: &str,
@@ -232,6 +249,8 @@ async fn create_relay(
     Ok(relay_id)
 }
 
+/// PURPOSE: Implement `retire_relay` domain/persistence logic.
+/// USE: Called as `retire_relay` from handlers, repository impls, or sibling helpers.
 async fn retire_relay(
     transaction: &impl ConnectionTrait,
     relay_id: Uuid,
@@ -250,6 +269,8 @@ async fn retire_relay(
     Ok(())
 }
 
+/// PURPOSE: Soft-delete relays (and channels) no longer reported by the controller.
+/// USE: Relay inventory sync when hardware disappears from the edge report.
 async fn soft_delete_relays(
     transaction: &impl ConnectionTrait,
     relay_ids: &[Uuid],
@@ -281,6 +302,8 @@ async fn soft_delete_relays(
     Ok(())
 }
 
+/// PURPOSE: Implement `upsert_reported_channels` domain/persistence logic.
+/// USE: Called as `upsert_reported_channels` from handlers, repository impls, or sibling helpers.
 async fn upsert_reported_channels(
     transaction: &impl ConnectionTrait,
     relay_id: Uuid,
@@ -320,6 +343,8 @@ async fn upsert_reported_channels(
     Ok(())
 }
 
+/// PURPOSE: Load or save `load relays`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_relays(
     transaction: &impl ConnectionTrait,
     controller_id: &str,

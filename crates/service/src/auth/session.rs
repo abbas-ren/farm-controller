@@ -83,6 +83,7 @@ pub(crate) fn token_subject(headers: &HeaderMap) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Bearer header.
 fn bearer_header(headers: &HeaderMap, name: axum::http::HeaderName) -> Option<String> {
     let _api_trace = crate::observability::ApiTrace::enter("auth::session", "bearer_header");
     headers
@@ -98,6 +99,7 @@ fn bearer_header(headers: &HeaderMap, name: axum::http::HeaderName) -> Option<St
         .filter(|value| !value.is_empty())
 }
 
+/// Refresh token.
 fn refresh_token(headers: &HeaderMap) -> Option<String> {
     let _api_trace = crate::observability::ApiTrace::enter("auth::session", "refresh_token");
     ["refreshtoken", "x-refresh-token"]
@@ -106,6 +108,7 @@ fn refresh_token(headers: &HeaderMap) -> Option<String> {
         .or_else(|| cookie_value(headers, "refreshToken"))
 }
 
+/// Cookie value.
 fn cookie_value(headers: &HeaderMap, expected_name: &str) -> Option<String> {
     let _api_trace = crate::observability::ApiTrace::enter("auth::session", "cookie_value");
     headers
@@ -120,6 +123,7 @@ fn cookie_value(headers: &HeaderMap, expected_name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Append cookie.
 pub(super) fn append_cookie(
     headers: &mut HeaderMap,
     name: &str,

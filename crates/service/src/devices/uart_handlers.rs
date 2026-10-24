@@ -1,3 +1,9 @@
+//! UART topology verification and persistence handlers.
+//!
+//! Ports Node UART configuration flows exposed as `POST /api/v1/device/uart/configure`
+//! (see modern relay/UART UI). Admin frontend verifies UART with EdgeController then
+//! persists the mapping.
+
 use std::sync::Arc;
 
 use axum::{
@@ -34,6 +40,8 @@ enum UartLoadError {
 }
 
 impl From<sea_orm::DbErr> for UartLoadError {
+/// PURPOSE: Map SeaORM failures into UART context load errors.
+/// USE: load_context database lookups.
     fn from(error: sea_orm::DbErr) -> Self {
         Self::Database(error)
     }
@@ -52,6 +60,8 @@ struct EdgeUartRequest<'a> {
     channel: Option<u8>,
 }
 
+/// PURPOSE: Normalize USB VID/PID strings for UART matching.
+/// USE: UART configure validation.
 fn normalized_vid_pid(value: &str) -> Option<String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "normalized_vid_pid");
     let value = value.trim().to_ascii_lowercase();
@@ -65,10 +75,14 @@ fn normalized_vid_pid(value: &str) -> Option<String> {
     .then_some(value)
 }
 
+/// PURPOSE: Normalize MAC address formatting for UART lookups.
+/// USE: UART configure validation.
 fn normalize_mac(value: &str) -> String {
     value.to_ascii_lowercase().replace([':', '-'], "")
 }
 
+/// PURPOSE: Infer device generation from family/type strings.
+/// USE: UART configure prerequisite checks.
 fn detect_generation(
     device_family: Option<&str>,
     device_type: Option<&str>,
@@ -93,6 +107,8 @@ fn detect_generation(
     }
 }
 
+/// PURPOSE: Load device/controller/relay context required for UART configure.
+/// USE: configure_uart handler.
 async fn load_context(
     state: &AppState,
     request: &UartConfigurationRequest,
@@ -124,6 +140,7 @@ async fn load_context(
         .await?
         .ok_or(UartLoadError::NotFound)?;
 
+    // Prefer stored MAC; fall back to device_id when MAC was never populated (legacy rows).
     let device_mac = device_model
         .mac_address
         .as_deref()
@@ -159,6 +176,8 @@ async fn load_context(
                 if let Some(channel) = channel {
                     channel_number = Some(channel.channel_number);
                     relay_channel_id = Some(channel.id);
+                    // Gen3/Gen4 require a Confirmed pending_relay_config for this MAC+channel
+                    // (physical GPIO probe completed) before UART configure is allowed.
                     let normalized = normalize_mac(&device_mac);
                     relay_confirmed = pending_relay_config::Entity::find()
                         .filter(pending_relay_config::Column::RelayChannelId.eq(channel.id))
@@ -190,6 +209,8 @@ async fn load_context(
     })
 }
 
+/// PURPOSE: Enforce generation-specific UART prerequisites (relay confirm vs Gen5 CPLD).
+/// USE: configure_uart after load_context, before calling EdgeController.
 fn validate_context(
     context: &UartContext,
     request: &UartConfigurationRequest,
@@ -230,12 +251,15 @@ fn validate_context(
 }
 
 #[utoipa::path(post, path = "/api/v1/device/uart/configure", tag = "Devices", summary = "Verify and configure device UART", description = "Requires confirmed relay/GPIO control for Gen3/Gen4 or CPLD power control for Gen5, waits for EdgeController USB disconnect/reconnect verification, and persists the resolved UART topology.", request_body = UartConfigurationRequest, security(("bearer_auth" = [])), responses((status = 200, description = "UART physically verified and persisted", body = UartConfigurationResponse), (status = 400, description = "Invalid configuration or unconfirmed prerequisite", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Device or controller not found", body = ErrorResponse), (status = 502, description = "EdgeController rejected UART verification", body = ErrorResponse), (status = 503, description = "Persistence unavailable", body = ErrorResponse)))]
+/// PURPOSE: Verify and configure device UART via EdgeController, then persist mapping.
+/// USE: Frontend admin UI (bearer + admin role); talks to EdgeController over HTTP.
 pub(crate) async fn configure_uart(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     payload: Result<Json<UartConfigurationRequest>, JsonRejection>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "configure_uart");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -258,6 +282,7 @@ pub(crate) async fn configure_uart(
         );
     };
     if state.database.is_none() {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -486,6 +511,8 @@ pub(crate) async fn configure_uart(
 mod tests {
     use super::*;
 
+/// PURPOSE: Build a UartContext fixture with the given generation.
+/// USE: uart_handlers validation tests.
     fn context(generation: i16) -> UartContext {
         UartContext {
             device_id: "device-1".into(),
@@ -499,6 +526,8 @@ mod tests {
         }
     }
 
+/// PURPOSE: Build a baseline UartConfigurationRequest fixture.
+/// USE: uart_handlers validation tests.
     fn request() -> UartConfigurationRequest {
         let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "request");
         UartConfigurationRequest {
@@ -511,6 +540,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert VID:PID normalization requires two 4-digit hex halves.
+/// USE: regression for UART configure input validation.
     fn vid_pid_is_normalized_and_strictly_validated() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "vid_pid_is_normalized_and_strictly_validated");
         assert_eq!(
@@ -522,6 +553,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert Gen5 forbids relay fields and Gen4 requires confirmed channel.
+/// USE: regression for generation-specific UART prerequisites.
     fn gen5_rejects_relay_fields_and_gen4_requires_confirmation() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "gen5_rejects_relay_fields_and_gen4_requires_confirmation");
         assert_eq!(

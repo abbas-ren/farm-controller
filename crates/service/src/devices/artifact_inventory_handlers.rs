@@ -1,3 +1,9 @@
+//! Per-device artifact configuration and build listing handlers.
+//!
+//! Ports Node `DeviceController.configArtifacts`, `getBuildsForDevice`, and
+//! `getBuildsForDeviceType`: `PUT /config/artifacts`, `GET /{id}/builds`, `GET /builds`
+//! from `deviceRoutes.ts`. Frontend build/artifact configuration screens.
+
 use std::sync::Arc;
 
 use super::*;
@@ -10,6 +16,8 @@ use axum::{
     response::IntoResponse,
 };
 
+/// PURPOSE: List build versions for a device
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/{id}/builds", tag = "Devices", summary = "List build versions for a device", description = "Resolves the device type and returns available configured artifact/build version folders.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Build version folders", body = Vec<String>), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Device not found", body = ErrorResponse), (status = 500, description = "Build discovery failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn builds_for_device(
     State(state): State<Arc<AppState>>,
@@ -17,11 +25,13 @@ pub async fn builds_for_device(
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_inventory_handlers", "builds_for_device");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -32,6 +42,7 @@ pub async fn builds_for_device(
         Ok(Some(folder_name)) => folder_name,
         Ok(None) => return (response_headers, Json(Vec::<String>::new())).into_response(),
         Err(error) => {
+            // Map: translate repository failure into the legacy HTTP error envelope.
             return repository_error(error, "Failed to load device artifact configuration");
         }
     };
@@ -40,6 +51,8 @@ pub async fn builds_for_device(
     (response_headers, Json(versions)).into_response()
 }
 
+/// PURPOSE: List releases for a device type
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/builds", tag = "Devices", summary = "List releases for a device type", description = "Returns retained release rows matching the requested device type for execution and flashing selection.", params(BuildsQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Matching releases", body = Vec<serde_json::Value>), (status = 400, description = "Device type is missing", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Release query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn builds_for_device_type(
     State(state): State<Arc<AppState>>,
@@ -47,6 +60,7 @@ pub async fn builds_for_device_type(
     Query(query): Query<BuildsQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_inventory_handlers", "builds_for_device_type");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -56,6 +70,7 @@ pub async fn builds_for_device_type(
         return (response_headers, Json(Vec::<serde_json::Value>::new())).into_response();
     }
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -64,10 +79,13 @@ pub async fn builds_for_device_type(
     };
     match repository.builds_for_device_type(device_type).await {
         Ok(builds) => (response_headers, Json(builds)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to list builds"),
     }
 }
 
+/// PURPOSE: Configure artifact folders
+/// USE: Frontend admin UI (bearer + admin role).
 #[utoipa::path(put, path = "/api/v1/device/config/artifacts", tag = "Devices", summary = "Configure artifact folders", description = "Creates or updates device-type artifact folder metadata used by uploads, scanners, NFS/TFTP staging, and test preparation.", security(("bearer_auth" = [])), request_body = DeviceTypeFolderRequest, responses((status = 200, description = "Artifact folders configured"), (status = 400, description = "Invalid artifact configuration", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 500, description = "Artifact configuration failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn configure_artifacts(
     State(state): State<Arc<AppState>>,
@@ -75,6 +93,7 @@ pub async fn configure_artifacts(
     Json(request): Json<DeviceTypeFolderRequest>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_inventory_handlers", "configure_artifacts");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -98,6 +117,7 @@ pub async fn configure_artifacts(
         );
     }
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -112,6 +132,7 @@ pub async fn configure_artifacts(
             })),
         )
             .into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to configure artifacts"),
     }
 }

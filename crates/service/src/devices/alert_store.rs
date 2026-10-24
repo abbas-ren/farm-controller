@@ -1,3 +1,10 @@
+//! SeaORM queries for farm alerts (list, mark-read).
+//!
+//! Invoked by `AlertRepository` Postgres impls and alert HTTP handlers.
+//! Ports the listing / read-state logic from Node `AlertsService` /
+//! `AlertNotificationService`, including the admin filter that keeps unread
+//! alerts plus recent read ones and only surfaces alerts tied to live inventory.
+
 use chrono::{DateTime, Utc};
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
@@ -14,13 +21,17 @@ use super::{
     AlertList,
 };
 
+/// PURPOSE: Apply admin-dashboard alert visibility rules (soft-delete, unread/recent-read, inventory linkage).
+/// USE: Shared by admin list count and page queries.
 fn admin_alert_filters(
     select: sea_orm::Select<alert::Entity>,
 ) -> sea_orm::Select<alert::Entity> {
     let thirty_days_ago = Utc::now() - chrono::Duration::days(30);
     select
+        // Soft-deleted alerts never appear in either admin or user lists.
         .filter(alert::Column::DeletedAt.is_null())
         .filter(
+            // Unread always; read only if created within the last 30 days (legacy AlertsService window).
             Condition::any()
                 .add(alert::Column::Status.ne(alert::AlertStatus::Read))
                 .add(
@@ -30,6 +41,7 @@ fn admin_alert_filters(
                 ),
         )
         .filter(
+            // Keep alerts that reference approved devices, controllers, builds, faulty reports, or removal titles.
             Condition::any()
                 .add(Expr::cust(
                     r#"(data->>'deviceId' IN (
@@ -45,6 +57,8 @@ fn admin_alert_filters(
         )
 }
 
+/// PURPOSE: Order admin alert rows by a UI sort key.
+/// USE: Admin alerts list handler after filters are applied.
 fn order_admin_alerts(
     select: sea_orm::Select<alert::Entity>,
     sort_by: &str,
@@ -66,6 +80,8 @@ fn order_admin_alerts(
     }
 }
 
+/// PURPOSE: Paginated admin alert list with legacy visibility filters.
+/// USE: `GET` admin alerts API / `AlertRepository::admin_alerts`.
 pub(crate) async fn list_admin(
     orm: &DatabaseConnection,
     page: i64,
@@ -93,6 +109,8 @@ pub(crate) async fn list_admin(
     })
 }
 
+/// PURPOSE: Soft-delete + optional created-at window for the non-admin alert feed.
+/// USE: Shared by `list_all` count, unread count, and page queries.
 fn list_all_filters(
     mut select: sea_orm::Select<alert::Entity>,
     from: Option<DateTime<Utc>>,
@@ -108,6 +126,8 @@ fn list_all_filters(
     select
 }
 
+/// PURPOSE: Paginated alert feed with unread total for the date window.
+/// USE: `GET` all-alerts API / `AlertRepository::all_alerts`.
 pub(crate) async fn list_all(
     orm: &DatabaseConnection,
     page: i64,
@@ -142,6 +162,8 @@ pub(crate) async fn list_all(
     })
 }
 
+/// PURPOSE: Mark a single alert read (status, isRead, readAt).
+/// USE: Mark-read handlers; returns false when id is invalid or row missing.
 pub(crate) async fn mark_read(
     orm: &DatabaseConnection,
     alert_id: &str,
@@ -163,6 +185,8 @@ pub(crate) async fn mark_read(
     Ok(result.rows_affected > 0)
 }
 
+/// PURPOSE: Mark every unread non-deleted alert as read.
+/// USE: Mark-all-read admin/user action.
 pub(crate) async fn mark_all_read(orm: &DatabaseConnection) -> Result<(), DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "mark_all_read");
     let now = chrono::Utc::now();

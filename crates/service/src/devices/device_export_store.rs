@@ -1,3 +1,9 @@
+//! Load device + interface rows for CSV export.
+//!
+//! Used by the device export HTTP handler before [`csv_export::format_devices`].
+//! Replaces the Node `DeviceService` export query that joined devices with
+//! interfaces and applied search / date filters.
+
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     sea_query::{Expr, extension::postgres::PgExpr},
@@ -11,6 +17,8 @@ use super::{
     DeviceCsvQuery,
 };
 
+/// PURPOSE: Fetch non-deleted devices (optional search/date filters) with nested interfaces.
+/// USE: Device CSV export handler; returns JSON shaped like legacy `to_jsonb` device payloads.
 pub(crate) async fn export_devices(
     orm: &DatabaseConnection,
     query: &DeviceCsvQuery,
@@ -18,6 +26,7 @@ pub(crate) async fn export_devices(
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::device_export_store", "export_devices");
     let search = query.search.as_deref().map(str::trim).unwrap_or_default();
+    // Soft-delete filter matches inventory list semantics.
     let mut select = device::Entity::find().filter(device::Column::DeletedAt.is_null());
     if !search.is_empty() {
         let pattern = format!("%{search}%");
@@ -53,6 +62,7 @@ pub(crate) async fn export_devices(
             .order_by_asc(device_interface::Column::Id)
             .all(orm)
             .await?;
+        // Assemble camelCase JSON matching legacy Sequelize to_jsonb(device) + interfaces.
         let mut value = device_json(&device_model);
         value["interfaces"] =
             serde_json::Value::Array(interfaces.iter().map(interface_json).collect());

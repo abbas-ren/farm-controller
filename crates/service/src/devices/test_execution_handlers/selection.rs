@@ -1,8 +1,12 @@
 //! Resolve legacy and explicit TestRail selections into persisted execution cases.
+//!
+//! Used when creating executions from frontend plan/suite/case picks.
 
 use super::*;
 use crate::state::AppState;
 
+/// PURPOSE: Helper `resolve_execution` supporting device HTTP handlers (resolve execution).
+/// USE: HTTP handler invoked via `devices::routes`.
 pub(super) async fn resolve_execution(
     state: &AppState,
     request: CreateExecutionRequest,
@@ -253,6 +257,8 @@ pub(super) async fn resolve_execution(
     })
 }
 
+/// PURPOSE: Helper `encoded_id` supporting device HTTP handlers (encoded id).
+/// USE: HTTP handler invoked via `devices::routes`.
 fn encoded_id(value: &str) -> Result<i64, super::super::error::DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::selection", "encoded_id");
     let digits = value
@@ -267,6 +273,8 @@ fn encoded_id(value: &str) -> Result<i64, super::super::error::DeviceRepositoryE
     })
 }
 
+/// PURPOSE: Helper `catalog_case` supporting device HTTP handlers (catalog case).
+/// USE: HTTP handler invoked via `devices::routes`.
 fn catalog_case(case: crate::test_catalog::TestCase, suite_name: String) -> ExecutionCaseInput {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::selection", "catalog_case");
     ExecutionCaseInput {

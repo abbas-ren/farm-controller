@@ -1,5 +1,7 @@
-//! HTTP handlers for test execution commands, queries, reports, and cancellation.
-//! Re-exports preserve the historical `devices::test_execution_handlers` API.
+//! Test execution lifecycle HTTP handlers under `/api/v1/device/test/execution*`.
+//!
+//! Ports Node `testRoutes.ts` / `TestController` create, update, cancel, query, report,
+//! and case-log endpoints. Frontend and workers drive executions through these routes.
 
 mod cancellation;
 mod case_queries;

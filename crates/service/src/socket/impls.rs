@@ -1,3 +1,5 @@
+//! SocketIo / axum integration helpers (connect auth, room join, emit).
+
 use socketioxide::SocketIo;
 use std::sync::OnceLock;
 use tracing::info;
@@ -10,6 +12,7 @@ use crate::socket::types::{
 };
 
 impl ServerEvent {
+    /// Frontend.
     pub(crate) fn frontend(payload: FrontendMessagePayload) -> Self {
         let payload =
             serde_json::to_value(&payload).expect("frontend payload must be serializable");
@@ -24,6 +27,7 @@ impl ServerEvent {
     }
 
     #[allow(unused)]
+    /// Edge agent.
     pub(crate) fn edge_agent(payload: EdgeAgentMessagePayload) -> Self {
         Self {
             event: "edge_agent".to_owned(),
@@ -33,6 +37,7 @@ impl ServerEvent {
     }
 
     #[allow(unused)]
+    /// Edge controller.
     pub(crate) fn edge_controller(payload: EdgeControllerMessagePayload) -> Self {
         Self {
             event: "edge_controller".to_owned(),
@@ -43,6 +48,7 @@ impl ServerEvent {
 }
 
 impl Default for EventHub {
+    /// Default.
     fn default() -> Self {
         let (sender, _) = tokio::sync::broadcast::channel(256);
         Self {
@@ -53,20 +59,26 @@ impl Default for EventHub {
 }
 
 impl EventHub {
+    /// Subscribe to the in-process broadcast of farm `ServerEvent`s.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServerEvent> {
         self.sender.subscribe()
     }
 
+    /// Attach the live Socket.IO server once the HTTP upgrade stack is ready.
     pub(crate) fn install_socket_io(&self, socket_io: SocketIo) {
         let _ = self.socket_io.set(socket_io);
     }
 
+    /// Close Socket.IO connections during process shutdown.
     pub async fn shutdown(&self) {
         if let Some(socket_io) = self.socket_io.get() {
             socket_io.close().await;
         }
     }
 
+    /// Emit to connected Socket.IO clients and fan out on the broadcast channel.
+    ///
+    /// WS event shape: `{ type: event.event, payload: event.payload }` (serde rename).
     pub fn publish(&self, event: ServerEvent) -> Result<(), String> {
         let event_name = event.event.clone();
         info!("Publishing event: {}", event_name);

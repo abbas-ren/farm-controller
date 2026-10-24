@@ -1,3 +1,8 @@
+//! Execution-centric analytics (recent, daily, plans, in-progress).
+//!
+//! Used by analytics HTTP handlers for test dashboards. Ports Node
+//! `AnalyticsService` execution analytics endpoints.
+
 use std::collections::HashMap;
 
 use chrono::{DateTime, Datelike, Days, Months, NaiveDate, Utc};
@@ -11,11 +16,14 @@ use crate::persistence::entity::{test_case, test_execution};
 use super::super::error::DeviceRepositoryError;
 
 #[derive(Debug)]
+/// Domain/DTO type `TestCaseAnalyticsRow` used across device stores and handlers.
 struct TestCaseAnalyticsRow {
     created_at: DateTime<Utc>,
     result: String,
 }
 
+/// PURPOSE: Implement `recent_executions` domain/persistence logic.
+/// USE: Called as `recent_executions` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn recent_executions(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -51,6 +59,8 @@ pub(crate) async fn recent_executions(
         .collect())
 }
 
+/// PURPOSE: Fetch a single record for `execution by id`.
+/// USE: Detail handlers and repository lookups.
 pub(crate) async fn execution_by_id(
     orm: &DatabaseConnection,
     test_id: &str,
@@ -81,6 +91,8 @@ pub(crate) async fn execution_by_id(
     })))
 }
 
+/// PURPOSE: Implement `execution_daily` domain/persistence logic.
+/// USE: Called as `execution_daily` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn execution_daily(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -156,6 +168,8 @@ pub(crate) async fn execution_daily(
         .collect())
 }
 
+/// PURPOSE: Implement `test_execution_analytics` domain/persistence logic.
+/// USE: Called as `test_execution_analytics` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn test_execution_analytics(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -239,6 +253,8 @@ pub(crate) async fn test_execution_analytics(
     }))
 }
 
+/// PURPOSE: Implement `in_progress_test_analytics` domain/persistence logic.
+/// USE: Called as `in_progress_test_analytics` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn in_progress_test_analytics(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -285,6 +301,8 @@ pub(crate) async fn in_progress_test_analytics(
         .collect())
 }
 
+/// PURPOSE: Implement `test_plan_summary` domain/persistence logic.
+/// USE: Called as `test_plan_summary` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn test_plan_summary(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -326,6 +344,8 @@ pub(crate) async fn test_plan_summary(
     }))
 }
 
+/// PURPOSE: Implement `daily_test_summary` domain/persistence logic.
+/// USE: Called as `daily_test_summary` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn daily_test_summary(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -393,6 +413,7 @@ pub(crate) async fn daily_test_summary(
 }
 
 #[derive(Default)]
+/// Domain/DTO type `DayAgg` used across device stores and handlers.
 struct DayAgg {
     total_executions: i64,
     passed_test_cases: i64,
@@ -401,12 +422,15 @@ struct DayAgg {
 }
 
 #[derive(Default)]
+/// Domain/DTO type `DailySummaryAgg` used across device stores and handlers.
 struct DailySummaryAgg {
     total_execution_seconds: i64,
     passed: i64,
     failed: i64,
 }
 
+/// PURPOSE: Implement `execution_ids` domain/persistence logic.
+/// USE: Called as `execution_ids` from handlers, repository impls, or sibling helpers.
 fn execution_ids(executions: &[test_execution::Model]) -> Vec<String> {
     executions
         .iter()
@@ -414,6 +438,8 @@ fn execution_ids(executions: &[test_execution::Model]) -> Vec<String> {
         .collect()
 }
 
+/// PURPOSE: Implement `case_counts_by_execution` domain/persistence logic.
+/// USE: Called as `case_counts_by_execution` from handlers, repository impls, or sibling helpers.
 async fn case_counts_by_execution(
     orm: &DatabaseConnection,
     ids: &[String],
@@ -434,6 +460,8 @@ async fn case_counts_by_execution(
     Ok(counts)
 }
 
+/// PURPOSE: Load or save `load cases for executions`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_cases_for_executions(
     orm: &DatabaseConnection,
     ids: &[String],
@@ -460,6 +488,8 @@ async fn load_cases_for_executions(
     Ok(map)
 }
 
+/// PURPOSE: Load or save `load case models`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_case_models(
     orm: &DatabaseConnection,
     ids: &[String],
@@ -480,6 +510,8 @@ async fn load_case_models(
     Ok(map)
 }
 
+/// PURPOSE: Serialize `status str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn status_str(status: Option<&test_execution::TestStatus>) -> &'static str {
     match status {
         Some(test_execution::TestStatus::NotExecuted) => "not_executed",
@@ -492,6 +524,8 @@ fn status_str(status: Option<&test_execution::TestStatus>) -> &'static str {
     }
 }
 
+/// PURPOSE: Implement `aggregate_test_cases` domain/persistence logic.
+/// USE: Called as `aggregate_test_cases` from handlers, repository impls, or sibling helpers.
 fn aggregate_test_cases<'a>(
     rows: impl Iterator<Item = &'a TestCaseAnalyticsRow>,
 ) -> serde_json::Value {

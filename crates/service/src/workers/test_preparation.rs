@@ -1,3 +1,8 @@
+//! Test preparation worker — materializes scripts/artifacts before device dispatch.
+//!
+//! Claims test executions in the prepare phase (SKIP LOCKED), writes scripts under
+//! the test workdir, advances execution phase, and emits preparation events.
+
 use std::{
     io,
     path::{Path, PathBuf},
@@ -29,6 +34,7 @@ use sea_orm::{
     sea_query::{Expr, LockBehavior, LockType},
 };
 
+/// Poll loop claiming tests that need artifact/script preparation.
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
         state.config.workers.test_preparation_poll_seconds,
@@ -43,6 +49,7 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "test_preparation", "worker stopped");
 }
 
+/// Claim one preparation job, prepare it, or mark failed and emit events.
 async fn run_cycle(state: &AppState) {
     for _ in 0..state.config.workers.test_preparation_batch_size {
         let preparation = match claim(state).await {
@@ -77,12 +84,14 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
+/// SKIP LOCKED claim of the next test execution in the prepare phase.
 async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
     let lease_seconds =
         i64::try_from(state.config.workers.test_preparation_lease_seconds).unwrap_or(i64::MAX);
     let transaction = database.orm().begin().await?;
     let candidate = test_execution::Entity::find()
+        // Phase: fresh PrepareArtifacts, or stale PrepareTestScripts past the lease (retry).
         .filter(test_execution::Column::Status.eq(test_execution::TestStatus::NotExecuted))
         .filter(
             sea_orm::Condition::any()
@@ -96,6 +105,7 @@ async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbE
                             test_execution::Column::ExecutionPhase
                                 .eq(test_execution::ExecutionPhase::PrepareTestScripts),
                         )
+                        // Lease timeout math: reclaim rows stuck in PrepareTestScripts.
                         .add(Expr::cust_with_values(
                             r#""updatedAt" < now() - ($1 * interval '1 second')"#,
                             [lease_seconds],
@@ -115,6 +125,7 @@ async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbE
         ))
         .order_by_asc(test_execution::Column::CreatedAt)
         .limit(1)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .one(&transaction)
         .await?;
@@ -161,6 +172,7 @@ async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbE
     Ok(Some(preparation))
 }
 
+/// Write scripts/artifacts to the test workdir and advance execution phase.
 async fn prepare(
     state: &AppState,
     mut preparation: TestPreparation,
@@ -351,6 +363,7 @@ async fn prepare(
 }
 
 #[cfg(unix)]
+/// Mark a prepared script executable (Unix); no-op stub on non-Unix.
 async fn set_executable(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = tokio::fs::metadata(path).await?.permissions();
@@ -359,10 +372,12 @@ async fn set_executable(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+/// Mark a prepared script executable (Unix); no-op stub on non-Unix.
 async fn set_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Fail preparation and return a failure ServerEvent for publish.
 async fn mark_failed(state: &AppState, test_id: &str, error: &str) -> Option<ServerEvent> {
     let database = state.database.as_ref()?;
     let now = chrono::Utc::now();
@@ -403,6 +418,7 @@ async fn mark_failed(state: &AppState, test_id: &str, error: &str) -> Option<Ser
     }))
 }
 
+/// Build the `test_preparation_complete` (or equivalent) WS event payload.
 fn prepared_event(test_id: &str, _user_id: &str) -> ServerEvent {
     ServerEvent::frontend(FrontendMessagePayload::TestExecution {
         test_id: test_id.to_owned(),
@@ -418,6 +434,7 @@ fn prepared_event(test_id: &str, _user_id: &str) -> ServerEvent {
     })
 }
 
+/// Record test-preparation worker failure metrics.
 fn record_failure(state: &AppState, error: &sea_orm::DbErr) {
     state
         .metrics
@@ -432,6 +449,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Unit test: preparation writes under scoped device/version paths.
     fn prepares_rootfs_and_boot_artifacts_in_scoped_paths() {
         let directory = tempfile::tempdir().unwrap();
         let image = directory.path().join("Image");
@@ -469,6 +487,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: prepared WS event is addressed to the execution owner.
     fn prepared_event_targets_execution_owner() {
         let event = prepared_event("test-1", "user-1");
         assert_eq!(event.event, "test_execution");

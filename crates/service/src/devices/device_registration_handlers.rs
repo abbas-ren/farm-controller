@@ -1,3 +1,8 @@
+//! Device registration HTTP handler.
+//!
+//! Ports Node `DeviceController.addDevice` (`POST /api/v1/device/`) from `deviceRoutes.ts`.
+//! Called during onboarding (frontend or automation) to persist a new DUT.
+
 use std::sync::Arc;
 
 use axum::{
@@ -31,6 +36,8 @@ use super::{DeviceRegistration, DeviceRegistrationResponse, error_response, repo
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Register or refresh a DUT; MAC becomes the normalized device ID.
+/// USE: Public EdgeController/onboarding compatibility endpoint (no bearer).
 pub async fn register_device(
     State(state): State<Arc<AppState>>,
     payload: Result<Json<DeviceRegistration>, JsonRejection>,
@@ -44,6 +51,7 @@ pub async fn register_device(
         }
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -67,12 +75,16 @@ pub async fn register_device(
             )
                 .into_response()
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to register device"),
     }
 }
 
+/// PURPOSE: Publish a frontend alert after device registration.
+/// USE: register_device success path.
 fn publish_alert(state: &AppState, subtype: &str, device: serde_json::Value) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::device_registration_handlers", "publish_alert");
+    // Publish: notify connected frontend clients via Socket.IO.
     if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
         FrontendMessagePayload::AlertDataPayload {
             level: Some(AlertLevel::Info),

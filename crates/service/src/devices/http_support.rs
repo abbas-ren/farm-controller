@@ -1,7 +1,15 @@
+//! Map [`DeviceRepositoryError`] to Axum HTTP responses for device handlers.
+//!
+//! Used by every device route handler after a repository / store call fails.
+//! Mirrors the status-code conventions of the Node Express error middleware in
+//! `farm_controller_old/device-service`.
+
 use super::error::DeviceRepositoryError;
 use crate::error::ErrorResponse;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 
+/// PURPOSE: Translate a repository error into the matching HTTP status and body.
+/// USE: Handler `Err` arms call this instead of matching variants themselves.
 pub(crate) fn repository_error(
     error: DeviceRepositoryError,
     message: &str,
@@ -28,6 +36,8 @@ pub(crate) fn repository_error(
     }
 }
 
+/// PURPOSE: Build a standard `{code, message}` JSON error response.
+/// USE: Shared by `repository_error` and handlers that fail before hitting the repository.
 pub(crate) fn error_response(
     status: StatusCode,
     code: &str,

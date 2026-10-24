@@ -1,7 +1,13 @@
+//! In-memory `AnalyticsRepository` fake for device route tests.
+//!
+//! Stands in for production analytics queries behind `/api/v1/device/analytics/*`.
+
 use super::*;
 
 #[async_trait]
 impl AnalyticsRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::device_state_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn device_state_analytics(&self) -> Result<DeviceStateAnalytics, DeviceRepositoryError> {
         Ok(DeviceStateAnalytics {
             total: 2,
@@ -9,6 +15,8 @@ impl AnalyticsRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::detailed_device_state_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn detailed_device_state_analytics(
         &self,
     ) -> Result<DeviceStateDetailedAnalytics, DeviceRepositoryError> {
@@ -22,6 +30,8 @@ impl AnalyticsRepository for RegistrationRepository {
         )])))
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::recent_execution_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn recent_execution_analytics(
         &self,
         user_id: &str,
@@ -41,6 +51,8 @@ impl AnalyticsRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::execution_analytics_by_id`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn execution_analytics_by_id(
         &self,
         test_id: &str,
@@ -57,6 +69,8 @@ impl AnalyticsRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::daily_execution_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn daily_execution_analytics(
         &self,
         _user_id: &str,
@@ -72,6 +86,8 @@ impl AnalyticsRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::build_comparison_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn build_comparison_analytics(
         &self,
         _user_id: &str,
@@ -84,6 +100,8 @@ impl AnalyticsRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::build_comparison_analytics_by_id`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn build_comparison_analytics_by_id(
         &self,
         _user_id: &str,
@@ -97,6 +115,8 @@ impl AnalyticsRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::build_performance_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn build_performance_analytics(
         &self,
         _count: i64,
@@ -104,6 +124,8 @@ impl AnalyticsRepository for RegistrationRepository {
         Ok(vec![build_performance_fixture("build-1")])
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::build_performance_analytics_by_id`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn build_performance_analytics_by_id(
         &self,
         build_id: &str,
@@ -111,6 +133,8 @@ impl AnalyticsRepository for RegistrationRepository {
         Ok(build_performance_fixture(build_id))
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::device_usage_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn device_usage_analytics(
         &self,
         _start: chrono::DateTime<chrono::Utc>,
@@ -127,6 +151,8 @@ impl AnalyticsRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::test_execution_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn test_execution_analytics(
         &self,
         _user_id: &str,
@@ -143,6 +169,8 @@ impl AnalyticsRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::in_progress_test_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn in_progress_test_analytics(
         &self,
         _user_id: &str,
@@ -154,6 +182,8 @@ impl AnalyticsRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::test_plan_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn test_plan_analytics(
         &self,
         _user_id: &str,
@@ -164,6 +194,8 @@ impl AnalyticsRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `AnalyticsRepository::daily_test_analytics`.
+    /// USE: device route tests exercising analytics persistence without a live database.
     async fn daily_test_analytics(
         &self,
         _user_id: &str,

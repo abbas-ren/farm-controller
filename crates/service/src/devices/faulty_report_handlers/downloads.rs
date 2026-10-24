@@ -1,5 +1,11 @@
+//! Faulty report file and log download handlers.
+//!
+//! Ports Node `GET /faulty/report/{id}/file` and `/logs` from `faultyRoutes.ts`.
+
 use super::*;
 
+/// PURPOSE: Stream a faulty-report attachment or logs as an HTTP file response.
+/// USE: download_file / download_logs handlers.
 async fn download(
     state: Arc<AppState>,
     headers: HeaderMap,
@@ -25,6 +31,7 @@ async fn download(
             )
                 .into_response();
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "getting faulty report"),
     };
     let Some(path) = detail["report"][field].as_str() else {
@@ -68,6 +75,8 @@ async fn download(
     response
 }
 
+/// PURPOSE: Download a faulty report attachment
+/// USE: HTTP handler invoked via `devices::routes`.
 fn missing_file(missing: &str, id: Uuid) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::downloads", "missing_file");
     (
@@ -77,6 +86,8 @@ fn missing_file(missing: &str, id: Uuid) -> axum::response::Response {
         .into_response()
 }
 
+/// PURPOSE: Download a faulty report attachment
+/// USE: HTTP handler invoked via `devices::routes`.
 fn content_type(name: &str) -> &'static str {
     let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::downloads", "content_type");
     match FilePath::new(name)
@@ -97,6 +108,8 @@ fn content_type(name: &str) -> &'static str {
     }
 }
 
+/// PURPOSE: Download a faulty report attachment
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/faulty/report/{id}/file", tag = "Faulty Reports", summary = "Download a faulty report attachment", description = "Serves the stored attachment only after canonical upload-root containment, with a sanitized attachment filename and detected media type.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Faulty report attachment; content type reflects the stored file", body = String, content_type = "application/octet-stream"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Report or attachment not found", body = MessageResponse), (status = 500, description = "Report query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn download_file(
     State(state): State<Arc<AppState>>,
@@ -107,6 +120,8 @@ pub(crate) async fn download_file(
     download(state, headers, id, "filePath", "attachment").await
 }
 
+/// PURPOSE: Download attached test logs
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/faulty/report/{id}/logs", tag = "Faulty Reports", summary = "Download attached test logs", description = "Serves the copied execution logs only after canonical upload-root containment and filename sanitization.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Attached test logs", body = String, content_type = "application/json"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Report or logs not found", body = MessageResponse), (status = 500, description = "Report query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn download_logs(
     State(state): State<Arc<AppState>>,

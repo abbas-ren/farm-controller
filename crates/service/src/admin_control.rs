@@ -1,3 +1,8 @@
+//! Runtime admin control plane: feature toggles, actions, and status snapshots.
+//!
+//! Lets operators inspect/patch module flags and trigger maintenance actions
+//! without restarting the process.
+
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
@@ -74,6 +79,7 @@ pub struct FarmActionRequest {
 
 static CONTROL: OnceLock<RwLock<ControlDocument>> = OnceLock::new();
 
+/// Activate.
 pub fn activate(base: AppConfig) -> Result<AppConfig, crate::error::AppError> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "activate");
     let path = Path::new(CONTROL_FILE);
@@ -120,6 +126,7 @@ pub fn activate(base: AppConfig) -> Result<AppConfig, crate::error::AppError> {
     Ok(active)
 }
 
+/// Edge token.
 pub fn edge_token(controller_id: &str) -> Option<String> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "edge_token");
     CONTROL.get().and_then(|control| {
@@ -149,6 +156,7 @@ pub fn edge_token(controller_id: &str) -> Option<String> {
         (status = 401, description = "Admin authentication required", body = crate::error::ErrorResponse)
     )
 )]
+/// Get.
 pub async fn get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -205,6 +213,7 @@ pub async fn get(
         (status = 401, description = "Admin authentication required", body = crate::error::ErrorResponse)
     )
 )]
+/// Patch.
 pub async fn patch(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -269,6 +278,7 @@ pub async fn patch(
         (status = 401, description = "Admin authentication required", body = crate::error::ErrorResponse)
     )
 )]
+/// Action.
 pub async fn action(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -331,6 +341,7 @@ pub async fn action(
     }
 }
 
+/// Authorize.
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<HeaderMap, Box<Response>> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "authorize");
     auth::authorize_request(state, headers, Some("admin"))
@@ -338,6 +349,7 @@ async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<HeaderMap, B
         .map_err(|error| Box::new(error.into_response()))
 }
 
+/// Patch farm.
 fn patch_farm(state: &AppState, request: FarmControlPatch) -> Result<serde_json::Value, String> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "patch_farm");
     let control = ensure_control(state)?;
@@ -373,6 +385,7 @@ fn patch_farm(state: &AppState, request: FarmControlPatch) -> Result<serde_json:
     Ok(farm_snapshot(state))
 }
 
+/// Discard staged.
 fn discard_staged(state: &AppState) -> Result<serde_json::Value, String> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "discard_staged");
     let control = ensure_control(state)?;
@@ -388,6 +401,7 @@ fn discard_staged(state: &AppState) -> Result<serde_json::Value, String> {
     Ok(farm_snapshot(state))
 }
 
+/// Ensure control.
 fn ensure_control(state: &AppState) -> Result<&'static RwLock<ControlDocument>, String> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "ensure_control");
     if CONTROL.get().is_none() {
@@ -403,6 +417,7 @@ fn ensure_control(state: &AppState) -> Result<&'static RwLock<ControlDocument>, 
         .ok_or_else(|| "admin control state is unavailable".to_owned())
 }
 
+/// Farm snapshot.
 fn farm_snapshot(state: &AppState) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "farm_snapshot");
     let document = ensure_control(state)
@@ -447,6 +462,7 @@ fn farm_snapshot(state: &AppState) -> serde_json::Value {
     })
 }
 
+/// Redact config.
 fn redact_config(config: &AppConfig) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "redact_config");
     let mut value = serde_json::to_value(config).unwrap_or_default();
@@ -456,6 +472,7 @@ fn redact_config(config: &AppConfig) -> serde_json::Value {
     value
 }
 
+/// Secret status.
 fn secret_status(config: &AppConfig) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "secret_status");
     let value = serde_json::to_value(config).unwrap_or_default();
@@ -470,6 +487,7 @@ fn secret_status(config: &AppConfig) -> serde_json::Value {
     serde_json::Value::Object(entries.collect())
 }
 
+/// Secret paths.
 fn secret_paths() -> &'static [&'static str] {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "secret_paths");
     &[
@@ -488,6 +506,7 @@ fn secret_paths() -> &'static [&'static str] {
     ]
 }
 
+/// Replace path.
 fn replace_path(root: &mut serde_json::Value, path: &str, value: serde_json::Value) {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "replace_path");
     let mut parts = path.split('.').peekable();
@@ -506,12 +525,14 @@ fn replace_path(root: &mut serde_json::Value, path: &str, value: serde_json::Val
     }
 }
 
+/// Get path.
 fn get_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "get_path");
     path.split('.')
         .try_fold(root, |value, part| value.get(part))
 }
 
+/// Deep merge.
 fn deep_merge(target: &mut serde_json::Value, patch: serde_json::Value) {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "deep_merge");
     match (target, patch) {
@@ -528,11 +549,13 @@ fn deep_merge(target: &mut serde_json::Value, patch: serde_json::Value) {
     }
 }
 
+/// Empty config overrides.
 fn empty_config_overrides() -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "empty_config_overrides");
     serde_json::Value::Object(serde_json::Map::new())
 }
 
+/// Apply config overrides.
 fn apply_config_overrides(
     base: &AppConfig,
     overrides: &serde_json::Value,
@@ -545,6 +568,7 @@ fn apply_config_overrides(
         .map_err(|error| crate::error::AppError::Configuration(error.to_string()))
 }
 
+/// Config diff.
 fn config_diff(
     base: &AppConfig,
     configured: &AppConfig,
@@ -557,6 +581,7 @@ fn config_diff(
     Ok(value_diff(&base, &configured).unwrap_or_else(empty_config_overrides))
 }
 
+/// Value diff.
 fn value_diff(
     base: &serde_json::Value,
     configured: &serde_json::Value,
@@ -583,6 +608,7 @@ fn value_diff(
     }
 }
 
+/// Proxy edge.
 async fn proxy_edge(
     state: &AppState,
     response_headers: HeaderMap,
@@ -661,6 +687,7 @@ async fn proxy_edge(
     (status, response_headers, Json(body)).into_response()
 }
 
+/// Proxy agent.
 async fn proxy_agent(
     state: &AppState,
     response_headers: HeaderMap,
@@ -733,6 +760,7 @@ async fn proxy_agent(
     (status, response_headers, Json(body)).into_response()
 }
 
+/// Canonical device id.
 fn canonical_device_id(device_id: Option<&str>) -> Result<String, &'static str> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "canonical_device_id");
     let Some(device_id) = device_id.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -744,6 +772,7 @@ fn canonical_device_id(device_id: Option<&str>) -> Result<String, &'static str> 
     Ok(device_id.to_ascii_lowercase())
 }
 
+/// Approved device address.
 async fn approved_device_address(
     state: &AppState,
     device_id: &str,
@@ -774,6 +803,7 @@ async fn approved_device_address(
     Ok(Some(address))
 }
 
+/// Update edge token.
 fn update_edge_token(controller_id: &str, payload: Option<&serde_json::Value>) {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "update_edge_token");
     let Some(control) = CONTROL.get() else {
@@ -799,6 +829,7 @@ fn update_edge_token(controller_id: &str, payload: Option<&serde_json::Value>) {
     }
 }
 
+/// Controller address.
 async fn controller_address(
     state: &AppState,
     controller_id: &str,
@@ -828,6 +859,7 @@ async fn controller_address(
     }))
 }
 
+/// Load.
 pub fn load(path: &Path) -> Result<Option<ControlDocument>, crate::error::AppError> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "load");
     let contents = match fs::read(path) {
@@ -846,6 +878,7 @@ pub fn load(path: &Path) -> Result<Option<ControlDocument>, crate::error::AppErr
     Ok(Some(document))
 }
 
+/// Persist.
 fn persist(path: &Path, document: &ControlDocument) -> Result<(), std::io::Error> {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "persist");
     use std::os::unix::fs::OpenOptionsExt;
@@ -876,6 +909,7 @@ fn persist(path: &Path, document: &ControlDocument) -> Result<(), std::io::Error
     result
 }
 
+/// Schedule restart.
 fn schedule_restart() {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "schedule_restart");
     tokio::spawn(async {
@@ -895,11 +929,13 @@ fn schedule_restart() {
     });
 }
 
+/// Bad request.
 fn bad_request(message: impl Into<String>) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "bad_request");
     error(StatusCode::BAD_REQUEST, "invalid_request", message)
 }
 
+/// Internal error.
 fn internal_error(message: impl Into<String>) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "internal_error");
     tracing::error!(error = %message.into(), "admin control request failed");
@@ -910,6 +946,7 @@ fn internal_error(message: impl Into<String>) -> Response {
     )
 }
 
+/// Error.
 fn error(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("admin_control", "error");
     (
@@ -928,6 +965,7 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    /// Redaction removes all secret values.
     fn redaction_removes_all_secret_values() {
         let _api_trace = crate::observability::ApiTrace::enter("admin_control", "redaction_removes_all_secret_values");
         let mut config =
@@ -942,6 +980,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: deep merge preserves unspecified configuration.
     fn deep_merge_preserves_unspecified_configuration() {
         let _api_trace = crate::observability::ApiTrace::enter("admin_control", "deep_merge_preserves_unspecified_configuration");
         let mut value = serde_json::json!({"logging": {"level": "info", "json": false}});
@@ -954,6 +993,7 @@ mod tests {
     }
 
     #[test]
+    /// Admin overrides preserve new base configuration values.
     fn admin_overrides_preserve_new_base_configuration_values() {
         let _api_trace = crate::observability::ApiTrace::enter("admin_control", "admin_overrides_preserve_new_base_configuration_values");
         let mut base = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
@@ -968,6 +1008,7 @@ mod tests {
     }
 
     #[test]
+    /// Legacy staged configuration migrates as partial overrides.
     fn legacy_staged_configuration_migrates_as_partial_overrides() {
         let _api_trace = crate::observability::ApiTrace::enter("admin_control", "legacy_staged_configuration_migrates_as_partial_overrides");
         let base = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
@@ -984,6 +1025,7 @@ mod tests {
     }
 
     #[test]
+    /// Edge agent control requires canonical device identity.
     fn edge_agent_control_requires_canonical_device_identity() {
         let _api_trace = crate::observability::ApiTrace::enter("admin_control", "edge_agent_control_requires_canonical_device_identity");
         assert_eq!(

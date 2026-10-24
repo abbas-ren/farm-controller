@@ -1,3 +1,8 @@
+//! Identity-provider adapter tests.
+//!
+//! Wiremock coverage for Keycloak signin, role validation, and registration mapping
+//! to the frontend user/token contract.
+
 use axum::http::StatusCode;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -9,6 +14,8 @@ use crate::{
     config::AuthConfig,
 };
 
+/// PURPOSE: Keycloak signin preserves frontend user shape.
+/// USE: regression for Keycloak token/user mapping to AuthenticatedUser.
 #[tokio::test]
 async fn keycloak_signin_preserves_frontend_user_shape() {
     let server = MockServer::start().await;
@@ -73,6 +80,8 @@ async fn keycloak_signin_preserves_frontend_user_shape() {
     assert_eq!(result.user.realm_roles, ["user"]);
 }
 
+/// PURPOSE: Keycloak validation enforces realm roles.
+/// USE: guards required-role checks during token validation.
 #[tokio::test]
 async fn keycloak_validation_enforces_realm_roles() {
     let server = MockServer::start().await;
@@ -110,6 +119,8 @@ async fn keycloak_validation_enforces_realm_roles() {
     assert_eq!(error.status, StatusCode::FORBIDDEN);
 }
 
+/// PURPOSE: Keycloak registration creates a pending enabled user.
+/// USE: regression for public registration → Keycloak pending user.
 #[tokio::test]
 async fn keycloak_registration_creates_pending_enabled_user() {
     let server = MockServer::start().await;

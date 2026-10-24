@@ -1,3 +1,11 @@
+//! Axum router assembling all `/api/v1/device/*` HTTP endpoints.
+//!
+//! Ports the Express routers from `farm_controller_old/device-service/src/routes/`:
+//! `deviceRoutes`, `analyticsRoutes`, `logRoutes`, `testRoutes`, `buildRoutes`,
+//! `faultyRoutes`, `relayRouter`, and `alertsRouter`, previously mounted under
+//! `/api/v1/device` by the api-gateway. Handler implementations live in sibling
+//! modules; this file only wires paths to those handlers.
+
 use std::sync::Arc;
 
 use axum::{
@@ -57,6 +65,8 @@ use super::{
     toggle_device_power, update_heartbeat_timeout,
 };
 
+/// PURPOSE: Build the Axum Router for all `/api/v1/device` routes.
+/// USE: Mounted by `api::mod` at `/api/v1/device` (and trailing-slash twin).
 pub(crate) fn router() -> Router<Arc<AppState>> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::routes", "router");
     Router::new()

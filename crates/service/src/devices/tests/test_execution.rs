@@ -1,4 +1,12 @@
+//! Test execution detail and admin status-update contract tests.
+//!
+//! Covers admin status mutation and detail endpoints that surface latest/configured logs
+//! for the frontend execution viewer.
+
 use super::*;
+
+/// PURPOSE: Assert admin can update test execution status.
+/// USE: regression guard for legacy/API wire contracts covered by `test_execution`.
 #[tokio::test]
 async fn admin_can_update_test_execution_status() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -50,6 +58,8 @@ async fn admin_can_update_test_execution_status() {
     }
 }
 
+/// PURPOSE: Assert test execution detail supports latest and configured logs.
+/// USE: regression guard for legacy/API wire contracts covered by `test_execution`.
 #[tokio::test]
 async fn test_execution_detail_supports_latest_and_configured_logs() {
     let directory = tempfile::tempdir().unwrap();

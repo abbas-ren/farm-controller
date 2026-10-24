@@ -5,6 +5,8 @@ use crate::persistence::entity::{
     release, test_case, test_execution,
 };
 
+/// PURPOSE: Serialize `device status str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn device_status_str(status: Option<&device::DeviceStatus>) -> Option<&'static str> {
     status.map(|s| match s {
         device::DeviceStatus::Approved => "approved",
@@ -13,6 +15,8 @@ pub(crate) fn device_status_str(status: Option<&device::DeviceStatus>) -> Option
     })
 }
 
+/// PURPOSE: Serialize `device state str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn device_state_str(state: Option<&device::DeviceState>) -> Option<&'static str> {
     state.map(|s| match s {
         device::DeviceState::Busy => "busy",
@@ -23,6 +27,8 @@ pub(crate) fn device_state_str(state: Option<&device::DeviceState>) -> Option<&'
     })
 }
 
+/// PURPOSE: Serialize `device power str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn device_power_str(power: Option<&device::DevicePower>) -> Option<&'static str> {
     power.map(|p| match p {
         device::DevicePower::On => "on",
@@ -30,6 +36,8 @@ pub(crate) fn device_power_str(power: Option<&device::DevicePower>) -> Option<&'
     })
 }
 
+/// PURPOSE: Serialize `last execution status str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn last_execution_status_str(
     status: Option<&device::TestStatus>,
 ) -> Option<&'static str> {
@@ -43,6 +51,8 @@ pub(crate) fn last_execution_status_str(
     })
 }
 
+/// PURPOSE: Serialize `device json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn device_json(model: &device::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -75,6 +85,8 @@ pub(crate) fn device_json(model: &device::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Serialize `interface json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn interface_json(model: &device_interface::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -99,6 +111,8 @@ pub(crate) fn interface_json(model: &device_interface::Model) -> serde_json::Val
     })
 }
 
+/// PURPOSE: Serialize `alert json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn alert_json(model: &alert::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -127,6 +141,8 @@ pub(crate) fn alert_json(model: &alert::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Serialize `faulty report alert json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn faulty_report_alert_json(
     model: &alert::Model,
     build_version: Option<&str>,
@@ -164,6 +180,8 @@ pub(crate) fn faulty_report_alert_json(
     })
 }
 
+/// PURPOSE: Serialize `faulty report json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn faulty_report_json(model: &faulty_report::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -185,6 +203,8 @@ pub(crate) fn faulty_report_json(model: &faulty_report::Model) -> serde_json::Va
     })
 }
 
+/// PURPOSE: Serialize `release json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn release_json(model: &release::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -214,6 +234,8 @@ pub(crate) fn release_json(model: &release::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Serialize `controller json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn controller_json(model: &device_controller::Model) -> serde_json::Value {
     serde_json::json!({
         "deviceControllerId": model.device_controller_id,
@@ -236,6 +258,8 @@ pub(crate) fn controller_json(model: &device_controller::Model) -> serde_json::V
     })
 }
 
+/// PURPOSE: Serialize `relay json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn relay_json(model: &relay::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -253,6 +277,8 @@ pub(crate) fn relay_json(model: &relay::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Serialize `relay channel json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn relay_channel_json(model: &relay_channel::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -280,6 +306,8 @@ pub(crate) fn relay_channel_device_summary(model: &device::Model) -> serde_json:
     })
 }
 
+/// PURPOSE: Serialize `relay channel with device json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn relay_channel_with_device_json(
     channel: &relay_channel::Model,
     device: Option<&device::Model>,
@@ -331,6 +359,8 @@ pub(crate) fn mapping_entry_for_mac<'a>(
     })
 }
 
+/// PURPOSE: Implement `mapping_power_port` domain/persistence logic.
+/// USE: Called as `mapping_power_port` from handlers, repository impls, or sibling helpers.
 pub(crate) fn mapping_power_port(mappings: &serde_json::Value, mac: &str) -> Option<String> {
     mapping_entry_for_mac(mappings, mac)?
         .get("power")
@@ -339,6 +369,8 @@ pub(crate) fn mapping_power_port(mappings: &serde_json::Value, mac: &str) -> Opt
         .map(str::to_owned)
 }
 
+/// PURPOSE: Implement `mapping_uart_port` domain/persistence logic.
+/// USE: Called as `mapping_uart_port` from handlers, repository impls, or sibling helpers.
 pub(crate) fn mapping_uart_port(mappings: &serde_json::Value, mac: &str) -> Option<String> {
     mapping_entry_for_mac(mappings, mac)?
         .get("uart")
@@ -363,6 +395,8 @@ pub(crate) fn mappings_without_normalized_key(
     serde_json::Value::Object(filtered)
 }
 
+/// PURPOSE: Serialize `test status str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn test_status_str(status: Option<&test_execution::TestStatus>) -> Option<&'static str> {
     status.map(|s| match s {
         test_execution::TestStatus::NotExecuted => "not_executed",
@@ -374,6 +408,8 @@ pub(crate) fn test_status_str(status: Option<&test_execution::TestStatus>) -> Op
     })
 }
 
+/// PURPOSE: Serialize `execution phase str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn execution_phase_str(
     phase: Option<&test_execution::ExecutionPhase>,
 ) -> Option<&'static str> {
@@ -400,6 +436,8 @@ pub(crate) fn execution_phase_str(
     })
 }
 
+/// PURPOSE: Serialize `test execution json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn test_execution_json(model: &test_execution::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -436,6 +474,8 @@ pub(crate) fn test_execution_json(model: &test_execution::Model) -> serde_json::
     })
 }
 
+/// PURPOSE: Serialize `test case json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(crate) fn test_case_json(model: &test_case::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -466,6 +506,8 @@ pub(crate) fn test_case_json(model: &test_case::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Implement `duration_seconds` domain/persistence logic.
+/// USE: Called as `duration_seconds` from handlers, repository impls, or sibling helpers.
 pub(crate) fn duration_seconds(
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,

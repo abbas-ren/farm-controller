@@ -1,3 +1,5 @@
+//! User-targeted message fan-out (`send_user_message` HTTP + WS).
+
 use std::sync::Arc;
 
 use axum::{
@@ -16,6 +18,7 @@ use crate::{
 };
 
 #[utoipa::path(post, path = "/api/v1/device/ws/send/message", tag = "Events", summary = "Dispatch a public user event", description = "Publishes the legacy `user` Socket.IO event with `{message,timestamp}` to connected browser clients.", request_body = UserMessageRequest, responses((status = 200, description = "Event dispatched", body = UserMessageResponse), (status = 500, description = "Event dispatch failed", body = EventErrorResponse)))]
+/// Send user message.
 pub(crate) async fn send_user_message(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UserMessageRequest>,

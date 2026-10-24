@@ -1,5 +1,10 @@
+//! Device lifecycle states shared across heartbeat and watchdog workers.
+//!
+//! Serialized as the legacy frontend `state` string (`free` / `busy` / …).
+
 use serde::Serialize;
 
+/// Coarse device occupancy / reachability state published on WebSocket events.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename = "state")]
 pub enum DeviceState {
@@ -14,6 +19,7 @@ pub enum DeviceState {
 }
 
 impl ToString for DeviceState {
+    /// To string.
     fn to_string(&self) -> String {
         match self {
             DeviceState::Free => "free".to_string(),
@@ -25,6 +31,7 @@ impl ToString for DeviceState {
 }
 
 impl From<&String> for DeviceState {
+    /// Parse a DB/frontend state string; panics on unknown values (data invariant).
     fn from(s: &String) -> Self {
         match s.as_str() {
             "free" => DeviceState::Free,

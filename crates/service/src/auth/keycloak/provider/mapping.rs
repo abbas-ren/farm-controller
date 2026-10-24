@@ -1,6 +1,9 @@
+//! Map Keycloak user/token JSON into farm `ManagedUser` / validation DTOs.
+
 use super::super::transport::{KeycloakRole, KeycloakUser, TokenResponse, UserInfo};
 use crate::auth::{AuthenticatedUser, ManagedUser, RegistrationRequest, SigninResult};
 
+/// Build the sign-in API response from Keycloak token + userinfo + realm roles.
 pub(super) fn signin_result(
     token: TokenResponse,
     user_info: UserInfo,
@@ -21,6 +24,7 @@ pub(super) fn signin_result(
     }
 }
 
+/// Map a Keycloak admin user representation into the farm `ManagedUser` DTO.
 pub(super) fn managed_user(
     user: KeycloakUser,
     fallback_id: Option<&str>,
@@ -40,6 +44,7 @@ pub(super) fn managed_user(
     }
 }
 
+/// JSON body returned after a self-service registration request is accepted.
 pub(super) fn pending_registration_response(
     user_id: &str,
     request: &RegistrationRequest,

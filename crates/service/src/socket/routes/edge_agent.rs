@@ -1,9 +1,12 @@
+//! Edge-agent WebSocket room: agent registration and command fan-out.
+
 use axum::extract::ws::{Message, WebSocket};
 use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::{socket::helpers::device_heartbeat_events, state::AppState};
 
+/// Device session.
 pub(crate) async fn device_session(state: Arc<AppState>, device_id: String, mut socket: WebSocket) {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::edge_agent", "device_session");
     info!(device_id, "device WebSocket connected");
@@ -25,6 +28,7 @@ pub(crate) async fn device_session(state: Arc<AppState>, device_id: String, mut 
     info!(device_id, "device WebSocket disconnected");
 }
 
+/// Process device heartbeat.
 pub(crate) async fn process_device_heartbeat(
     state: &AppState,
     device_id: &str,

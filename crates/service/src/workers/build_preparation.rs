@@ -1,3 +1,8 @@
+//! Post-upload build preparation: unpack artifacts to NFS/TFTP and enqueue flash jobs.
+//!
+//! Invoked from the build upload path (not a long-running poll loop). Official
+//! builds get a `device_action_queue` Flash row; all builds also run IPL distribution.
+
 use std::path::PathBuf;
 
 use uuid::Uuid;
@@ -11,6 +16,10 @@ use super::artifact_preparation::{artifact_paths, prepare_artifacts, safe_segmen
 
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
+/// Materialize uploaded release artifacts and kick off IPL / optional flash enqueue.
+///
+/// Side effects: writes under NFS + TFTP trees; may insert a Flash queue job;
+/// calls into `ipl_distribution`.
 pub(crate) async fn prepare_uploaded_build(
     state: &AppState,
     release: &serde_json::Value,
@@ -37,6 +46,7 @@ pub(crate) async fn prepare_uploaded_build(
         .join(&device_type)
         .join(&version);
     let preparation_paths = paths.clone();
+    // Blocking FS unpack must not run on the async runtime.
     tokio::task::spawn_blocking(move || {
         prepare_artifacts(&preparation_paths, &nfs_path, &tftp_path)
     })
@@ -50,6 +60,7 @@ pub(crate) async fn prepare_uploaded_build(
     super::ipl_distribution::prepare_and_distribute(state, &paths, &device_family, &version).await
 }
 
+/// Insert a Flash `device_action_queue` job for an official release if none is active.
 pub(super) async fn enqueue_official_build(
     state: &AppState,
     release_id: Uuid,
@@ -61,6 +72,7 @@ pub(super) async fn enqueue_official_build(
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable".to_owned())?;
+    // Skip if a queued/running/completed flash for this release already exists.
     let existing = device_action_queue::Entity::find()
         .filter(device_action_queue::Column::ReleaseId.eq(release_id))
         .filter(device_action_queue::Column::Type.eq(device_action_queue::QueueJobType::Flash))
@@ -95,6 +107,7 @@ pub(super) async fn enqueue_official_build(
     Ok(())
 }
 
+/// Read a required non-empty string field from the release JSON document.
 fn release_string<'a>(release: &'a serde_json::Value, field: &str) -> Result<&'a str, String> {
     release
         .get(field)
@@ -108,6 +121,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Unit test: release JSON field extraction requires non-empty strings.
     fn requires_nonempty_release_fields() {
         let release = serde_json::json!({"version": "v1.2.3"});
         assert_eq!(

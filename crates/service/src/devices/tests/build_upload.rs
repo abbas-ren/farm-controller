@@ -1,4 +1,12 @@
+//! Build list and TUS upload protocol tests.
+//!
+//! Guards frontend build listing JSON shape and TUS offset/header contracts used by
+//! Node-compatible upload clients.
+
 use super::*;
+
+/// PURPOSE: Assert build list requires auth and preserves frontend shape.
+/// USE: regression guard for legacy/API wire contracts covered by `build_upload`.
 #[tokio::test]
 async fn build_list_requires_auth_and_preserves_frontend_shape() {
     let repository = Arc::new(RegistrationRepository {
@@ -272,6 +280,8 @@ async fn build_list_requires_auth_and_preserves_frontend_shape() {
     }
 }
 
+/// PURPOSE: Assert tus upload preserves offsets and protocol headers.
+/// USE: regression guard for legacy/API wire contracts covered by `build_upload`.
 #[tokio::test]
 async fn tus_upload_preserves_offsets_and_protocol_headers() {
     let directory = tempfile::tempdir().unwrap();

@@ -1,3 +1,9 @@
+//! Gen5 MAC→controller mapping queue (legacy `Gen5MappingQueueService`).
+//!
+//! Claims queued and failure-poll jobs, triggers mapping on the DC, retries on a
+//! 1-minute cadence within a 30-minute window, then deletes the device if mapping
+//! never resolves.
+
 use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
@@ -31,6 +37,7 @@ struct MappingJob {
 }
 
 impl From<gen5_mapping_queue::Model> for MappingJob {
+    /// Build a `MappingJob` view from a SeaORM queue model.
     fn from(model: gen5_mapping_queue::Model) -> Self {
         Self {
             id: model.id,
@@ -45,6 +52,7 @@ impl From<gen5_mapping_queue::Model> for MappingJob {
     }
 }
 
+/// Poll loop for Gen5 mapping queue + failure-poll retries.
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
         state.config.workers.gen5_mapping_poll_seconds,
@@ -59,6 +67,7 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "gen5_mapping", "worker stopped");
 }
 
+/// Claim one job (queued or due poll) and process it.
 async fn run_cycle(state: &AppState) {
     for _ in 0..state.config.workers.gen5_mapping_batch_size {
         let job = match claim_next(state).await {
@@ -86,6 +95,7 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
+/// SKIP LOCKED claim: prefer QUEUED, else FAILURE_POLLING with `next_retry_at` <= now.
 async fn claim_next(state: &AppState) -> Result<Option<MappingJob>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
     let transaction = database.orm().begin().await?;
@@ -119,6 +129,7 @@ async fn claim_next(state: &AppState) -> Result<Option<MappingJob>, sea_orm::DbE
             Expr::cust("COALESCE(\"nextRetryAt\", \"createdAt\")").into(),
         )
         .limit(1)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .one(&transaction)
         .await?;
@@ -170,6 +181,7 @@ async fn claim_next(state: &AppState) -> Result<Option<MappingJob>, sea_orm::DbE
     Ok(Some(job))
 }
 
+/// Trigger mapping on the DC for a freshly queued MAC; start failure-poll on error.
 async fn process_queued(state: &AppState, job: &MappingJob) -> Result<u32, String> {
     if job.mac_address.trim().is_empty() {
         update_initial_failure(state, job, "macAddress is missing", true).await?;
@@ -225,6 +237,7 @@ async fn process_queued(state: &AppState, job: &MappingJob) -> Result<u32, Strin
     Ok(1)
 }
 
+/// Move a job into FAILURE_POLLING with the first retry timestamp.
 async fn update_initial_failure(
     state: &AppState,
     job: &MappingJob,
@@ -255,6 +268,7 @@ async fn update_initial_failure(
     Ok(())
 }
 
+/// Re-check mapping; schedule next 1-min retry or delete device after 30-min window.
 async fn process_failure_poll(state: &AppState, job: &MappingJob) -> Result<u32, String> {
     let max_age = chrono::Duration::minutes(
         i64::try_from(state.config.workers.gen5_mapping_max_window_minutes).unwrap_or(i64::MAX),
@@ -317,12 +331,14 @@ async fn process_failure_poll(state: &AppState, job: &MappingJob) -> Result<u32,
     Ok(1)
 }
 
+/// Bump retry count and set `next_retry_at` = now + 1 minute.
 async fn schedule_poll(
     state: &AppState,
     job: &MappingJob,
     error: Option<&str>,
 ) -> Result<(), String> {
     let database = state.database.as_ref().expect("worker requires database");
+    // Retry cadence: one poll per minute; `max_window_minutes` is the hard limit (legacy 30).
     let next_index = job.retry_schedule_index.unwrap_or(0).saturating_add(1);
     let max_polls =
         i32::try_from(state.config.workers.gen5_mapping_max_window_minutes).unwrap_or(i32::MAX);
@@ -362,6 +378,7 @@ async fn schedule_poll(
     Ok(())
 }
 
+/// Cancel the mapping job and delete the unmapped device after max window.
 async fn cancel_and_delete_device(
     state: &AppState,
     job: &MappingJob,
@@ -415,6 +432,7 @@ async fn cancel_and_delete_device(
     Ok(())
 }
 
+/// HTTP call to the device controller to start MAC mapping.
 async fn trigger_mapping(state: &AppState, controller_ip: &str, mac: &str) -> Result<(), String> {
     let url = controller_url(controller_ip, "gen5/tty_entry")?;
     let client = mapping_client(state, 1)?;
@@ -429,6 +447,7 @@ async fn trigger_mapping(state: &AppState, controller_ip: &str, mac: &str) -> Re
     Ok(())
 }
 
+/// Read how many mapping entries the controller currently reports.
 async fn mapping_entry_count(state: &AppState, controller_ip: &str) -> Result<i32, String> {
     let url = controller_url(controller_ip, "mapping/entry")?;
     let client = mapping_client(
@@ -453,6 +472,7 @@ async fn mapping_entry_count(state: &AppState, controller_ip: &str) -> Result<i3
     i32::try_from(count).map_err(|_| "mapping entry count exceeds i32".to_owned())
 }
 
+/// Build an absolute URL for a controller HTTP path.
 fn controller_url(controller_ip: &str, path: &str) -> Result<reqwest::Url, String> {
     reqwest::Url::parse(&format!(
         "http://{controller_ip}:{EDGE_CONTROLLER_PORT}/{path}"
@@ -460,12 +480,14 @@ fn controller_url(controller_ip: &str, path: &str) -> Result<reqwest::Url, Strin
     .map_err(|error| error.to_string())
 }
 
+/// reqwest client with the mapping timeout from config.
 fn mapping_client(state: &AppState, timeout_seconds: u64) -> Result<reqwest::Client, String> {
     let _ = state;
     crate::external_http::client(Duration::from_secs(timeout_seconds))
         .map_err(|error| error.to_string())
 }
 
+/// Record Gen5 mapping worker failure metrics.
 fn record_failure(state: &AppState, error: &str, message: &str) {
     state.metrics.record_worker_run("gen5_mapping", "failure");
     tracing::error!(%error, worker = "gen5_mapping", "{message}");
@@ -476,6 +498,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Assert mapping HTTP URLs target the edge-controller port.
     fn controller_routes_are_scoped_to_the_edgecontroller_port() {
         assert_eq!(
             controller_url("192.0.2.1", "mapping/entry")
@@ -486,6 +509,7 @@ mod tests {
     }
 
     #[test]
+    /// Assert retry interval is 1 minute within the 30-minute hard window.
     fn poll_schedule_is_one_minute_with_a_configured_hard_limit() {
         assert_eq!(POLL_RETRY_SECONDS, 60);
         assert_eq!(MAX_INITIAL_ATTEMPTS, 5);

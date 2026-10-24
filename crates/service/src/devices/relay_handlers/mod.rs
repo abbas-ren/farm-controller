@@ -1,9 +1,8 @@
 //! Relay endpoints grouped by identity, configuration, and retained legacy behavior.
 //!
-//! Handlers authenticate and validate requests, then coordinate persistence and
-//! controller synchronization. Modern channel state is owned by
-//! `relay_configuration_store`; legacy CRUD and conflict detection remain in
-//! `legacy_relay_store` to preserve their distinct wire and data contracts.
+//! Ports Node `relayRouter.ts` under `/api/v1/device/relay/*`. Handlers authenticate and
+//! validate, then coordinate persistence and EdgeController sync. Modern channel state is
+//! owned by `relay_configuration_store`; legacy CRUD remains in `legacy_relay_store`.
 
 use std::sync::Arc;
 

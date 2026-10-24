@@ -1,4 +1,12 @@
+//! Core device route and relay/power/heartbeat contract tests.
+//!
+//! Guards EdgeController callbacks, family/type reads, relay configuration, power toggle,
+//! heartbeat timeout, and retained legacy relay routes against Node wire shapes.
+
 use super::*;
+
+/// PURPOSE: Assert edgecontroller callbacks preserve wire contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `device_routes`.
 #[tokio::test]
 async fn edgecontroller_callbacks_preserve_wire_contracts() {
     let repository = Arc::new(RegistrationRepository {
@@ -78,6 +86,8 @@ async fn edgecontroller_callbacks_preserve_wire_contracts() {
     assert_eq!(device.payload["state"], "free");
 }
 
+/// PURPOSE: Assert frontend family and type reads require auth and return bare arrays.
+/// USE: regression guard for legacy/API wire contracts covered by `device_routes`.
 #[tokio::test]
 async fn frontend_family_and_type_reads_require_auth_and_return_bare_arrays() {
     let repository = Arc::new(RegistrationRepository {
@@ -208,6 +218,8 @@ async fn frontend_family_and_type_reads_require_auth_and_return_bare_arrays() {
     assert_eq!(body["data"][0]["controllerId"], "aabbccddeeff");
 }
 
+/// PURPOSE: Assert relay configuration preserves admin and callback contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `device_routes`.
 #[tokio::test]
 async fn relay_configuration_preserves_admin_and_callback_contracts() {
     let repository = Arc::new(RegistrationRepository {
@@ -300,6 +312,8 @@ async fn relay_configuration_preserves_admin_and_callback_contracts() {
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 }
 
+/// PURPOSE: Assert device power toggle preserves frontend http and event contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `device_routes`.
 #[tokio::test]
 async fn device_power_toggle_preserves_frontend_http_and_event_contracts() {
     let _controller_guard = edge_controller_test_lock().lock().await;
@@ -368,6 +382,8 @@ async fn device_power_toggle_preserves_frontend_http_and_event_contracts() {
     let _ = controller_task.await;
 }
 
+/// PURPOSE: Assert heartbeat timeout preserves frontend and device callback contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `device_routes`.
 #[tokio::test]
 async fn heartbeat_timeout_preserves_frontend_and_device_callback_contracts() {
     let _controller_guard = edge_controller_test_lock().lock().await;
@@ -432,6 +448,8 @@ async fn heartbeat_timeout_preserves_frontend_and_device_callback_contracts() {
     let _ = controller_task.await;
 }
 
+/// PURPOSE: Assert available relay devices preserves frontend picker contract.
+/// USE: regression guard for legacy/API wire contracts covered by `device_routes`.
 #[tokio::test]
 async fn available_relay_devices_preserves_frontend_picker_contract() {
     let repository = Arc::new(RegistrationRepository {
@@ -486,6 +504,8 @@ async fn available_relay_devices_preserves_frontend_picker_contract() {
     );
 }
 
+/// PURPOSE: Assert retained relay routes preserve legacy contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `device_routes`.
 #[tokio::test]
 async fn retained_relay_routes_preserve_legacy_contracts() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

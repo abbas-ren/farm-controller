@@ -39,6 +39,7 @@ pub struct ReportService {
 }
 
 impl ReportService {
+    /// Create the bounded report queue and HTTP client for Confluence.
     pub fn new(
         config: ReportsConfig,
         data_source: Arc<dyn ReportDataSource>,
@@ -61,17 +62,20 @@ impl ReportService {
         }
     }
 
+    /// Attach the farm EventHub for progress/completion WS events.
     pub(crate) fn with_event_publisher(mut self, event_publisher: Arc<EventHub>) -> Self {
         let _api_trace = crate::observability::ApiTrace::enter("reports::service", "with_event_publisher");
         self.event_publisher = Some(event_publisher);
         self
     }
 
+    /// Validate and enqueue a new report job; returns the job id.
     pub async fn enqueue(&self, request: ReportRequest) -> Result<Uuid, ReportError> {
         let _api_trace = crate::observability::ApiTrace::enter("reports::service", "enqueue");
         self.enqueue_with_id(Uuid::new_v4(), request).await
     }
 
+    /// Enqueue under a caller-supplied job id (tests / idempotent retries).
     pub async fn enqueue_with_id(
         &self,
         job_id: Uuid,
@@ -102,11 +106,13 @@ impl ReportService {
         Ok(job_id)
     }
 
+    /// Snapshot current job status for the status HTTP endpoint.
     pub async fn status(&self, job_id: Uuid) -> Option<ReportJobSnapshot> {
         let _api_trace = crate::observability::ApiTrace::enter("reports::service", "status");
         self.jobs.read().await.get(&job_id).cloned()
     }
 
+    /// Spawn the single consumer that processes queued report jobs.
     pub fn start_worker(
         &self,
         cancellation: CancellationToken,
@@ -130,6 +136,7 @@ impl ReportService {
         }))
     }
 
+    /// Run one report job end-to-end: artifacts, graphs, optional Confluence.
     async fn process(&self, job_id: Uuid, request: ReportRequest) {
         let _api_trace = crate::observability::ApiTrace::enter("reports::service", "process");
         tracing::info!(%job_id, worker = "reports", "report job started");
@@ -151,6 +158,7 @@ impl ReportService {
         }
     }
 
+    /// Generate.
     async fn generate(&self, job_id: Uuid, request: &ReportRequest) -> Result<(), ReportError> {
         let _api_trace = crate::observability::ApiTrace::enter("reports::service", "generate");
         let root = report_root(&self.config.test_results_dir, request)?;
@@ -212,6 +220,7 @@ impl ReportService {
         Ok(())
     }
 
+    /// Set status.
     async fn set_status(&self, job_id: Uuid, status: ReportStatus, error: Option<String>) {
         let _api_trace = crate::observability::ApiTrace::enter("reports::service", "set_status");
         if matches!(status, ReportStatus::Completed | ReportStatus::Failed)
@@ -237,6 +246,7 @@ impl ReportService {
         }
     }
 
+    /// Publish status.
     fn publish_status(&self, snapshot: &ReportJobSnapshot) {
         let _api_trace = crate::observability::ApiTrace::enter("reports::service", "publish_status");
         let Some(event_publisher) = &self.event_publisher else {

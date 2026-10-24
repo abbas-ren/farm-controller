@@ -1,3 +1,8 @@
+//! Device inventory CSV export handler.
+//!
+//! Ports Node `DeviceController.downloadCSV` (`GET /api/v1/device/export`) from
+//! `deviceRoutes.ts`. Admin frontend downloads the CSV attachment.
+
 use std::sync::Arc;
 
 use axum::{
@@ -27,17 +32,21 @@ use super::{DeviceCsvQuery, csv_export, error_response, repository_error};
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Export filtered non-deleted devices as a CSV attachment.
+/// USE: Frontend admin UI (bearer + admin role).
 pub async fn export_devices(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(query): Query<DeviceCsvQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::device_export_handlers", "export_devices");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -46,6 +55,7 @@ pub async fn export_devices(
     };
     let devices = match repository.export_devices(&query).await {
         Ok(devices) => devices,
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to export devices"),
     };
     let csv = match csv_export::format_devices(&devices) {

@@ -11,13 +11,16 @@ use super::{
 /// Identity operations required by the authentication HTTP API.
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
+    /// Signin.
     async fn signin(&self, username: &str, password: &str) -> Result<SigninResult, IdentityError>;
+    /// Validate.
     async fn validate(
         &self,
         access_token: &str,
         refresh_token: Option<&str>,
         required_role: Option<&str>,
     ) -> Result<ValidationResult, IdentityError>;
+    /// Request registration.
     async fn request_registration(
         &self,
         _request: &RegistrationRequest,
@@ -28,6 +31,7 @@ pub trait IdentityProvider: Send + Sync {
             "Registration is unavailable",
         ))
     }
+    /// Pending users.
     async fn pending_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "pending_users");
         Err(IdentityError::upstream(
@@ -35,6 +39,7 @@ pub trait IdentityProvider: Send + Sync {
             "User administration is unavailable",
         ))
     }
+    /// Managed users.
     async fn managed_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "managed_users");
         Err(IdentityError::upstream(
@@ -42,6 +47,7 @@ pub trait IdentityProvider: Send + Sync {
             "User administration is unavailable",
         ))
     }
+    /// User by id.
     async fn user_by_id(&self, _user_id: &str) -> Result<ManagedUser, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "user_by_id");
         Err(IdentityError::upstream(
@@ -49,6 +55,7 @@ pub trait IdentityProvider: Send + Sync {
             "User administration is unavailable",
         ))
     }
+    /// Delete user.
     async fn delete_user(&self, _user_id: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "delete_user");
         Err(IdentityError::upstream(
@@ -56,6 +63,7 @@ pub trait IdentityProvider: Send + Sync {
             "User administration is unavailable",
         ))
     }
+    /// Verify reset user.
     async fn verify_reset_user(&self, _token: &str, _user_id: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "verify_reset_user");
         Err(IdentityError::upstream(
@@ -63,6 +71,7 @@ pub trait IdentityProvider: Send + Sync {
             "Password reset is unavailable",
         ))
     }
+    /// Reset password.
     async fn reset_password(
         &self,
         _token: &str,
@@ -75,6 +84,7 @@ pub trait IdentityProvider: Send + Sync {
             "Password reset is unavailable",
         ))
     }
+    /// Forgot password.
     async fn forgot_password(&self, _username: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "forgot_password");
         Err(IdentityError::upstream(
@@ -82,6 +92,7 @@ pub trait IdentityProvider: Send + Sync {
             "Password reset is unavailable",
         ))
     }
+    /// Register user.
     async fn register_user(
         &self,
         _request: &AdminRegistrationRequest,
@@ -92,6 +103,7 @@ pub trait IdentityProvider: Send + Sync {
             "User administration is unavailable",
         ))
     }
+    /// Registration action.
     async fn registration_action(
         &self,
         _request: &RegistrationActionRequest,

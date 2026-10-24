@@ -1,3 +1,8 @@
+//! Report enqueue, validation, and artifact writer tests.
+//!
+//! Covers report worker success/failure paths, path-traversal hardening, queue back-pressure,
+//! and Confluence settings/HTML shaping without a live Confluence or database.
+
 use tempfile::TempDir;
 
 use crate::socket::types::farm::EventHub;
@@ -10,6 +15,8 @@ type TerminalUpdate = (Uuid, ReportStatus, Option<String>);
 
 #[async_trait]
 impl ReportDataSource for FixtureDataSource {
+    /// PURPOSE: In-memory stand-in for `ReportDataSource::test_cases`.
+    /// USE: report worker tests needing canned case rows without persistence.
     async fn test_cases(&self, _test_id: &str) -> Result<Vec<TestCaseRecord>, ReportError> {
         Ok(vec![
             TestCaseRecord {
@@ -42,10 +49,14 @@ struct RecordingDataSource {
 
 #[async_trait]
 impl ReportDataSource for RecordingDataSource {
+    /// PURPOSE: In-memory stand-in for `ReportDataSource::test_cases`.
+    /// USE: report worker tests needing canned case rows without persistence.
     async fn test_cases(&self, _test_id: &str) -> Result<Vec<TestCaseRecord>, ReportError> {
         FixtureDataSource.test_cases("test-1").await
     }
 
+    /// PURPOSE: In-memory stand-in for `ReportDataSource::update_report_status`.
+    /// USE: report worker tests that assert terminal status persistence.
     async fn update_report_status(
         &self,
         report_id: Uuid,
@@ -60,6 +71,8 @@ impl ReportDataSource for RecordingDataSource {
     }
 }
 
+/// PURPOSE: Build a ReportService pointed at a temp results directory.
+/// USE: shared fixture for report worker/path tests.
 fn fixture_service(temp: &TempDir) -> ReportService {
     ReportService::new(
         ReportsConfig {
@@ -73,6 +86,8 @@ fn fixture_service(temp: &TempDir) -> ReportService {
     )
 }
 
+/// PURPOSE: Report worker generates escaped artifacts and completes successfully.
+/// USE: regression for HTML/CSV escaping and completion status.
 #[tokio::test]
 async fn report_worker_generates_escaped_artifacts_and_completes() {
     let temp = TempDir::new().unwrap();
@@ -237,6 +252,8 @@ async fn report_worker_generates_escaped_artifacts_and_completes() {
     handle.await.unwrap();
 }
 
+/// PURPOSE: Report worker persists and publishes fatal artifact failures.
+/// USE: guards failure status + frontend event on artifact write errors.
 #[tokio::test]
 async fn report_worker_persists_and_publishes_fatal_artifact_failure() {
     let temp = TempDir::new().unwrap();
@@ -314,6 +331,8 @@ async fn report_worker_persists_and_publishes_fatal_artifact_failure() {
     handle.await.unwrap();
 }
 
+/// PURPOSE: Report paths reject path-traversal segments.
+/// USE: hardening regression for report artifact path construction.
 #[tokio::test]
 async fn report_paths_reject_traversal() {
     let request = ReportRequest {
@@ -330,6 +349,8 @@ async fn report_paths_reject_traversal() {
     ));
 }
 
+/// PURPOSE: Full queue rejects jobs without leaking a persisted status.
+/// USE: guards enqueue back-pressure behavior.
 #[tokio::test]
 async fn full_queue_rejects_job_without_leaking_status() {
     let temp = TempDir::new().unwrap();
@@ -358,6 +379,8 @@ async fn full_queue_rejects_job_without_leaking_status() {
     assert_eq!(service.jobs.read().await.len(), 1);
 }
 
+/// PURPOSE: Confluence settings require page URL and credentials together.
+/// USE: validation regression for Confluence upload config.
 #[test]
 fn confluence_settings_require_page_url_and_credentials() {
     let config = ReportsConfig::default();
@@ -367,6 +390,8 @@ fn confluence_settings_require_page_url_and_credentials() {
     ));
 }
 
+/// PURPOSE: Confluence HTML uses storage image macros.
+/// USE: guards Confluence storage-format image embedding.
 #[test]
 fn confluence_html_uses_storage_image_macros() {
     let body =

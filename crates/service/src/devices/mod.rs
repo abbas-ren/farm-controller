@@ -1,7 +1,10 @@
-//! Device HTTP compatibility, repository wiring, and public device-domain exports.
-//! `routes` assembles sibling handler modules; repository methods remain behind the unchanged
-//! repository trait, with Postgres behavior grouped by capability under `postgres`.
-//! Store modules remain siblings and are invoked directly by those capability implementations.
+//! Device HTTP compatibility layer, repository wiring, and public device-domain exports.
+//!
+//! Assembles the `/api/v1/device` surface that replaces Node `farm_controller_old/device-service`
+//! (Express routers + Sequelize models). `routes` nests sibling handler modules; persistence
+//! stays behind [`DeviceRepository`], with Postgres capability impls under `postgres` and
+//! store helpers invoked from those impls. Frontend, EdgeController, and workers share this
+//! module tree for inventory, relays, builds, tests, alerts, and analytics.
 
 #[cfg(test)]
 use crate::state::AppState;

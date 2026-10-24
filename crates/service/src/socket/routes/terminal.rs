@@ -1,3 +1,5 @@
+//! Interactive device terminal WebSocket (PTY proxy to edge).
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -15,6 +17,7 @@ struct SshClient {
 impl client::Handler for SshClient {
     type Error = russh::Error;
 
+    /// Check server key.
     async fn check_server_key(
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
@@ -57,6 +60,7 @@ enum TerminalAuthMethod {
     Password,
 }
 
+/// Terminal auth method.
 fn terminal_auth_method(password: &str) -> TerminalAuthMethod {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "terminal_auth_method");
     if password.is_empty() {
@@ -66,6 +70,7 @@ fn terminal_auth_method(password: &str) -> TerminalAuthMethod {
     }
 }
 
+/// Session.
 pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket, allow_farm_host: bool) {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "session");
     let Some(target) = receive_target(&state, &mut socket, allow_farm_host).await else {
@@ -223,6 +228,7 @@ pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket, allow_f
         .await;
 }
 
+/// Receive target.
 async fn receive_target(
     state: &AppState,
     socket: &mut WebSocket,
@@ -319,6 +325,7 @@ async fn receive_target(
     None
 }
 
+/// Approved device host.
 async fn approved_device_host(state: &AppState, requested: &str) -> Result<String, String> {
     use crate::persistence::entity::device;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -340,6 +347,7 @@ async fn approved_device_host(state: &AppState, requested: &str) -> Result<Strin
         .ok_or_else(|| "target is not an approved device".to_owned())
 }
 
+/// Approved controller host.
 async fn approved_controller_host(state: &AppState, requested: &str) -> Result<String, String> {
     use crate::persistence::entity::device_controller;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -366,6 +374,7 @@ async fn approved_controller_host(state: &AppState, requested: &str) -> Result<S
         .ok_or_else(|| "target is not an approved device controller".to_owned())
 }
 
+/// Resolve rtos target.
 async fn resolve_rtos_target(
     state: &AppState,
     message: &serde_json::Value,
@@ -424,6 +433,7 @@ async fn resolve_rtos_target(
     })
 }
 
+/// Message port.
 fn message_port(message: &serde_json::Value) -> u16 {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "message_port");
     message
@@ -433,6 +443,7 @@ fn message_port(message: &serde_json::Value) -> u16 {
         .unwrap_or(22)
 }
 
+/// Valid username.
 fn valid_username(username: &str) -> bool {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "valid_username");
     !username.is_empty()
@@ -442,6 +453,7 @@ fn valid_username(username: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
+/// Message dimensions.
 fn message_dimensions(message: &serde_json::Value) -> Option<(u32, u32)> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "message_dimensions");
     let columns = u32::try_from(message.get("cols")?.as_u64()?).ok()?;
@@ -449,6 +461,7 @@ fn message_dimensions(message: &serde_json::Value) -> Option<(u32, u32)> {
     ((1..=1_000).contains(&columns) && (1..=1_000).contains(&rows)).then_some((columns, rows))
 }
 
+/// Rtos command.
 fn rtos_command(tty: &str, generation: i16) -> Result<String, String> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "rtos_command");
     let tty = tty.trim();
@@ -467,11 +480,13 @@ fn rtos_command(tty: &str, generation: i16) -> Result<String, String> {
     Ok(format!("picocom {tty} -b {baud}"))
 }
 
+/// Send error.
 async fn send_error(socket: &mut WebSocket, error: impl Into<String>) {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "send_error");
     let _ = send_output(socket, "stderr", error.into()).await;
 }
 
+/// Send output.
 async fn send_output(
     socket: &mut WebSocket,
     stream: &str,
@@ -495,6 +510,7 @@ mod tests {
     };
 
     #[test]
+    /// Empty terminal password uses ssh none authentication.
     fn empty_terminal_password_uses_ssh_none_authentication() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "empty_terminal_password_uses_ssh_none_authentication");
         assert_eq!(terminal_auth_method(""), TerminalAuthMethod::None);
@@ -505,6 +521,7 @@ mod tests {
     }
 
     #[test]
+    /// Rtos command uses verified uart and generation baud.
     fn rtos_command_uses_verified_uart_and_generation_baud() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "rtos_command_uses_verified_uart_and_generation_baud");
         assert_eq!(
@@ -519,6 +536,7 @@ mod tests {
     }
 
     #[test]
+    /// Host terminal username is bounded and shell safe.
     fn host_terminal_username_is_bounded_and_shell_safe() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "host_terminal_username_is_bounded_and_shell_safe");
         assert!(valid_username("farm-admin"));
@@ -527,6 +545,7 @@ mod tests {
     }
 
     #[test]
+    /// Terminal port is bounded to u16.
     fn terminal_port_is_bounded_to_u16() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "terminal_port_is_bounded_to_u16");
         assert_eq!(message_port(&serde_json::json!({"port": 2222})), 2222);
@@ -534,6 +553,7 @@ mod tests {
     }
 
     #[test]
+    /// Terminal dimensions are positive and bounded.
     fn terminal_dimensions_are_positive_and_bounded() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "terminal_dimensions_are_positive_and_bounded");
         assert_eq!(

@@ -1,3 +1,5 @@
+//! Messages exchanged with edge-agent WebSocket peers.
+
 use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]

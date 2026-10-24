@@ -1,3 +1,7 @@
+//! Create faulty report with multipart upload.
+//!
+//! Ports Node `POST /api/v1/device/faulty/report` from `faultyRoutes.ts`.
+
 use crate::socket::{
     helpers::publish_frontend_event,
     types::frontend::{AlertLevel, FrontendMessagePayload},
@@ -5,6 +9,8 @@ use crate::socket::{
 
 use super::*;
 
+/// PURPOSE: Submit a faulty build report
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(post, path = "/api/v1/device/faulty/report", tag = "Faulty Reports", summary = "Submit a faulty build report", description = "Streams one bounded optional attachment, safely copies requested execution logs, commits the pending report and alert, then emits the browser alert.", security(("bearer_auth" = [])), request_body(content = FaultyReportCreateRequest, content_type = "multipart/form-data"), responses((status = 201, description = "Faulty report created", body = FaultyReportRecord), (status = 400, description = "Invalid report or attachment", body = CompatibilityErrorResponse), (status = 401, description = "Authentication required or token subject missing", body = CompatibilityErrorResponse), (status = 404, description = "Release not found", body = MessageResponse), (status = 500, description = "Report persistence or file storage failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn create(
     State(state): State<Arc<AppState>>,
@@ -159,6 +165,7 @@ pub(crate) async fn create(
         }
         Err(error) => {
             remove_pending(pending_file.as_ref()).await;
+            // Map: translate repository failure into the legacy HTTP error envelope.
             return repository_error(error, "creating faulty report");
         }
     };
@@ -230,6 +237,7 @@ pub(crate) async fn create(
             );
             (StatusCode::CREATED, response_headers, Json(result.report)).into_response()
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "creating faulty report"),
     }
 }

@@ -1,3 +1,7 @@
+//! TUS PATCH handler appending bytes to an upload.
+//!
+//! Ports Node TUS PATCH `/build/upload/tus/{id}`.
+
 use std::{path::Path, sync::Arc};
 
 use axum::{
@@ -44,6 +48,8 @@ use super::{
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Append an offset-checked chunk; finalize when upload completes.
+/// USE: TUS clients streaming build archive bytes.
 pub async fn patch(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -96,6 +102,7 @@ pub async fn patch(
                         offset,
                     )
                     .await;
+                    // Guard: device repository is not wired in this process.
                     return error_response(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "device_unavailable",
@@ -128,6 +135,7 @@ pub async fn patch(
                         "Missing required metadata: filename, uploadId",
                     );
                 };
+                // Missing buildType defaults to custom (legacy TUS clients omit the field).
                 let is_custom = match upload.metadata.get("buildType").map(String::as_str) {
                     None | Some("custom") => true,
                     Some("official") => false,

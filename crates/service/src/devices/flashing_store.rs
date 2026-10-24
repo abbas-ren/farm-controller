@@ -1,3 +1,9 @@
+//! Mark devices as flashing and resolve RTOS capture targets.
+//!
+//! Used by flashing handlers and IPL confirmation flows. Ports Node
+//! `DeviceService` mark-flashing that assigns UART ports and records
+//! controller/relay targets for Gen5 RTOS capture.
+
 use chrono::Utc;
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
@@ -17,6 +23,7 @@ use super::{
 };
 
 #[derive(Debug, FromQueryResult)]
+/// Domain/DTO type `FlashingDevice` used across device stores and handlers.
 struct FlashingDevice {
     state: Option<device::DeviceState>,
     software_version: Option<String>,
@@ -27,6 +34,8 @@ struct FlashingDevice {
     device_id: String,
 }
 
+/// PURPOSE: Set flashing=true and resolve Gen5 RTOS capture targets / UART port.
+/// USE: Mark-flashing HTTP handler before IPL begins.
 pub(crate) async fn mark_device_flashing(
     orm: &DatabaseConnection,
     device_id: &str,
@@ -37,6 +46,7 @@ pub(crate) async fn mark_device_flashing(
     let device_row = device::Entity::find()
         .filter(device::Column::DeviceId.eq(device_id))
         .filter(device::Column::DeletedAt.is_null())
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .select_only()
         .column(device::Column::State)
@@ -75,6 +85,7 @@ pub(crate) async fn mark_device_flashing(
         (upgrading_flag, flashing_flag)
     } else {
         #[derive(Debug, FromQueryResult)]
+        /// Domain/DTO type `ActiveJob` used across device stores and handlers.
         struct ActiveJob {
             job_type: device_action_queue::QueueJobType,
             version: Option<String>,
@@ -235,6 +246,8 @@ pub(crate) async fn mark_device_flashing(
     }))
 }
 
+/// PURPOSE: Implement `next_uart_port` domain/persistence logic.
+/// USE: Called as `next_uart_port` from handlers, repository impls, or sibling helpers.
 fn next_uart_port(port: &str) -> String {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::flashing_store", "next_uart_port");
@@ -255,6 +268,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// PURPOSE: Implement `rtos_uart_is_adjacent_to_the_primary_uart` domain/persistence logic.
+    /// USE: Called as `rtos_uart_is_adjacent_to_the_primary_uart` from handlers, repository impls, or sibling helpers.
     fn rtos_uart_is_adjacent_to_the_primary_uart() {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::flashing_store",

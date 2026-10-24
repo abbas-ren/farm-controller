@@ -15,6 +15,7 @@ use crate::auth::{
 };
 use crate::state::AppState;
 
+/// Authorized managed users.
 async fn authorized_managed_users(
     state: &AppState,
     headers: &HeaderMap,
@@ -34,6 +35,7 @@ async fn authorized_managed_users(
 }
 
 #[utoipa::path(get, path = "/api/v1/auth/users", tag = "Authentication", summary = "List approved and pending users", description = "Administrator view that partitions Keycloak users by the configured approved-user realm role.", security(("bearer_auth" = [])), responses((status = 200, description = "Approved and pending users", body = ManagedUsersResponse), (status = 401, description = "Authentication required", body = AuthErrorResponse), (status = 403, description = "Administrator role required", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// All users.
 pub async fn all_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "all_users");
     let (response_headers, users) = match authorized_managed_users(&state, &headers).await {
@@ -54,6 +56,7 @@ pub async fn all_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -
 }
 
 #[utoipa::path(get, path = "/api/v1/auth/users/active", tag = "Authentication", summary = "List active approved users", description = "Returns only Keycloak users carrying the configured approved-user realm role.", security(("bearer_auth" = [])), responses((status = 200, description = "Approved users", body = ActiveUsersResponse), (status = 401, description = "Authentication required", body = AuthErrorResponse), (status = 403, description = "Administrator role required", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// Active users.
 pub async fn active_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "active_users");
     let (response_headers, users) = match authorized_managed_users(&state, &headers).await {
@@ -77,6 +80,7 @@ pub async fn active_users(State(state): State<Arc<AppState>>, headers: HeaderMap
 }
 
 #[utoipa::path(get, path = "/api/v1/auth/user/{user_id}", tag = "Authentication", summary = "Get a managed user", description = "Public legacy lookup used by registration and reset flows; returns the stable frontend user projection rather than the complete Keycloak record.", params(("user_id" = String, Path)), responses((status = 200, description = "User details", body = AuthUserResponse), (status = 404, description = "User not found", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// User by id.
 pub async fn user_by_id(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
@@ -95,6 +99,7 @@ pub async fn user_by_id(
 }
 
 #[utoipa::path(delete, path = "/api/v1/auth/user/{user_id}", tag = "Authentication", summary = "Delete a managed user", description = "Permanently deletes the Keycloak user after administrator authorization.", security(("bearer_auth" = [])), params(("user_id" = String, Path)), responses((status = 200, description = "User deleted", body = AuthMessageResponse), (status = 401, description = "Authentication required", body = AuthErrorResponse), (status = 403, description = "Administrator role required", body = AuthErrorResponse), (status = 404, description = "User not found", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// Delete user.
 pub async fn delete_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -131,6 +136,7 @@ pub async fn delete_user(
     security(("bearer_auth" = [])),
     responses((status = 200, description = "Pending users", body = ActiveUsersResponse), (status = 401, description = "Invalid session", body = AuthErrorResponse), (status = 403, description = "Admin role required", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse))
 )]
+/// Pending users.
 pub async fn pending_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "pending_users");
     let response_headers = match authorize_request(&state, &headers, Some("admin")).await {

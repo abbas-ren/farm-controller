@@ -13,8 +13,10 @@ use super::{ReportError, ReportStatus, TestCaseRecord};
 
 #[async_trait]
 pub trait ReportDataSource: Send + Sync {
+    /// Load test-case rows for the execution being reported.
     async fn test_cases(&self, test_id: &str) -> Result<Vec<TestCaseRecord>, ReportError>;
 
+    /// Update report status.
     async fn update_report_status(
         &self,
         _report_id: Uuid,
@@ -32,6 +34,7 @@ pub struct PostgresReportDataSource {
 }
 
 impl PostgresReportDataSource {
+    /// Wrap a SeaORM connection for report queries.
     pub fn new(orm: DatabaseConnection) -> Self {
         Self { orm }
     }
@@ -39,6 +42,7 @@ impl PostgresReportDataSource {
 
 #[async_trait]
 impl ReportDataSource for PostgresReportDataSource {
+    /// Load test-case rows for the execution being reported.
     async fn test_cases(&self, test_id: &str) -> Result<Vec<TestCaseRecord>, ReportError> {
         let _api_trace =
             crate::observability::ApiTrace::enter("reports::data_source", "test_cases");
@@ -66,6 +70,7 @@ impl ReportDataSource for PostgresReportDataSource {
             .collect())
     }
 
+    /// Update report status.
     async fn update_report_status(
         &self,
         report_id: Uuid,

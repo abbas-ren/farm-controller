@@ -1,3 +1,5 @@
+//! Wiremock coverage for QMetry plan/folder case shapes.
+
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, header, method, path, query_param},
@@ -5,6 +7,8 @@ use wiremock::{
 
 use super::*;
 
+/// PURPOSE: Prove plan grouping includes labels while folder queries omit them.
+/// USE: regression for Qmetry catalog response shaping.
 #[tokio::test]
 async fn qmetry_cases_preserve_grouped_and_folder_shapes() {
     let server = MockServer::start().await;

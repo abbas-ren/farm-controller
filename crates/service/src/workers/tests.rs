@@ -1,3 +1,8 @@
+//! Worker manager gating and timeout event contract tests.
+//!
+//! Covers disabled-module startup, relay-sync cancellation/status events, and
+//! frontend payload shapes for relay/controller timeout alerts.
+
 use std::sync::Arc;
 
 use clap::Parser;
@@ -19,6 +24,8 @@ use crate::{
     },
 };
 
+/// PURPOSE: Workers module off ⇒ manager starts zero tasks and shuts down cleanly.
+/// USE: guards WorkerManager gating when workers module is disabled.
 #[tokio::test]
 async fn disabled_workers_start_no_tasks_and_shutdown_cleanly() {
     let config = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
@@ -31,6 +38,8 @@ async fn disabled_workers_start_no_tasks_and_shutdown_cleanly() {
     manager.shutdown().await;
 }
 
+/// PURPOSE: Relay sync task stops promptly on cancellation and publishes status events.
+/// USE: regression for RelaySyncService worker lifecycle and failure events.
 #[tokio::test]
 async fn relay_sync_worker_is_bounded_and_cancellable() {
     let service = RelaySyncService::new(1);
@@ -67,6 +76,8 @@ async fn relay_sync_worker_is_bounded_and_cancellable() {
     handle.await.unwrap();
 }
 
+/// PURPOSE: Expired relay config event field names match the UI contract.
+/// USE: guards relay_configuration_status timeout payload shaping.
 #[test]
 fn relay_timeout_event_preserves_frontend_contract() {
     let event = relay_timeout_event(&ExpiredRelayConfiguration {
@@ -86,6 +97,8 @@ fn relay_timeout_event_preserves_frontend_contract() {
     );
 }
 
+/// PURPOSE: Controller timeout alert/event shapes match the UI contract.
+/// USE: guards device_controller_changed + alert payloads on controller timeout.
 #[test]
 fn controller_timeout_events_preserve_frontend_contracts() {
     let [changed, alert] = controller_timeout_events(&ControllerStateTransition {

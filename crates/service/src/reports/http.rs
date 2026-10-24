@@ -18,6 +18,7 @@ use super::{
     ReportJobSnapshot, ReportRequest, constants::http as messages,
 };
 
+/// Axum router for enqueue, status, and Confluence upload routes.
 pub fn router() -> Router<Arc<AppState>> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::http", "router");
     Router::new()
@@ -28,6 +29,7 @@ pub fn router() -> Router<Arc<AppState>> {
 
 #[utoipa::path(post, path = "/report", tag = "Reports", summary = "Queue report generation", description = "Validates report identifiers and enqueues native generation on the bounded in-process worker.", request_body = ReportRequest,
     responses((status = 202, description = "Report queued", body = ReportAcknowledgement), (status = 400, description = "Invalid request", body = ErrorResponse), (status = 500, description = "Report initialization failed", body = ErrorResponse), (status = 503, description = "Reports or queue unavailable", body = ErrorResponse)))]
+/// HTTP handler: accept ReportRequest and return job acknowledgement.
 pub async fn enqueue_report(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ReportRequest>,
@@ -74,6 +76,7 @@ pub async fn enqueue_report(
 
 #[utoipa::path(get, path = "/report/{job_id}", tag = "Reports", summary = "Get report job status", description = "Returns the current in-process report job snapshot; completed artifacts are referenced by the execution-report APIs.", params(("job_id" = Uuid, Path)),
     responses((status = 200, description = "Report job", body = ReportJobSnapshot), (status = 404, description = "Job not found", body = ErrorResponse), (status = 503, description = "Reports unavailable", body = ErrorResponse)))]
+/// HTTP handler: return job snapshot by id.
 pub async fn report_status(
     State(state): State<Arc<AppState>>,
     AxumPath(job_id): AxumPath<Uuid>,
@@ -94,6 +97,7 @@ pub async fn report_status(
 
 #[utoipa::path(post, path = "/upload-confluence", tag = "Reports", summary = "Upload generated report to Confluence", description = "Validates a root-contained generated report, creates or updates its Confluence page, and uploads referenced image attachments.", request_body = ConfluenceUploadRequest,
     responses((status = 202, description = "Report uploaded", body = super::ConfluenceUploadResponse), (status = 400, description = "Invalid request or report missing", body = ErrorResponse), (status = 500, description = "Confluence configuration or artifact access failed", body = ErrorResponse), (status = 502, description = "Confluence request failed", body = ErrorResponse), (status = 503, description = "Reports unavailable", body = ErrorResponse)))]
+/// HTTP handler: upload an existing report package to Confluence.
 pub async fn upload_confluence(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfluenceUploadRequest>,
@@ -128,6 +132,7 @@ pub async fn upload_confluence(
     }
 }
 
+/// Report error.
 fn report_error(status: StatusCode, code: &str, message: &str) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("reports::http", "report_error");
     (

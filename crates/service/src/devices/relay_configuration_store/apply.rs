@@ -1,3 +1,7 @@
+//! Persist relay channel configuration and compute edge controller actions.
+//!
+//! Used by configure-relay HTTP handlers before outbound edge commands.
+
 use std::collections::HashSet;
 
 use sea_orm::{
@@ -20,6 +24,7 @@ use super::super::{
 };
 use super::mappings::{clear_gpio_mapping, upsert_gpio_mapping};
 
+/// Domain/DTO type `ChannelContext` used across device stores and handlers.
 struct ChannelContext {
     controller_address: String,
     mappings: Value,
@@ -29,18 +34,22 @@ struct ChannelContext {
     channel_state: String,
 }
 
+/// Domain/DTO type `DeviceContext` used across device stores and handlers.
 struct DeviceContext {
     device_id: String,
     mac_address: Option<String>,
     device_generation: Option<String>,
 }
 
+/// Domain/DTO type `ExistingMapping` used across device stores and handlers.
 struct ExistingMapping {
     channel_id: Uuid,
     relay_serial: String,
     channel_number: i32,
 }
 
+/// PURPOSE: Apply one or many channel↔device mappings and collect edge actions.
+/// USE: Configure-relay HTTP handler after validation.
 pub(crate) async fn configure(
     orm: &DatabaseConnection,
     configurations: &[RelayChannelConfiguration],
@@ -69,6 +78,8 @@ pub(crate) async fn configure(
     Ok(RelayConfigurationResult { channels, actions })
 }
 
+/// PURPOSE: Apply or confirm `configure channel` configuration.
+/// USE: Relay configuration handlers and timeout workers.
 async fn configure_channel(
     transaction: &impl ConnectionTrait,
     configuration: &RelayChannelConfiguration,
@@ -185,6 +196,8 @@ async fn configure_channel(
     load_channel_json(transaction, configuration.channel_id).await
 }
 
+/// PURPOSE: Load or save `load existing mapping`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_existing_mapping(
     transaction: &impl ConnectionTrait,
     device_id: &str,
@@ -195,6 +208,7 @@ async fn load_existing_mapping(
         .filter(relay_channel::Column::Id.ne(channel_id))
         .filter(relay_channel::Column::DeletedAt.is_null())
         .find_also_related(relay::Entity)
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(transaction)
         .await?
@@ -211,6 +225,8 @@ async fn load_existing_mapping(
     }))
 }
 
+/// PURPOSE: Load or save `load channel`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_channel(
     transaction: &impl ConnectionTrait,
     configuration: &RelayChannelConfiguration,
@@ -220,6 +236,7 @@ async fn load_channel(
     let channel = relay_channel::Entity::find_by_id(configuration.channel_id)
         .filter(relay_channel::Column::RelayId.eq(configuration.relay_id))
         .filter(relay_channel::Column::DeletedAt.is_null())
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(transaction)
         .await?
@@ -242,6 +259,7 @@ async fn load_channel(
     let controller = device_controller::Entity::find()
         .filter(device_controller::Column::DeviceControllerId.eq(&relay_row.device_controller_id))
         .filter(device_controller::Column::DeletedAt.is_null())
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(transaction)
         .await?
@@ -271,6 +289,8 @@ async fn load_channel(
     })
 }
 
+/// PURPOSE: Load or save `load device`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_device(
     transaction: &impl ConnectionTrait,
     device_id: &str,
@@ -289,6 +309,8 @@ async fn load_device(
         }))
 }
 
+/// PURPOSE: Load or save `save mappings`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn save_mappings(
     transaction: &impl ConnectionTrait,
     relay_id: Uuid,
@@ -312,6 +334,8 @@ async fn save_mappings(
     Ok(())
 }
 
+/// PURPOSE: Serialize `load channel json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 async fn load_channel_json(
     transaction: &impl ConnectionTrait,
     channel_id: Uuid,
@@ -327,6 +351,8 @@ async fn load_channel_json(
         .ok_or_else(|| DeviceRepositoryError::NotFound("Relay channel not found".to_owned()))
 }
 
+/// PURPOSE: Normalize `normalized device id` (MAC/keys) for stable lookups.
+/// USE: Registration, mapping, and heartbeat correlation paths.
 fn normalized_device_id(configuration: &RelayChannelConfiguration) -> Option<&str> {
     let _api_trace = crate::observability::ApiTrace::enter(
         "devices::relay_configuration_store::apply",
@@ -339,6 +365,8 @@ fn normalized_device_id(configuration: &RelayChannelConfiguration) -> Option<&st
         .filter(|device_id| !device_id.is_empty())
 }
 
+/// PURPOSE: Implement `device_mac` domain/persistence logic.
+/// USE: Called as `device_mac` from handlers, repository impls, or sibling helpers.
 fn device_mac(device: &DeviceContext) -> String {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::relay_configuration_store::apply", "device_mac");

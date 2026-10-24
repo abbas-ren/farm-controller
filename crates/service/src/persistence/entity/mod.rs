@@ -1,3 +1,11 @@
+//! SeaORM entity modules mirroring device-service Sequelize models.
+//!
+//! Each submodule maps one PostgreSQL table used by FarmController. Column names
+//! keep the legacy camelCase (or snake_case for `alerts`) shape so the Rust
+//! service can share the same schema as `farm_controller_old/device-service`.
+//! Callers import entities through this module when building queries, ActiveModels,
+//! or relation joins in services and workers.
+
 pub mod alert;
 pub mod device;
 pub mod device_action_queue;

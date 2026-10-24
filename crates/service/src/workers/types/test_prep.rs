@@ -1,3 +1,6 @@
+//! Claim shapes for the test-preparation worker (legacy TestWorker / ArtifactsWorker prep).
+
+/// Test execution ready to move from queue into artifact / script preparation.
 #[derive(Debug, sea_orm::FromQueryResult)]
 pub struct TestPreparation {
     pub test_id: String,
@@ -13,6 +16,7 @@ pub struct TestPreparation {
     pub artifacts: serde_json::Value,
 }
 
+/// Selected test-case row used when materializing scripts for a preparation job.
 #[derive(Debug, sea_orm::FromQueryResult)]
 pub struct TestPreparationCase {
     pub test_case_id: i64,

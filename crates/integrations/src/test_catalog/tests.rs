@@ -1,3 +1,5 @@
+//! Wiremock coverage for TestRail pagination, runs, and script download bounds.
+
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_json, header, method, path, query_param},
@@ -5,6 +7,8 @@ use wiremock::{
 
 use super::*;
 
+/// PURPOSE: Plans paginate + filter; suites/cases map wire fields and clean HTML.
+/// USE: regression for TestRail catalog HTTP mapping.
 #[tokio::test]
 async fn test_rail_plans_follow_pagination_and_filter() {
     let server = MockServer::start().await;
@@ -83,6 +87,8 @@ async fn test_rail_plans_follow_pagination_and_filter() {
     assert_eq!(cases[0].labels, vec!["smoke"]);
 }
 
+/// PURPOSE: create_run returns id; scripts are size-bounded and path-traversal safe.
+/// USE: regression for TestRail run creation and script download hardening.
 #[tokio::test]
 async fn test_rail_creates_runs_and_bounds_script_downloads() {
     let server = MockServer::start().await;

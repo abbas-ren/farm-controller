@@ -1,3 +1,7 @@
+//! Performance-graph orchestration: parse metrics logs and render chart images.
+//!
+//! Used by the report worker after suite artifacts are written.
+
 use std::{collections::BTreeMap, io, path::Path};
 
 use serde::Serialize;
@@ -33,6 +37,7 @@ struct MetricEntry {
     target_name: Option<&'static str>,
 }
 
+/// Write.
 pub(super) async fn write(
     results_root: &Path,
     current_root: &Path,
@@ -282,6 +287,7 @@ pub(super) async fn write(
     Ok(())
 }
 
+/// Normalized capability.
 fn normalized_capability(value: f64, old: f64, new: f64, target: f64) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "normalized_capability");
     let target = if target > 0.0 {
@@ -292,6 +298,7 @@ fn normalized_capability(value: f64, old: f64, new: f64, target: f64) -> f64 {
     (value / target).clamp(0.0, 1.0)
 }
 
+/// Fixed labels.
 fn fixed_labels(category: &str) -> &'static [&'static str] {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "fixed_labels");
     match category {
@@ -332,6 +339,7 @@ fn fixed_labels(category: &str) -> &'static [&'static str] {
     }
 }
 
+/// Ordered values.
 fn ordered_values(category: &str, entries: &[MetricEntry]) -> (Vec<String>, Vec<f64>, Vec<f64>) {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "ordered_values");
     if matches!(category, "DMA" | "GPU") {
@@ -366,6 +374,7 @@ fn ordered_values(category: &str, entries: &[MetricEntry]) -> (Vec<String>, Vec<
     )
 }
 
+/// Average.
 fn average(values: impl Iterator<Item = f64>) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "average");
     let values = values.collect::<Vec<_>>();
@@ -381,6 +390,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Categories follow legacy aliases.
     fn categories_follow_legacy_aliases() {
         let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "categories_follow_legacy_aliases");
         assert_eq!(canonical_category("File System"), Some("Storage"));

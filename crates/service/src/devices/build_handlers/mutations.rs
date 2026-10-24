@@ -1,3 +1,7 @@
+//! Build flag, status, and delete mutation handlers.
+//!
+//! Ports Node `BuildController.setFlagged`, status updates, and `deleteBuild`.
+
 use super::super::{error_response, repository_error};
 use crate::{
     auth,
@@ -20,6 +24,8 @@ use super::super::{BuildFlagRequest, BuildStatusRequest, BuildStatusResponse};
 
 const BUILD_STATUSES: [&str; 4] = ["untested", "testing", "passed", "failed"];
 
+/// PURPOSE: Set build validation status
+/// USE: Frontend admin UI (bearer + admin role).
 #[utoipa::path(put, path = "/api/v1/device/build/{id}/status", tag = "Builds", summary = "Set build validation status", description = "Allows an administrator to set the persisted build lifecycle status, synchronizes the faulty flag, and publishes the committed status event.", params(("id" = String, Path)), security(("bearer_auth" = [])), request_body = BuildStatusRequest, responses((status = 200, description = "Build status updated", body = BuildStatusResponse), (status = 400, description = "Invalid build status", body = crate::error::ErrorResponse), (status = 401, description = "Authentication required", body = crate::error::ErrorResponse), (status = 403, description = "Administrator role required", body = crate::error::ErrorResponse), (status = 404, description = "Build not found", body = crate::error::ErrorResponse), (status = 503, description = "Device persistence unavailable", body = crate::error::ErrorResponse)))]
 pub async fn update_build_status(
     State(state): State<Arc<AppState>>,
@@ -28,6 +34,7 @@ pub async fn update_build_status(
     Json(request): Json<BuildStatusRequest>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "update_build_status");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -41,6 +48,7 @@ pub async fn update_build_status(
         );
     }
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -82,10 +90,13 @@ pub async fn update_build_status(
                 .into_response()
         }
         Ok(None) => error_response(StatusCode::NOT_FOUND, "not_found", "Build not found"),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to update build status"),
     }
 }
 
+/// PURPOSE: Flag or unflag a build
+/// USE: Frontend admin UI (bearer + admin role).
 #[utoipa::path(put, path = "/api/v1/device/build/{id}/flag", tag = "Builds", summary = "Flag or unflag a build", description = "Atomically updates the release fault/status fields, then publishes the committed build event and persisted alert.", params(("id" = String, Path)), security(("bearer_auth" = [])), request_body = BuildFlagRequest, responses((status = 200, description = "Build flag updated", body = super::super::BuildFlagResponse), (status = 400, description = "isFaulty boolean is required", body = crate::error::ErrorResponse), (status = 401, description = "Authentication required", body = crate::error::ErrorResponse), (status = 403, description = "Administrator role required", body = crate::error::ErrorResponse), (status = 500, description = "Build not found or update failed", body = crate::error::ErrorResponse), (status = 503, description = "Device persistence unavailable", body = crate::error::ErrorResponse)))]
 pub async fn flag_build(
     State(state): State<Arc<AppState>>,
@@ -94,6 +105,7 @@ pub async fn flag_build(
     payload: Result<Json<BuildFlagRequest>, JsonRejection>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "flag_build");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -109,6 +121,7 @@ pub async fn flag_build(
         }
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -148,10 +161,13 @@ pub async fn flag_build(
             "internal",
             &format!("Release not found: {build_id}"),
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to flag build"),
     }
 }
 
+/// PURPOSE: Delete a build
+/// USE: Frontend admin UI (bearer + admin role); also used by workers / other handlers.
 #[utoipa::path(delete, path = "/api/v1/device/build/{id}", tag = "Builds", summary = "Delete a build", description = "Deletes the release, then best-effort removes safe local and controller IPL artifacts before publishing the committed alert/event.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 204, description = "Build deleted"), (status = 401, description = "Authentication required", body = crate::error::ErrorResponse), (status = 403, description = "Administrator role required", body = crate::error::ErrorResponse), (status = 500, description = "Build not found or deletion failed", body = crate::error::ErrorResponse), (status = 503, description = "Device persistence unavailable", body = crate::error::ErrorResponse)))]
 pub async fn delete_build(
     State(state): State<Arc<AppState>>,
@@ -159,11 +175,13 @@ pub async fn delete_build(
     Path(build_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "delete_build");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -213,10 +231,13 @@ pub async fn delete_build(
             "internal",
             &format!("Release not found: {build_id}"),
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to delete build"),
     }
 }
 
+/// PURPOSE: Reject path traversal segments in faulty-report paths.
+/// USE: Download path construction.
 fn safe_segment(value: &str) -> bool {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "safe_segment");
     let mut components = std::path::Path::new(value).components();

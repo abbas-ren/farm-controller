@@ -1,3 +1,9 @@
+//! Controller edit / delete persistence helpers.
+//!
+//! Called from `ControllerRepository` Postgres methods and controller HTTP
+//! handlers. Ports Node `DeviceService` controller update/delete, including
+//! the Gen5 family switch that hard-deletes attached relays and channels.
+
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait, sea_query::Expr,
 };
@@ -9,6 +15,8 @@ use super::{
     repository_types::ControllerDeleteTarget,
 };
 
+/// PURPOSE: Update controller name/family/IP; clear Gen5 relays when family becomes Gen5.
+/// USE: Controller edit API; returns updated controller JSON or `None` if missing/soft-deleted.
 pub(crate) async fn edit(
     orm: &DatabaseConnection,
     controller_id: &str,
@@ -24,6 +32,7 @@ pub(crate) async fn edit(
     if !exists {
         return Ok(None);
     }
+    // Legacy DeviceService: switching to Gen5 removes prior relay wiring for that controller.
     if request
         .device_family
         .as_deref()
@@ -82,6 +91,8 @@ pub(crate) async fn edit(
     Ok(controller)
 }
 
+/// PURPOSE: Load controller IP/family needed before outbound delete to the edge.
+/// USE: Controller delete handler gathers edge target before hard-deleting the row.
 pub(crate) async fn delete_target(
     orm: &DatabaseConnection,
     controller_id: &str,
@@ -100,6 +111,8 @@ pub(crate) async fn delete_target(
     )
 }
 
+/// PURPOSE: Hard-delete a controller row by id.
+/// USE: After edge cleanup succeeds in the controller delete handler.
 pub(crate) async fn delete(
     orm: &DatabaseConnection,
     controller_id: &str,

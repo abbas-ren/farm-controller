@@ -21,11 +21,13 @@ pub struct KeycloakIdentityProvider {
 
 #[async_trait]
 impl IdentityProvider for KeycloakIdentityProvider {
+    /// Signin.
     async fn signin(&self, username: &str, password: &str) -> Result<SigninResult, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mod", "signin");
         self.signin_impl(username, password).await
     }
 
+    /// Validate.
     async fn validate(
         &self,
         access_token: &str,
@@ -37,6 +39,7 @@ impl IdentityProvider for KeycloakIdentityProvider {
             .await
     }
 
+    /// Request registration.
     async fn request_registration(
         &self,
         request: &RegistrationRequest,
@@ -45,31 +48,37 @@ impl IdentityProvider for KeycloakIdentityProvider {
         self.request_registration_impl(request).await
     }
 
+    /// Pending users.
     async fn pending_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mod", "pending_users");
         self.pending_users_impl().await
     }
 
+    /// Managed users.
     async fn managed_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mod", "managed_users");
         self.managed_users_impl().await
     }
 
+    /// User by id.
     async fn user_by_id(&self, user_id: &str) -> Result<ManagedUser, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mod", "user_by_id");
         self.user_by_id_impl(user_id).await
     }
 
+    /// Delete user.
     async fn delete_user(&self, user_id: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mod", "delete_user");
         self.delete_user_impl(user_id).await
     }
 
+    /// Verify reset user.
     async fn verify_reset_user(&self, token: &str, user_id: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mod", "verify_reset_user");
         self.verify_reset_user_impl(token, user_id).await
     }
 
+    /// Reset password.
     async fn reset_password(
         &self,
         token: &str,
@@ -80,11 +89,13 @@ impl IdentityProvider for KeycloakIdentityProvider {
         self.reset_password_impl(token, user_id, password).await
     }
 
+    /// Forgot password.
     async fn forgot_password(&self, username: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mod", "forgot_password");
         self.forgot_password_impl(username).await
     }
 
+    /// Register user.
     async fn register_user(
         &self,
         request: &AdminRegistrationRequest,
@@ -93,6 +104,7 @@ impl IdentityProvider for KeycloakIdentityProvider {
         self.register_user_impl(request).await
     }
 
+    /// Registration action.
     async fn registration_action(
         &self,
         request: &RegistrationActionRequest,

@@ -1,3 +1,10 @@
+//! Application configuration loading, module selection, and validation.
+//!
+//! Replaces scattered `appConfig` / env parsing from `farm_controller_old`
+//! (auth-service and device-service) with a single TOML + `FARMCONTROLLER__*`
+//! environment model. Higher crates (`farmcontroller` service, integrations,
+//! app binary) consume [`AppConfig`] after CLI merge and [`AppConfig::validate`].
+
 #[cfg(test)]
 pub mod tests;
 
@@ -8,21 +15,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::{cli::Cli, error::AppError};
 
+/// Runtime feature modules that can be enabled or disabled per process.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Module {
+    /// HTTP API surface (required by auth/device/reports).
     Api,
+    /// Keycloak-backed authentication routes.
     Auth,
+    /// Device inventory, queues, and controller APIs.
     Device,
+    /// Execution report generation and Confluence publish.
     Reports,
+    /// Background workers (scan, retention, queues, watchdogs).
     Workers,
+    /// WebSocket/SSH terminal and event streaming.
     Events,
+    /// Prometheus `/metrics` endpoint.
     Metrics,
+    /// OpenAPI Swagger UI.
     Swagger,
+    /// Liveness/readiness health endpoints.
     Health,
 }
 
 impl Module {
+    /// Complete set of modules; used when CLI passes `--enable all`.
     pub const ALL: [Self; 9] = [
         Self::Api,
         Self::Auth,
@@ -36,8 +54,10 @@ impl Module {
     ];
 }
 
+/// CLI value for `--enable` / `--disable`, including the `all` shortcut.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ModuleSelection {
+    /// Enable every module in [`Module::ALL`].
     All,
     Api,
     Auth,
@@ -51,6 +71,8 @@ pub enum ModuleSelection {
 }
 
 impl ModuleSelection {
+    /// PURPOSE: Expand a CLI selection into concrete [`Module`] values.
+    /// USE: Applied when merging `--enable`/`--disable` into loaded config.
     fn modules(self) -> Vec<Module> {
         match self {
             Self::All => Module::ALL.to_vec(),
@@ -67,6 +89,7 @@ impl ModuleSelection {
     }
 }
 
+/// Root configuration object loaded from TOML, env, and CLI overrides.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppConfig {
     #[serde(default)]
@@ -89,6 +112,10 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
 }
 
+/// TestRail, QMetry, Jira, GitLab, and local script-server settings.
+///
+/// Ports env-driven test tooling config from the old device-service TestService
+/// and related helpers into one typed section under `[tests]`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TestsConfig {
     #[serde(default)]
@@ -142,6 +169,8 @@ pub struct TestsConfig {
 }
 
 impl Default for TestsConfig {
+    /// PURPOSE: Provide empty/local defaults so partial TOML still deserializes.
+    /// USE: Invoked by serde defaults and tests that build minimal configs.
     fn default() -> Self {
         Self {
             test_rail_base_url: String::new(),
@@ -172,34 +201,45 @@ impl Default for TestsConfig {
     }
 }
 
+/// Default HTTP timeout (seconds) shared by TestRail/QMetry/Jira clients.
 fn default_test_rail_timeout() -> u64 {
     30
 }
 
+/// Default Jira REST API path segment joined under `jira_base_url`.
 fn default_jira_endpoint() -> String {
     "rest/api/2".to_owned()
 }
 
+/// Default on-disk directory for per-execution test logs.
 fn default_test_logs_dir() -> String {
     "../log_data/test/logs".to_owned()
 }
 
+/// Default script source: `"gitlab"` or `"local"`.
 fn default_test_script_server() -> String {
     "gitlab".to_owned()
 }
 
+/// Default base URL when `test_script_server` is `local`.
 fn default_local_test_script_url() -> String {
     "http://127.0.0.1:8081".to_owned()
 }
 
+/// Default Git branch for raw script fetches.
 fn default_gitlab_branch() -> String {
     "main".to_owned()
 }
 
+/// Default max download size for test scripts (500 MiB).
 fn default_test_script_max_bytes() -> usize {
     500 * 1024 * 1024
 }
 
+/// Device, artifact, NFS/TFTP, and IPL/SSH operational settings.
+///
+/// Consolidates paths and credentials formerly spread across device-service
+/// env vars for flash, terminal, and Gen4/Gen5 IPL distribution.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DeviceConfig {
     #[serde(default)]
@@ -265,6 +305,8 @@ pub struct DeviceConfig {
 }
 
 impl Default for DeviceConfig {
+    /// PURPOSE: Supply safe local-dev path defaults for device operations.
+    /// USE: Serde defaults when `[device]` is omitted from TOML.
     fn default() -> Self {
         Self {
             artifacts_base_url: String::new(),
@@ -301,90 +343,112 @@ impl Default for DeviceConfig {
     }
 }
 
+/// Scratch directory for downloaded/extracted artifacts.
 fn default_artifacts_temp_dir() -> String {
     "./tmp/artifacts".to_owned()
 }
 
+/// Host path where NFS shares are mounted for DUT staging.
 fn default_nfs_host_path() -> String {
     "/nfs_share".to_owned()
 }
 
+/// Directory written for TFTP boot artifacts.
 fn default_tftp_output_dir() -> String {
     "./tftp_data".to_owned()
 }
 
+/// Staging directory for multipart build uploads.
 fn default_build_upload_dir() -> String {
     "./tmp/uploads".to_owned()
 }
 
+/// Max total upload size for a build session (100 GiB).
 fn default_build_upload_max_bytes() -> u64 {
     100 * 1024 * 1024 * 1024
 }
 
+/// Canonical artifacts root scanned by the artifacts worker.
 fn default_build_artifacts_dir() -> String {
     "/artifacts".to_owned()
 }
 
+/// Expected rootfs archive suffix when locating flash images.
 fn default_rootfs_archive_extension() -> String {
     ".tar.bz2".to_owned()
 }
 
+/// Directory for faulty-report evidence uploads.
 fn default_faulty_report_upload_dir() -> String {
     "./uploads/faulty-reports".to_owned()
 }
 
+/// Max size of a single faulty-report upload (100 MiB).
 fn default_faulty_report_max_bytes() -> u64 {
     100 * 1024 * 1024
 }
 
+/// FarmController address advertised to controllers/devices.
 fn default_device_server_ip() -> String {
     "127.0.0.1".to_owned()
 }
 
+/// Short HTTP timeout (seconds) for device-controller calls.
 fn default_device_request_timeout() -> u64 {
     2
 }
 
+/// Default SSH user for interactive terminal sessions.
 fn default_terminal_username() -> String {
     "root".to_owned()
 }
 
+/// SSH connect timeout (seconds) for terminal/events.
 fn default_terminal_connect_timeout() -> u64 {
     20
 }
 
+/// Default SSH user for RTOS log collection.
 fn default_rtos_username() -> String {
     "hpcbdc".to_owned()
 }
 
+/// When true, SSH accepts unknown host keys (dev-friendly default).
 fn default_accept_unknown_host_keys() -> bool {
     true
 }
 
+/// Local directory holding IPL flash scripts/artifacts.
 fn default_ipl_artifacts_dir() -> String {
     "/Racer_IPL_flash".to_owned()
 }
 
+/// Path to the Gen5 IPL shell script invoked during flash prep.
 fn default_gen5_ipl_script() -> String {
     "/Racer_IPL_flash/gen5_ipl.sh".to_owned()
 }
 
+/// Timeout (seconds) for IPL file transfer over SSH/SCP.
 fn default_ipl_transfer_timeout() -> u64 {
     120
 }
 
+/// Default SSH port for Gen4/Gen5 IPL distribution.
 fn default_ssh_port() -> u16 {
     22
 }
 
+/// Remote directory on Gen4 devices for IPL payload delivery.
 fn default_gen4_ipl_remote_path() -> String {
     "/home/hpcbdc/RACER_IPL".to_owned()
 }
 
+/// Remote directory on Gen5 devices for IPL payload delivery.
 fn default_gen5_ipl_remote_path() -> String {
     "/home/racer/RACER_IPL".to_owned()
 }
 
+/// HTTP listener bind address, body limits, and CORS allow-list.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
@@ -393,6 +457,8 @@ pub struct ServerConfig {
 }
 
 impl Default for ServerConfig {
+    /// PURPOSE: Bind `0.0.0.0:3000` with a 50 MiB body limit and empty CORS.
+    /// USE: Applied when `[server]` is omitted from configuration.
     fn default() -> Self {
         Self {
             bind: "0.0.0.0:3000"
@@ -404,6 +470,7 @@ impl Default for ServerConfig {
     }
 }
 
+/// Enabled/disabled module sets from TOML `[modules]` before CLI merge.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ModulesConfig {
     #[serde(default = "all_modules", rename = "enable")]
@@ -412,10 +479,14 @@ pub struct ModulesConfig {
     disabled: BTreeSet<Module>,
 }
 
+/// PURPOSE: Default serde value when `modules.enable` is absent as "all".
+/// USE: Only via serde `default = "all_modules"` on the enabled field rename.
 fn all_modules() -> BTreeSet<Module> {
     Module::ALL.into_iter().collect()
 }
 
+/// PURPOSE: Baseline modules for a fresh install (api/metrics/swagger/health).
+/// USE: [`ModulesConfig::default`] when no modules section is provided.
 fn default_modules() -> BTreeSet<Module> {
     [
         Module::Api,
@@ -428,6 +499,8 @@ fn default_modules() -> BTreeSet<Module> {
 }
 
 impl Default for ModulesConfig {
+    /// PURPOSE: Start with [`default_modules`] and no disables.
+    /// USE: Constructor path when loading config without a modules table.
     fn default() -> Self {
         Self {
             enabled: default_modules(),
@@ -436,6 +509,9 @@ impl Default for ModulesConfig {
     }
 }
 
+/// Keycloak / OIDC settings for the auth module.
+///
+/// Ports `auth-service` Keycloak configuration into `[auth]`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuthConfig {
     pub keycloak_url: String,
@@ -449,6 +525,8 @@ pub struct AuthConfig {
 }
 
 impl Default for AuthConfig {
+    /// PURPOSE: Local-dev Keycloak defaults (must be overridden in production).
+    /// USE: Serde default when `[auth]` is omitted.
     fn default() -> Self {
         Self {
             keycloak_url: "http://127.0.0.1:9000".to_owned(),
@@ -463,6 +541,7 @@ impl Default for AuthConfig {
     }
 }
 
+/// Postgres pool sizing and optional auto-migration flag.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DatabaseConfig {
     pub url: Option<String>,
@@ -475,6 +554,8 @@ pub struct DatabaseConfig {
 }
 
 impl Default for DatabaseConfig {
+    /// PURPOSE: Conservative pool defaults with migrations enabled and no URL.
+    /// USE: Serde default; validate requires URL when DB-backed modules run.
     fn default() -> Self {
         Self {
             url: None,
@@ -488,6 +569,10 @@ impl Default for DatabaseConfig {
     }
 }
 
+/// Poll intervals, batch sizes, and timeouts for background workers.
+///
+/// Replaces ad-hoc timers from device-service worker modules (artifacts,
+/// heartbeats, action queue, Gen5 mapping/reboot, retention).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WorkersConfig {
     pub artifact_scan_poll_seconds: u64,
@@ -523,16 +608,22 @@ pub struct WorkersConfig {
     pub gen5_reboot_batch_size: u32,
 }
 
+/// How the artifacts scanner treats releases removed from disk.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactCleanup {
+    /// Leave orphaned DB release rows alone.
     Off,
+    /// Soft-delete DB rows when files disappear.
     Soft,
+    /// Hard-delete DB rows when files disappear (default).
     #[default]
     Delete,
 }
 
 impl Default for WorkersConfig {
+    /// PURPOSE: Production-ish poll/batch defaults for all worker loops.
+    /// USE: Serde default when `[workers]` is omitted.
     fn default() -> Self {
         Self {
             artifact_scan_poll_seconds: 60,
@@ -570,6 +661,7 @@ impl Default for WorkersConfig {
     }
 }
 
+/// Report generation paths and Confluence publish credentials.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ReportsConfig {
     pub test_results_dir: PathBuf,
@@ -585,6 +677,8 @@ pub struct ReportsConfig {
 }
 
 impl Default for ReportsConfig {
+    /// PURPOSE: Local path defaults with empty Confluence credentials.
+    /// USE: Serde default when `[reports]` is omitted.
     fn default() -> Self {
         Self {
             test_results_dir: PathBuf::from("/test-results"),
@@ -600,6 +694,7 @@ impl Default for ReportsConfig {
     }
 }
 
+/// Tracing filter, JSON mode, file path, console stream, and optional UDP sink.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
@@ -614,20 +709,27 @@ pub struct LoggingConfig {
     pub network: Option<SocketAddr>,
 }
 
+/// Console destination for the logging subscriber.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum LogStream {
+    /// Write to process stdout.
     #[default]
     Stdout,
+    /// Write to process stderr.
     Stderr,
+    /// Disable console logging (file/network may still be active).
     Off,
 }
 
+/// Default tracing filter when none is configured.
 fn default_log_level() -> String {
     "info".to_owned()
 }
 
 impl Default for LoggingConfig {
+    /// PURPOSE: Info-level stdout logging with no file/network sinks.
+    /// USE: Serde default; validate requires at least one sink.
     fn default() -> Self {
         Self {
             level: "info".to_owned(),
@@ -640,6 +742,9 @@ impl Default for LoggingConfig {
 }
 
 impl AppConfig {
+    /// PURPOSE: Load TOML + env, then apply CLI overrides and validate.
+    /// USE: Process entry (`main`) and config tests. Side effects: reads the
+    /// optional config file and environment variables with prefix `FARMCONTROLLER`.
     pub fn load(cli: &Cli) -> Result<Self, AppError> {
         let mut builder = config::Config::builder();
         if let Some(path) = &cli.config {
@@ -669,6 +774,7 @@ impl AppConfig {
             .try_deserialize()
             .map_err(|error| AppError::Configuration(error.to_string()))?;
 
+        // TOML/env disables first, then CLI --enable/--disable (CLI disable wins).
         loaded
             .modules
             .enabled
@@ -704,17 +810,26 @@ impl AppConfig {
         Ok(loaded)
     }
 
+    /// PURPOSE: Query whether a feature module is active after merge.
+    /// USE: Route/worker registration and conditional validation rules.
     pub fn module_enabled(&self, module: Module) -> bool {
         self.modules.enabled.contains(&module)
     }
 
+    /// PURPOSE: True when any module that needs Postgres is enabled.
+    /// USE: Gate `database.url` validation and pool bootstrap.
     pub fn database_required(&self) -> bool {
         [Module::Device, Module::Reports, Module::Workers]
             .into_iter()
             .any(|module| self.module_enabled(module))
     }
 
+    /// PURPOSE: Enforce cross-field invariants before the process starts.
+    /// USE: Called at the end of [`Self::load`] and in unit tests that mutate
+    /// config. Rejects unsafe URLs, empty required secrets, and module graphs
+    /// that cannot run (e.g. device without api).
     pub fn validate(&self) -> Result<(), AppError> {
+        // Reject configs that would silently drop all logs.
         if self.logging.stream == LogStream::Off
             && self.logging.file.is_none()
             && self.logging.network.is_none()
@@ -744,6 +859,7 @@ impl AppConfig {
                 )));
             }
         }
+        // Shared SSRF/credential policy for every outbound base URL.
         for (name, value) in [
             ("auth.keycloak_url", self.auth.keycloak_url.as_str()),
             (
@@ -932,6 +1048,7 @@ impl AppConfig {
                 "reports.confluence_timeout_seconds must be greater than zero".to_owned(),
             ));
         }
+        // Partial Jira config is useless and would create confusing client errors later.
         let jira_values = [
             self.tests.jira_base_url.trim(),
             self.tests.jira_project_key.trim(),

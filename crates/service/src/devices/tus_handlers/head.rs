@@ -1,3 +1,7 @@
+//! TUS HEAD handler returning Upload-Offset for an in-progress upload.
+//!
+//! Ports Node TUS HEAD `/build/upload/tus/{id}`.
+
 use std::{path::Path, sync::Arc};
 
 use axum::{
@@ -34,6 +38,8 @@ use super::{super::tus_store, *};
         (status = 500, description = "Upload storage inspection failed")
     )
 )]
+/// PURPOSE: Inspect a resumable build upload offset and declared length.
+/// USE: TUS clients resuming an interrupted upload.
 pub async fn head(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

@@ -1,3 +1,7 @@
+//! Multipart / init build upload handlers (non-TUS).
+//!
+//! Ports Node `BuildController.initUpload`, `uploadCustom`, and `uploadOfficial`.
+
 use std::sync::Arc;
 
 use axum::{
@@ -43,6 +47,8 @@ struct BuildUploadMultipart {
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Upload a custom build archive (tag required) and stage NFS/TFTP artifacts.
+/// USE: Authenticated frontend multipart upload (bearer).
 pub async fn upload_custom(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -69,6 +75,8 @@ pub async fn upload_custom(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Upload an official build archive, stage artifacts, and queue first flash.
+/// USE: Frontend admin multipart upload (bearer + admin role).
 pub async fn upload_official(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -78,6 +86,8 @@ pub async fn upload_official(
     upload_multipart(state, headers, multipart, false).await
 }
 
+/// PURPOSE: Shared multipart stream/validate/finalize path for custom and official uploads.
+/// USE: upload_custom and upload_official handlers.
 async fn upload_multipart(
     state: Arc<AppState>,
     headers: HeaderMap,
@@ -205,6 +215,7 @@ async fn upload_multipart(
     }
     let Some(repository) = &state.device_repository else {
         let _ = tokio::fs::remove_file(path).await;
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -227,6 +238,7 @@ async fn upload_multipart(
         .await
     {
         let _ = tokio::fs::remove_file(path).await;
+        // Map: translate repository failure into the legacy HTTP error envelope.
         return repository_error(error, "Failed to start build upload");
     }
     upload_events::progress(&state, &user_id, &upload_id, 0);
@@ -247,12 +259,15 @@ async fn upload_multipart(
 }
 
 #[utoipa::path(post, path = "/api/v1/device/build/upload/init", tag = "Builds", summary = "Initialize a build upload", description = "Creates the legacy durable upload session used to correlate one through five multipart or TUS archive uploads.", security(("bearer_auth" = [])), request_body = BuildUploadInitRequest, responses((status = 201, description = "Upload initialized", body = BuildUploadInitResponse), (status = 400, description = "Invalid file count", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Upload initialization failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
+/// PURPOSE: Initialize a durable build upload session (fileCount 1–5).
+/// USE: Authenticated frontend before multipart or TUS archive uploads.
 pub async fn init_upload(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     payload: Result<Json<BuildUploadInitRequest>, JsonRejection>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::uploads", "init_upload");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -272,6 +287,7 @@ pub async fn init_upload(
         );
     }
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -289,6 +305,7 @@ pub async fn init_upload(
             Json(BuildUploadInitResponse { upload_id }),
         )
             .into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to initialize build upload"),
     }
 }

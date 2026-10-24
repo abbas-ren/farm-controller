@@ -1,3 +1,5 @@
+//! Self-service and admin registration + pending-user approval actions.
+
 use super::super::transport::{self, KeycloakRole};
 use super::KeycloakIdentityProvider;
 use super::mapping;
@@ -7,6 +9,7 @@ use crate::auth::{
 };
 
 impl KeycloakIdentityProvider {
+    /// Create a pending Keycloak user from a self-service registration request.
     pub(super) async fn request_registration_impl(
         &self,
         request: &RegistrationRequest,
@@ -36,6 +39,7 @@ impl KeycloakIdentityProvider {
         Ok(mapping::pending_registration_response(&user_id, request))
     }
 
+    /// Admin-created user with roles; returns credentials / id for the UI.
     pub(super) async fn register_user_impl(
         &self,
         request: &AdminRegistrationRequest,
@@ -123,6 +127,7 @@ impl KeycloakIdentityProvider {
         })
     }
 
+    /// Approve or reject a pending registration request.
     pub(super) async fn registration_action_impl(
         &self,
         request: &RegistrationActionRequest,

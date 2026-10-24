@@ -1,3 +1,8 @@
+//! `farmcontroller_service` library root.
+//!
+//! Re-exports `farmcontroller_core` (`cli`, `config`, `error`, `external_http`) and
+//! integrations; `build_app` assembles the axum `Router` from [`AppState`].
+
 pub mod admin_control;
 pub mod api;
 pub mod auth;
@@ -19,6 +24,7 @@ use std::sync::Arc;
 use axum::Router;
 use state::AppState;
 
+/// Assemble the axum application router from shared AppState.
 pub fn build_app(state: Arc<AppState>) -> Router {
     api::router(state)
 }

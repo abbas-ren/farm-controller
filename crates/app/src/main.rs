@@ -1,4 +1,9 @@
 //! FarmController process composition and runtime lifecycle.
+//!
+//! This binary is the single entrypoint that replaces the separate Node
+//! `auth-service` / `device-service` process starts. It loads config, boots
+//! shared state, mounts the Axum app, starts background workers, and performs
+//! graceful shutdown on Ctrl+C / SIGTERM.
 
 use std::{future::IntoFuture, sync::Arc, time::Duration};
 
@@ -15,8 +20,12 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+/// Maximum time to wait for in-flight HTTP connections after cancel.
 const SERVER_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+/// PURPOSE: Bootstrap config, state, HTTP server, and workers; block until shutdown.
+/// USE: OS process entry. Side effects: binds the listener, starts workers,
+/// installs signal handlers, and tears everything down on cancel.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -52,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(cancellation.clone().cancelled_owned())
         .into_future();
     tokio::pin!(server);
+    // Prefer clean drain; after grace, abandon remaining connections.
     let server_result = tokio::select! {
         result = &mut server => result,
         _ = cancellation.cancelled() => {
@@ -74,6 +84,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// PURPOSE: Wait for Ctrl+C or SIGTERM (Unix) before initiating shutdown.
+/// USE: Spawned alongside the HTTP server; cancels the shared token when fired.
 async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(error) = tokio::signal::ctrl_c().await {

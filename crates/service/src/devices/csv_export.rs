@@ -1,9 +1,16 @@
+//! Format device JSON rows into a CSV string for download.
+//!
+//! Consumes the payloads from [`device_export_store`] and emits columns that
+//! match the Node `DeviceService` CSV export (fixed device fields plus dynamic
+//! `{type}_interfaces` columns).
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 
 use super::error::DeviceRepositoryError;
 
+/// Fixed leading CSV columns (device identity / lifecycle fields).
 const BASE_HEADERS: [&str; 12] = [
     "deviceId",
     "deviceName",
@@ -19,10 +26,13 @@ const BASE_HEADERS: [&str; 12] = [
     "lastConnectedOn",
 ];
 
+/// PURPOSE: Render devices (+ nested interfaces) as a CSV document.
+/// USE: Device export handler after loading rows from `device_export_store`.
 pub(crate) fn format_devices(
     devices: &[serde_json::Value],
 ) -> Result<String, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "format_devices");
+    // Dynamic columns: one per distinct interface type across the export set.
     let interface_types = devices
         .iter()
         .flat_map(interfaces)
@@ -88,6 +98,8 @@ pub(crate) fn format_devices(
         .map_err(|error| DeviceRepositoryError::Validation(format!("Invalid CSV output: {error}")))
 }
 
+/// PURPOSE: Read the `interfaces` array from a device JSON object.
+/// USE: Column discovery and per-row grouping inside `format_devices`.
 fn interfaces(device: &serde_json::Value) -> &[serde_json::Value] {
     let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "interfaces");
     device
@@ -97,6 +109,8 @@ fn interfaces(device: &serde_json::Value) -> &[serde_json::Value] {
         .unwrap_or_default()
 }
 
+/// PURPOSE: Extract a string field or empty string.
+/// USE: Fixed device columns in the CSV row.
 fn text(device: &serde_json::Value, field: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "text");
     device
@@ -106,6 +120,8 @@ fn text(device: &serde_json::Value, field: &str) -> String {
         .to_owned()
 }
 
+/// PURPOSE: Format an RFC3339 timestamp as the legacy `Fri Oct 02 2026` date string.
+/// USE: Date columns in the CSV export.
 fn date(device: &serde_json::Value, field: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "date");
     device
@@ -116,6 +132,8 @@ fn date(device: &serde_json::Value, field: &str) -> String {
         .unwrap_or_default()
 }
 
+/// PURPOSE: Wrap csv crate errors as validation failures for the HTTP layer.
+/// USE: All writer fallible calls in this module.
 fn csv_error(error: csv::Error) -> DeviceRepositoryError {
     let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "csv_error");
     DeviceRepositoryError::Validation(format!("Failed to generate CSV: {error}"))
@@ -123,9 +141,13 @@ fn csv_error(error: csv::Error) -> DeviceRepositoryError {
 
 #[cfg(test)]
 mod tests {
+    //! Unit coverage for dynamic interface columns and date formatting.
+
     use super::*;
 
     #[test]
+/// PURPOSE: Assert CSV gains dynamic interface columns and quotes joined IDs.
+/// USE: regression for Node DeviceService CSV export shape.
     fn export_adds_dynamic_interface_columns_and_quotes_lists() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "export_adds_dynamic_interface_columns_and_quotes_lists");
         let csv = format_devices(&[serde_json::json!({

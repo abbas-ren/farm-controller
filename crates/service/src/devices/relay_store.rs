@@ -1,3 +1,8 @@
+//! Modern relay inventory, power targets, and channel state persistence.
+//!
+//! Backs power / relay HTTP handlers and `PowerRelayRepository` for Gen4/Gen5
+//! controllers. Ports Node `RelayService` power and channel listing paths.
+
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, TransactionTrait,
@@ -18,6 +23,8 @@ use super::{
     repository_types::{DevicePowerTarget, RelayIdentityTarget, RelayStateTarget},
 };
 
+/// PURPOSE: Parse API/DB string into the `parse channel state` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_channel_state(state: &str) -> Result<relay_channel::ChannelState, DeviceRepositoryError> {
     match state {
         "on" => Ok(relay_channel::ChannelState::On),
@@ -28,6 +35,8 @@ fn parse_channel_state(state: &str) -> Result<relay_channel::ChannelState, Devic
     }
 }
 
+/// PURPOSE: Parse API/DB string into the `parse device power` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_device_power(state: &str) -> Result<device::DevicePower, DeviceRepositoryError> {
     match state {
         "on" => Ok(device::DevicePower::On),
@@ -38,6 +47,8 @@ fn parse_device_power(state: &str) -> Result<device::DevicePower, DeviceReposito
     }
 }
 
+/// PURPOSE: Implement `power_text` domain/persistence logic.
+/// USE: Called as `power_text` from handlers, repository impls, or sibling helpers.
 fn power_text(power: Option<&device::DevicePower>) -> Option<String> {
     power.map(|p| match p {
         device::DevicePower::On => "on".to_owned(),
@@ -45,6 +56,8 @@ fn power_text(power: Option<&device::DevicePower>) -> Option<String> {
     })
 }
 
+/// PURPOSE: Implement `controller_generation` domain/persistence logic.
+/// USE: Called as `controller_generation` from handlers, repository impls, or sibling helpers.
 fn controller_generation(device_family: Option<&str>) -> Option<String> {
     let normalized = device_family?
         .chars()
@@ -60,6 +73,8 @@ fn controller_generation(device_family: Option<&str>) -> Option<String> {
     }
 }
 
+/// PURPOSE: Resolve Gen4 relay or Gen5 mapping power target for a device.
+/// USE: Power on/off handlers before outbound edge commands.
 pub(crate) async fn device_power_target(
     orm: &DatabaseConnection,
     device_id: &str,
@@ -148,6 +163,8 @@ pub(crate) async fn device_power_target(
     }))
 }
 
+/// PURPOSE: Persist device power state (and relay channel state when applicable).
+/// USE: After the edge acknowledges a power command.
 pub(crate) async fn apply_device_power(
     orm: &DatabaseConnection,
     device_id: &str,
@@ -194,6 +211,8 @@ pub(crate) async fn apply_device_power(
     }))
 }
 
+/// PURPOSE: Implement `relays_for_controller` domain/persistence logic.
+/// USE: Called as `relays_for_controller` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn relays_for_controller(
     orm: &DatabaseConnection,
     controller_id: &str,
@@ -233,6 +252,8 @@ pub(crate) async fn relays_for_controller(
     Ok(values)
 }
 
+/// PURPOSE: Implement `channels_for_relay` domain/persistence logic.
+/// USE: Called as `channels_for_relay` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn channels_for_relay(
     orm: &DatabaseConnection,
     relay_id: Uuid,
@@ -268,6 +289,8 @@ pub(crate) async fn channels_for_relay(
     Ok(Some(values))
 }
 
+/// PURPOSE: Implement `available_devices` domain/persistence logic.
+/// USE: Called as `available_devices` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn available_devices(
     orm: &DatabaseConnection,
     query: &AvailableRelayDevicesQuery,
@@ -350,6 +373,8 @@ pub(crate) async fn available_devices(
     }))
 }
 
+/// PURPOSE: Resolve edge/controller targets for `state target`.
+/// USE: Handlers/workers before outbound edge HTTP.
 pub(crate) async fn state_target(
     orm: &DatabaseConnection,
     device_id: &str,
@@ -384,6 +409,8 @@ pub(crate) async fn state_target(
     }))
 }
 
+/// PURPOSE: Mutate persisted state for `update state`.
+/// USE: Update handlers and workers after side effects succeed.
 pub(crate) async fn update_state(
     orm: &DatabaseConnection,
     channel_id: Uuid,
@@ -405,6 +432,8 @@ pub(crate) async fn update_state(
     Ok(())
 }
 
+/// PURPOSE: Resolve edge/controller targets for `identity target`.
+/// USE: Handlers/workers before outbound edge HTTP.
 pub(crate) async fn identity_target(
     orm: &DatabaseConnection,
     relay_id: Uuid,
@@ -433,6 +462,8 @@ pub(crate) async fn identity_target(
     }))
 }
 
+/// PURPOSE: Mutate persisted state for `update identity`.
+/// USE: Update handlers and workers after side effects succeed.
 pub(crate) async fn update_identity(
     orm: &DatabaseConnection,
     relay_id: Uuid,

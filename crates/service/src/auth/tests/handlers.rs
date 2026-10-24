@@ -1,3 +1,8 @@
+//! HTTP handler tests for auth routes.
+//!
+//! Guards signin envelope/cookies, error mapping, and mounted success/failure contracts
+//! against the legacy frontend auth API.
+
 use axum::{
     body::Body,
     http::{Request, StatusCode, header::SET_COOKIE},
@@ -8,6 +13,8 @@ use tower::ServiceExt;
 use super::support::{FixtureIdentityProvider, handler_app};
 use crate::auth::constants::{INVALID_CREDENTIALS, SIGNIN_SUCCESS};
 
+/// PURPOSE: Signin handler preserves frontend envelope and cookies.
+/// USE: regression for auth signin JSON + Set-Cookie wire contract.
 #[tokio::test]
 async fn signin_handler_preserves_frontend_envelope_and_cookies() {
     let response = handler_app(Some(FixtureIdentityProvider { signin_error: None }))
@@ -47,6 +54,8 @@ async fn signin_handler_preserves_frontend_envelope_and_cookies() {
     assert_eq!(body["user"]["realmRoles"][0], "user");
 }
 
+/// PURPOSE: Signin handler maps validation/upstream/disabled errors.
+/// USE: guards auth error envelope mapping for the frontend.
 #[tokio::test]
 async fn signin_handler_maps_validation_upstream_and_disabled_errors() {
     for (app, payload, expected) in [
@@ -88,6 +97,8 @@ async fn signin_handler_maps_validation_upstream_and_disabled_errors() {
     }
 }
 
+/// PURPOSE: Mounted auth routes preserve success contracts.
+/// USE: end-to-end success-path contract for composed auth router.
 #[tokio::test]
 async fn mounted_auth_routes_preserve_success_contracts() {
     let app = handler_app(Some(FixtureIdentityProvider { signin_error: None }));
@@ -167,6 +178,8 @@ async fn mounted_auth_routes_preserve_success_contracts() {
     }
 }
 
+/// PURPOSE: Mounted auth routes reject malformed or unauthorized requests.
+/// USE: end-to-end failure-path contract for composed auth router.
 #[tokio::test]
 async fn mounted_auth_routes_reject_malformed_or_unauthorized_requests() {
     let app = handler_app(Some(FixtureIdentityProvider { signin_error: None }));

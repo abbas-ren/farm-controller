@@ -1,3 +1,9 @@
+//! Frontend socket events for build upload progress, completion, and failure.
+//!
+//! Called from TUS / multipart build upload handlers after each meaningful
+//! stage. Replaces the Socket.IO emit paths in Node `BuildService` upload
+//! flows so the UI can track `uploadId` progress in real time.
+
 use axum::http::HeaderMap;
 
 use crate::{
@@ -11,6 +17,8 @@ use crate::{
 
 use super::repository_types::{BuildUploadFinalization, BuildUploadResult};
 
+/// PURPOSE: Resolve the acting user id from headers or JWT subject.
+/// USE: Upload handlers stamp `created_by` / event payloads; falls back to `"system"`.
 pub(crate) fn user_id(headers: &HeaderMap) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "user_id");
     headers
@@ -23,6 +31,8 @@ pub(crate) fn user_id(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "system".to_owned())
 }
 
+/// PURPOSE: Emit an upload progress percentage to the frontend event hub.
+/// USE: PATCH / TUS chunk handlers call this as bytes land on disk.
 pub(crate) fn progress(state: &AppState, _user_id: &str, upload_id: &str, percent: u64) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "progress");
     publish(
@@ -34,6 +44,8 @@ pub(crate) fn progress(state: &AppState, _user_id: &str, upload_id: &str, percen
     );
 }
 
+/// PURPOSE: Emit an upload error payload when finalization or transfer fails.
+/// USE: Upload handlers after marking the upload row failed in the repository.
 pub(crate) fn failure(state: &AppState, _user_id: &str, upload_id: &str, message: &str) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "failure");
     publish(
@@ -45,12 +57,15 @@ pub(crate) fn failure(state: &AppState, _user_id: &str, upload_id: &str, message
     );
 }
 
+/// PURPOSE: Kick off build preparation and notify the UI that an upload finished.
+/// USE: Called after `finalize_build_upload` succeeds; also publishes `BuildUploaded` and an alert.
 pub(crate) async fn completed(
     state: &AppState,
     request: &BuildUploadFinalization,
     result: BuildUploadResult,
 ) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "completed");
+    // Mirror Node BuildService: preparation runs asynchronously after DB finalize.
     if let Err(error) =
         crate::workers::prepare_uploaded_build(state, &result.release, &request.user_id).await
     {
@@ -109,6 +124,8 @@ pub(crate) async fn completed(
     );
 }
 
+/// PURPOSE: Publish a server event, logging (not failing) on hub errors.
+/// USE: Internal helper for all upload event emits.
 fn publish(state: &AppState, event: ServerEvent) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "publish");
     if let Err(error) = state.event_publisher.publish(event) {

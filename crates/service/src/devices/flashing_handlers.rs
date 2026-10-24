@@ -1,3 +1,8 @@
+//! Mark-device-flashing and related IPL upgrade state handlers.
+//!
+//! Ports Node `DeviceController.setDeviceUpgrading` (`GET /api/v1/device/{id}/flashing`)
+//! from `deviceRoutes.ts`. EdgeController / workers mark a DUT as flashing during IPL.
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{
@@ -35,12 +40,15 @@ const RTOS_START_TIMEOUT: Duration = Duration::from_secs(10);
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Mark a device flash as started and best-effort begin RTOS capture.
+/// USE: called by EdgeController (public callback); publishes Socket.IO frontend events.
 pub async fn mark_device_flashing(
     State(state): State<Arc<AppState>>,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "mark_device_flashing");
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -59,6 +67,7 @@ pub async fn mark_device_flashing(
                     changed_at: chrono::Utc::now().to_rfc3339(),
                 });
 
+                // Publish: notify connected frontend clients via Socket.IO.
                 if let Err(error) = state.event_publisher.publish(event) {
                     tracing::warn!(%error, device_id, "failed to publish flashing state update");
                 }
@@ -75,10 +84,13 @@ pub async fn mark_device_flashing(
             .into_response()
         }
         Ok(None) => error_response(StatusCode::NOT_FOUND, "not_found", "Device not found"),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to update device state"),
     }
 }
 
+/// PURPOSE: Ask EdgeController to start RTOS UART capture while flashing.
+/// USE: mark_device_flashing path.
 async fn start_rtos_capture(target: &RtosCaptureTarget) -> Result<(), String> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "start_rtos_capture");
     let url = reqwest::Url::parse(&format!(
@@ -98,6 +110,8 @@ async fn start_rtos_capture(target: &RtosCaptureTarget) -> Result<(), String> {
     Ok(())
 }
 
+/// PURPOSE: Build the EdgeController payload to start RTOS capture.
+/// USE: start_rtos_capture.
 fn rtos_start_payload(target: &RtosCaptureTarget) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "rtos_start_payload");
     serde_json::json!({
@@ -114,6 +128,8 @@ mod tests {
     use super::*;
 
     #[test]
+/// PURPOSE: Assert Gen4 RTOS start payload keeps serial and channel mapping.
+/// USE: regression for EdgeController /rtos/start Gen4 fields.
     fn gen4_rtos_payload_preserves_relay_mapping() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "gen4_rtos_payload_preserves_relay_mapping");
         let payload = rtos_start_payload(&RtosCaptureTarget {

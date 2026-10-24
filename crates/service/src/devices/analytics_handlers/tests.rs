@@ -1,5 +1,11 @@
+//! Test-plan and daily test summary analytics handlers.
+//!
+//! Ports Node `/analytics/test`, `/test/plan`, `/test/daily` from `analyticsRoutes.ts`.
+
 use super::*;
 
+/// PURPOSE: Get test execution analytics
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/test", tag = "Devices", summary = "Get test execution analytics", description = "Returns either current-user execution aggregates or current-user in-progress analytics according to the required type selector.", params(TestAnalyticsQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Execution aggregate or in-progress analytics"), (status = 400, description = "Invalid analytics type", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn test_analytics(
     State(state): State<Arc<AppState>>,
@@ -17,6 +23,7 @@ pub(crate) async fn test_analytics(
             .await
         {
             Ok(analytics) => (context.response_headers, Json(analytics)).into_response(),
+            // Map: translate repository failure into the legacy HTTP error envelope.
             Err(error) => repository_error(error, "Failed to get test execution analytics"),
         },
         "inProgress" => match context
@@ -25,6 +32,7 @@ pub(crate) async fn test_analytics(
             .await
         {
             Ok(executions) => (context.response_headers, Json(executions)).into_response(),
+            // Map: translate repository failure into the legacy HTTP error envelope.
             Err(error) => repository_error(error, "Failed to get in-progress test analytics"),
         },
         _ => error_response(
@@ -35,6 +43,8 @@ pub(crate) async fn test_analytics(
     }
 }
 
+/// PURPOSE: Summarize test plans for the current user
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/test/plan", tag = "Devices", summary = "Summarize test plans for the current user", description = "Groups the current user's test executions by plan and status for dashboard charts.", security(("bearer_auth" = [])), responses((status = 200, description = "Test plan status summary"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn test_plan_summary(
     State(state): State<Arc<AppState>>,
@@ -50,10 +60,13 @@ pub(crate) async fn test_plan_summary(
         .await
     {
         Ok(summary) => (context.response_headers, Json(summary)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to fetch test plan analytics"),
     }
 }
 
+/// PURPOSE: Summarize recent test execution days
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/analytics/test/daily", tag = "Devices", summary = "Summarize recent test execution days", description = "Returns current-user execution status totals for a bounded number of recent UTC days.", params(TestDailyQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Daily test execution summary"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Analytics query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn daily_test_summary(
     State(state): State<Arc<AppState>>,
@@ -71,6 +84,7 @@ pub(crate) async fn daily_test_summary(
         .await
     {
         Ok(summary) => (context.response_headers, Json(summary)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to fetch test execution daily summary"),
     }
 }

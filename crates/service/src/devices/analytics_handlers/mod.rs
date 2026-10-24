@@ -1,3 +1,8 @@
+//! Analytics HTTP handlers under `/api/v1/device/analytics/*`.
+//!
+//! Ports Node `analyticsRoutes.ts` / `AnalyticsController` from
+//! `farm_controller_old/device-service`. Frontend dashboards call these authenticated GETs.
+
 mod builds;
 mod context;
 mod devices;

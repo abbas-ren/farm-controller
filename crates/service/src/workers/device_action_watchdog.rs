@@ -1,3 +1,8 @@
+//! Stale device-action watchdog for jobs stuck in running/waiting.
+//!
+//! Cancels or fails actions (and linked tests) whose `updated_at` exceeds the
+//! configured stale timeout, frees devices, and emits farm WebSocket events.
+
 use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
@@ -15,6 +20,7 @@ use crate::{
     workers::types::{ActionTransition, StaleAction},
 };
 
+/// Poll loop that fails stale running/waiting device-action jobs.
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
         state.config.workers.device_action_watchdog_poll_seconds,
@@ -29,6 +35,7 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "device_action_watchdog", "worker stopped");
 }
 
+/// Find stale actions past the timeout, transition each, and publish events.
 async fn run_cycle(state: &AppState) {
     let Some(database) = &state.database else {
         return;
@@ -75,6 +82,7 @@ async fn run_cycle(state: &AppState) {
         ))
         .order_by_asc(device_action_queue::Column::UpdatedAt)
         .limit(batch_size)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .into_model::<StaleAction>()
         .all(&transaction)
@@ -145,6 +153,7 @@ async fn run_cycle(state: &AppState) {
         .record_worker_run("device_action_watchdog", "success");
 }
 
+/// Fail a stale TEST job: cancel queue row, fail execution, free device, emit events.
 async fn fail_test_action(
     transaction: &sea_orm::DatabaseTransaction,
     action: StaleAction,
@@ -209,6 +218,7 @@ async fn fail_test_action(
     })
 }
 
+/// Fail a stale FLASH job and clear device busy flags.
 async fn fail_flash_action(
     transaction: &sea_orm::DatabaseTransaction,
     action: StaleAction,
@@ -254,6 +264,7 @@ async fn fail_flash_action(
     })
 }
 
+/// Record watchdog cycle failure metrics.
 fn record_failure(state: &AppState, error: &sea_orm::DbErr, message: &str) {
     state
         .metrics
@@ -266,6 +277,7 @@ mod tests {
     use crate::socket::helpers::{build_failure_event, test_failure_events};
 
     #[test]
+    /// Unit test: stale TEST watchdog events match UI contracts.
     fn stale_test_events_refresh_owner_and_build_views() {
         let events = test_failure_events("test-1", "build-1", "user-1");
         assert_eq!(events.len(), 5);
@@ -275,6 +287,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: stale FLASH event shape for upload listeners.
     fn stale_flash_event_preserves_upload_listener_contract() {
         let release_id = uuid::Uuid::nil();
         let event =

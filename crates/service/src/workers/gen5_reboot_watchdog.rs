@@ -1,3 +1,8 @@
+//! Gen5 reboot watchdog (legacy `Gen5RebootWatchdogService`).
+//!
+//! Detects Gen5 devices stuck upgrading/flashing without heartbeats. First
+//! timeout sends a reboot; second timeout fails the linked test/job and cleans up.
+
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
@@ -23,6 +28,7 @@ use sea_orm::{
     sea_query::{Expr, LockBehavior, LockType},
 };
 
+/// Poll loop for Gen5 devices stuck mid-reboot/flash.
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
         state.config.workers.gen5_reboot_poll_seconds,
@@ -37,6 +43,7 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "gen5_reboot_watchdog", "worker stopped");
 }
 
+/// Find stuck devices, clean recovered attempts, apply reboot/fail decisions.
 async fn run_cycle(state: &AppState) {
     let Some(database) = &state.database else {
         return;
@@ -86,6 +93,7 @@ async fn run_cycle(state: &AppState) {
         .record_worker_run("gen5_reboot_watchdog", "success");
 }
 
+/// Select approved Gen5 devices upgrading/flashing with stale `updated_at`.
 async fn find_stuck_device_ids(
     orm: &sea_orm::DatabaseConnection,
     timeout_seconds: i64,
@@ -127,6 +135,7 @@ async fn find_stuck_device_ids(
     Ok(rows)
 }
 
+/// Drop reboot-attempt rows for devices that heartbeated again.
 async fn cleanup_recovered(state: &AppState) -> Result<(), String> {
     let database = state.database.as_ref().expect("worker requires database");
     let timeout_seconds =
@@ -159,6 +168,7 @@ async fn cleanup_recovered(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+/// Apply watchdog decision for one stuck device (reboot, wait, or fail).
 async fn process_device(
     state: &AppState,
     device_id: &str,
@@ -198,6 +208,7 @@ async fn process_device(
                     AND fallback.status::text IN ('pending', 'flashing')
                 ))"#,
         ))
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .one(&transaction)
         .await
@@ -272,6 +283,7 @@ async fn process_device(
     }
 }
 
+/// Resolve controller IP + power port GPIO for reboot commands.
 async fn resolve_power_mapping(
     transaction: &impl ConnectionTrait,
     device: &device::Model,
@@ -304,10 +316,12 @@ async fn resolve_power_mapping(
     Ok((None, None))
 }
 
+/// Uppercase/colon-normalize MAC for mapping lookups.
 fn normalize_mac(value: &str) -> String {
     value.to_ascii_lowercase().replace([':', '-'], "")
 }
 
+/// Find mapping JSON entry matching a MAC.
 fn mapping_entry_for_mac<'a>(
     mappings: &'a serde_json::Value,
     normalized_mac: &str,
@@ -318,6 +332,7 @@ fn mapping_entry_for_mac<'a>(
         .find_map(|(key, value)| (normalize_mac(key) == normalized_mac).then_some(value))
 }
 
+/// Second timeout: fail test/fallback, clear flags, emit events.
 async fn fail_stuck_device(
     transaction: &impl ConnectionTrait,
     device: &StuckDevice,
@@ -489,6 +504,7 @@ async fn fail_stuck_device(
     Ok(events)
 }
 
+/// POST a reboot command to the device controller.
 async fn send_reboot(
     state: &AppState,
     controller_ip: &str,
@@ -512,25 +528,30 @@ async fn send_reboot(
     Ok(())
 }
 
+/// Map prior attempt timestamp + timeout window to Reboot/Wait/Fail.
 fn watchdog_decision(
     attempted_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
     timeout: chrono::Duration,
     has_mapping: bool,
 ) -> WatchdogDecision {
+    // No power mapping ⇒ cannot reboot; fail immediately.
     if !has_mapping {
         WatchdogDecision::Fail
     } else if let Some(attempted_at) = attempted_at {
+        // Second timeout window after a prior reboot attempt ⇒ fail the job/test.
         if now.signed_duration_since(attempted_at) >= timeout {
             WatchdogDecision::Fail
         } else {
             WatchdogDecision::Wait
         }
     } else {
+        // First detection ⇒ send a single reboot.
         WatchdogDecision::Reboot
     }
 }
 
+/// Record Gen5 reboot watchdog failure metrics.
 fn record_failure(state: &AppState, error: &str, message: &str) {
     state
         .metrics
@@ -543,6 +564,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Unit test: watchdog decision state machine.
     fn first_detection_reboots_then_waits_then_fails() {
         let now = Utc::now();
         let timeout = chrono::Duration::seconds(120);
@@ -570,6 +592,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: fail-path events refresh device/owner/build views.
     fn watchdog_failure_events_refresh_device_owner_and_build() {
         let device = device_state_event("device-1", DeviceState::Free);
         let tests = test_failure_events("test-1", "build-1", "user-1");

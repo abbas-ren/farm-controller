@@ -1,3 +1,7 @@
+//! Test-result ingestion and fan-out to socket subscribers / persistence.
+//!
+//! Receives execution progress from edge/workers and publishes frontend events.
+
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
@@ -85,6 +89,7 @@ struct ArchivedArtifacts {
     sources_to_remove: Vec<PathBuf>,
 }
 
+/// Validate session.
 pub async fn validate_session(
     orm: &DatabaseConnection,
     test_id: &str,
@@ -113,6 +118,7 @@ pub async fn validate_session(
     }
 }
 
+/// Process case.
 pub async fn process_case(
     state: &AppState,
     test_id: &str,
@@ -295,6 +301,7 @@ pub async fn process_case(
     Ok(processed)
 }
 
+/// Lock execution.
 async fn lock_execution(
     transaction: &DatabaseTransaction,
     test_id: &str,
@@ -349,6 +356,7 @@ async fn lock_execution(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Sync jira defect.
 async fn sync_jira_defect(
     state: &AppState,
     orm: &DatabaseConnection,
@@ -412,6 +420,7 @@ async fn sync_jira_defect(
     }
 }
 
+/// Catalog results.
 async fn catalog_results(
     transaction: &DatabaseTransaction,
     target: &ExecutionTarget,
@@ -458,6 +467,7 @@ async fn catalog_results(
         .collect())
 }
 
+/// Complete execution.
 async fn complete_execution(
     transaction: &DatabaseTransaction,
     test_id: &str,
@@ -557,6 +567,7 @@ async fn complete_execution(
     .await
 }
 
+/// Insert log.
 async fn insert_log(
     transaction: &impl ConnectionTrait,
     test_id: &str,
@@ -579,6 +590,7 @@ async fn insert_log(
     Ok(())
 }
 
+/// Output path.
 fn output_path(
     config: &DeviceConfig,
     device_type: &str,
@@ -598,6 +610,7 @@ fn output_path(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Archive artifacts.
 async fn archive_artifacts(
     state: &AppState,
     target: &ExecutionTarget,
@@ -665,6 +678,7 @@ async fn archive_artifacts(
     artifacts
 }
 
+/// Safe component.
 fn safe_component(value: &str) -> bool {
     let _api_trace = crate::observability::ApiTrace::enter("test_results", "safe_component");
     !value.is_empty()
@@ -680,6 +694,7 @@ struct ParsedOutput {
     command: Option<String>,
 }
 
+/// Parse output.
 fn parse_output(output: &str) -> ParsedOutput {
     let _api_trace = crate::observability::ApiTrace::enter("test_results", "parse_output");
     let result_regex = Regex::new(r"(?i)\b(PASS|FAIL)\b").expect("valid result regex");
@@ -696,6 +711,7 @@ fn parse_output(output: &str) -> ParsedOutput {
     ParsedOutput { result, command }
 }
 
+/// Publish.
 fn publish(state: &AppState, result: &ProcessedTestResult, _created_by: Option<&str>) {
     let _api_trace = crate::observability::ApiTrace::enter("test_results", "publish");
     let mut events = vec![ServerEvent::frontend(
@@ -731,6 +747,7 @@ fn publish(state: &AppState, result: &ProcessedTestResult, _created_by: Option<&
     }
 }
 
+/// Sync catalog.
 pub async fn sync_catalog(state: &AppState, result: &ProcessedTestResult) {
     let _api_trace = crate::observability::ApiTrace::enter("test_results", "sync_catalog");
     let Some(catalog) = &state.test_catalog else {
@@ -758,6 +775,7 @@ mod tests {
     use super::{parse_output, safe_component};
 
     #[test]
+    /// Parses case insensitive result and command.
     fn parses_case_insensitive_result_and_command() {
         let _api_trace = crate::observability::ApiTrace::enter(
             "test_results",
@@ -769,6 +787,7 @@ mod tests {
     }
 
     #[test]
+    /// Missing result defaults to fail.
     fn missing_result_defaults_to_fail() {
         let _api_trace =
             crate::observability::ApiTrace::enter("test_results", "missing_result_defaults_to_fail");
@@ -776,6 +795,7 @@ mod tests {
     }
 
     #[test]
+    /// Rejects traversal components.
     fn rejects_traversal_components() {
         let _api_trace =
             crate::observability::ApiTrace::enter("test_results", "rejects_traversal_components");

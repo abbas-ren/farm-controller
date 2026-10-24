@@ -1,4 +1,12 @@
+//! Test catalog and CSV export route contract tests.
+//!
+//! Guards authenticated TestRail/Qmetry plan listing (bare array) and CSV attachment
+//! export headers/body matching Node export behavior.
+
 use super::*;
+
+/// PURPOSE: Assert test export requires auth and returns csv attachment.
+/// USE: regression guard for legacy/API wire contracts covered by `test_catalog`.
 #[tokio::test]
 async fn test_export_requires_auth_and_returns_csv_attachment() {
     let repository = Arc::new(RegistrationRepository {
@@ -60,6 +68,8 @@ async fn test_export_requires_auth_and_returns_csv_attachment() {
     assert!(body.contains("1,Smoke,Completed,x5h,1 Min,1,1,0,,100"));
 }
 
+/// PURPOSE: Assert test plan route requires auth and returns bare array.
+/// USE: regression guard for legacy/API wire contracts covered by `test_catalog`.
 #[tokio::test]
 async fn test_plan_route_requires_auth_and_returns_bare_array() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

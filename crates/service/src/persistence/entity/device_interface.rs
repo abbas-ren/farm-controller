@@ -1,6 +1,12 @@
+//! Per-device interface status (`device_interfaces` table).
+//!
+//! Ports `DeviceInterface.ts`. Tracks Ethernet, USB, UART, and similar links
+//! reported for a DUT so the UI and health checks can show port state.
+
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// Normalized link state across heterogeneous interface types.
 #[derive(
     Clone, Debug, Default, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize,
 )]
@@ -31,12 +37,15 @@ pub enum DeviceInterfaceStatus {
     NotAvailable,
 }
 
+/// One interface attachment belonging to a device.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "device_interfaces", rename_all = "camelCase")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
+    /// Stable interface identifier from the controller agent.
     pub interface_id: String,
+    /// Coarse category (ethernet, usb, uart, …).
     pub interface_type: String,
     pub device_id: String,
     pub name: Option<String>,
@@ -45,6 +54,7 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -54,9 +64,13 @@ pub enum Relation {
     )]
     Device,
 }
+
 impl Related<super::device::Entity> for Entity {
+    /// PURPOSE: Join path to the owning device.
+    /// USE: Load device context when listing or updating interfaces.
     fn to() -> RelationDef {
         Relation::Device.def()
     }
 }
+
 impl ActiveModelBehavior for ActiveModel {}

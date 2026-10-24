@@ -1,6 +1,12 @@
+//! In-memory execution/build repository fake for device route tests.
+//!
+//! Stands in for production execution lifecycle, logs, reports, and build upload methods.
+
 use super::*;
 #[async_trait]
 impl ExecutionLifecycleRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::update_execution_status`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn update_execution_status(
         &self,
         test_id: &str,
@@ -9,6 +15,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
         Ok(test_id == "42")
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::create_test_execution`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn create_test_execution(
         &self,
         execution: &ExecutionCreation,
@@ -34,6 +42,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::test_execution_build_version`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_execution_build_version(
         &self,
         test_id: &str,
@@ -41,6 +51,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
         Ok((test_id == "42").then(|| "v1.2.3".to_owned()))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::create_log`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn create_log(
         &self,
         request: &LogCreateRequest,
@@ -55,6 +67,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::list_logs`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn list_logs(
         &self,
         query: &LogListQuery,
@@ -76,6 +90,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::executions_by_build`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn executions_by_build(
         &self,
         build_id: &str,
@@ -87,6 +103,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
         )
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::test_results`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_results(
         &self,
         test_id: &str,
@@ -95,6 +113,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
             .then(|| serde_json::json!({"status": "completed", "testCases": [{"result": "PASS"}]})))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionLifecycleRepository::request_test_cancellation`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn request_test_cancellation(
         &self,
         test_id: &str,
@@ -116,6 +136,8 @@ impl ExecutionLifecycleRepository for RegistrationRepository {
 
 #[async_trait]
 impl ExecutionReportRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::report_generation_target`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn report_generation_target(
         &self,
         test_id: &str,
@@ -123,6 +145,8 @@ impl ExecutionReportRepository for RegistrationRepository {
         Ok((test_id == "test-1").then(|| ("x5h".to_owned(), "v1.2.3".to_owned())))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::create_execution_report_record`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn create_execution_report_record(
         &self,
         report_id: Uuid,
@@ -136,6 +160,8 @@ impl ExecutionReportRepository for RegistrationRepository {
         )
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::update_execution_report_status`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn update_execution_report_status(
         &self,
         _report_id: Uuid,
@@ -145,6 +171,8 @@ impl ExecutionReportRepository for RegistrationRepository {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::execution_report`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn execution_report(
         &self,
         test_id: &str,
@@ -152,6 +180,8 @@ impl ExecutionReportRepository for RegistrationRepository {
         Ok((test_id == "test-1").then(|| serde_json::json!({"id": "report-1", "testExecutionId": "test-1", "status": "completed"})))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::execution_report_target`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn execution_report_target(
         &self,
         test_id: &str,
@@ -159,6 +189,8 @@ impl ExecutionReportRepository for RegistrationRepository {
         Ok((test_id == "test-1").then(|| ("x5h".to_owned(), "v1.2.3".to_owned())))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::test_case_log_path`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_case_log_path(
         &self,
         case_id: i64,
@@ -166,6 +198,8 @@ impl ExecutionReportRepository for RegistrationRepository {
         Ok((case_id == 1).then(|| "x5h/v1.2.3/test-1/case.log".to_owned()))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::execution_cases`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn execution_cases(
         &self,
         _user_id: &str,
@@ -176,6 +210,8 @@ impl ExecutionReportRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionReportRepository::test_case`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_case(
         &self,
         case_id: i64,
@@ -186,6 +222,8 @@ impl ExecutionReportRepository for RegistrationRepository {
 
 #[async_trait]
 impl ExecutionQueryRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::list_test_executions`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn list_test_executions(
         &self,
         _user_id: &str,
@@ -201,6 +239,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::test_execution_by_device`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_execution_by_device(
         &self,
         _user_id: &str,
@@ -209,6 +249,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
         Ok((device_id == "device-1").then(|| serde_json::json!({"testId": "test-1", "deviceId": "device-1", "status": "in_progress"})))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::in_progress_test_executions`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn in_progress_test_executions(
         &self,
         _user_id: &str,
@@ -218,6 +260,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
         ])
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::single_test_execution`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn single_test_execution(
         &self,
         test_id: &str,
@@ -226,6 +270,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
             .then(|| serde_json::json!({"testId": "test-1", "testCases": [{"testCaseId": 11}]})))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::execution_case_ids`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn execution_case_ids(
         &self,
         test_id: &str,
@@ -233,6 +279,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
         Ok((test_id == "test-1").then(|| vec!["11".to_owned(), "12".to_owned()]))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::test_execution`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_execution(
         &self,
         _user_id: &str,
@@ -241,6 +289,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
         Ok((execution_id == "test-1" || execution_id == "latest").then(|| serde_json::json!({"testId": "test-1", "status": "in_progress", "Device": {"deviceType": "x5h"}})))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::test_execution_summary`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_execution_summary(
         &self,
         _user_id: &str,
@@ -263,6 +313,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `ExecutionQueryRepository::test_export_rows`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn test_export_rows(
         &self,
         _user_id: &str,
@@ -291,6 +343,8 @@ impl ExecutionQueryRepository for RegistrationRepository {
 
 #[async_trait]
 impl BuildRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `BuildRepository::flag_build`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn flag_build(
         &self,
         build_id: &str,
@@ -305,6 +359,8 @@ impl BuildRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::update_build_status`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn update_build_status(
         &self,
         build_id: &str,
@@ -320,6 +376,8 @@ impl BuildRepository for RegistrationRepository {
         )
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::delete_build`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn delete_build(
         &self,
         build_id: &str,
@@ -333,6 +391,8 @@ impl BuildRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::finalize_build_upload`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn finalize_build_upload(
         &self,
         request: &BuildUploadFinalization,
@@ -357,6 +417,8 @@ impl BuildRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::init_build_upload`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn init_build_upload(
         &self,
         _file_count: i32,
@@ -365,6 +427,8 @@ impl BuildRepository for RegistrationRepository {
         Ok(Uuid::nil())
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::mark_build_upload_started`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn mark_build_upload_started(
         &self,
         _upload_id: &str,
@@ -373,6 +437,8 @@ impl BuildRepository for RegistrationRepository {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::mark_build_upload_failed`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn mark_build_upload_failed(
         &self,
         _upload_id: &str,
@@ -380,6 +446,8 @@ impl BuildRepository for RegistrationRepository {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::build_filters`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn build_filters(&self) -> Result<BuildFilters, DeviceRepositoryError> {
         Ok(BuildFilters {
             device_types: vec!["x5h".to_owned()],
@@ -387,6 +455,8 @@ impl BuildRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::build_by_id`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn build_by_id(
         &self,
         build_id: &str,
@@ -394,6 +464,8 @@ impl BuildRepository for RegistrationRepository {
         Ok((build_id == "build-1").then(|| serde_json::json!({"id": "build-1", "version": "1.2.3", "deviceFamily": "Gen5", "deviceType": "x5h"})))
     }
 
+    /// PURPOSE: In-memory stand-in for `BuildRepository::list_builds`.
+    /// USE: device route tests exercising execution persistence without a live database.
     async fn list_builds(
         &self,
         query: &BuildListQuery,

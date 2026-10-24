@@ -1,3 +1,8 @@
+//! TestRail / QMetry catalog browse handlers.
+//!
+//! Ports Node `TestController` plan/suite/testcase list routes under `/api/v1/device/test/`
+//! from `testRoutes.ts`. Frontend test-selection UI before creating an execution.
+
 use super::error_response;
 use crate::{auth, error::ErrorResponse, state::AppState};
 use axum::{
@@ -34,6 +39,8 @@ pub struct TestCaseQuery {
     pub offset: Option<u64>,
 }
 
+/// PURPOSE: List Qmetry cases by plan
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/plan/{planID}/testcase", tag = "Tests", summary = "List Qmetry cases by plan", description = "Loads the Qmetry folder hierarchy and returns provider-defined testcase projections grouped by child suite ID.", params(("planID" = u64, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Provider-defined cases grouped by suite", body = Object), (status = 400, description = "Invalid plan ID", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Qmetry request failed", body = ErrorResponse), (status = 503, description = "Qmetry is not configured", body = ErrorResponse)))]
 pub async fn qmetry_plan_cases(
     State(state): State<Arc<AppState>>,
@@ -41,6 +48,7 @@ pub async fn qmetry_plan_cases(
     Path(plan_id): Path<u64>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "qmetry_plan_cases");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -49,6 +57,7 @@ pub async fn qmetry_plan_cases(
         return error_response(StatusCode::BAD_REQUEST, "validation", "PlanID is invalid");
     }
     let Some(catalog) = &state.qmetry_catalog else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "qmetry_unavailable",
@@ -68,6 +77,8 @@ pub async fn qmetry_plan_cases(
     }
 }
 
+/// PURPOSE: List Qmetry cases by suite
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/plan/{planID}/suite/{suiteID}/testcase", tag = "Tests", summary = "List Qmetry cases by suite", description = "Searches one Qmetry folder and returns its provider-defined legacy testcase projection; planID is validated for compatibility.", params(("planID" = u64, Path), ("suiteID" = u64, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Provider-defined suite test cases", body = Object), (status = 400, description = "Invalid suite ID", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Qmetry request failed", body = ErrorResponse), (status = 503, description = "Qmetry is not configured", body = ErrorResponse)))]
 pub async fn qmetry_suite_cases(
     State(state): State<Arc<AppState>>,
@@ -75,6 +86,7 @@ pub async fn qmetry_suite_cases(
     Path((plan_id, suite_id)): Path<(u64, u64)>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "qmetry_suite_cases");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -83,6 +95,7 @@ pub async fn qmetry_suite_cases(
         return error_response(StatusCode::BAD_REQUEST, "validation", "SuiteID is invalid");
     }
     let Some(catalog) = &state.qmetry_catalog else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "qmetry_unavailable",
@@ -102,6 +115,8 @@ pub async fn qmetry_suite_cases(
     }
 }
 
+/// PURPOSE: List TestRail cases
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/testcase", tag = "Tests", summary = "List TestRail cases", description = "Fetches all same-origin TestRail pages for the required plan/suite, normalizing script, precondition, labels, and HTML text fields.", params(TestCaseQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Test cases", body = Vec<crate::test_catalog::TestCase>), (status = 400, description = "planId and suiteId are required", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "TestRail request failed", body = ErrorResponse), (status = 503, description = "TestRail is not configured", body = ErrorResponse)))]
 pub async fn cases(
     State(state): State<Arc<AppState>>,
@@ -109,6 +124,7 @@ pub async fn cases(
     Query(query): Query<TestCaseQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "cases");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -125,6 +141,7 @@ pub async fn cases(
     };
     let _ = (query.limit, query.offset);
     let Some(catalog) = &state.test_catalog else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "test_catalog_unavailable",
@@ -147,6 +164,8 @@ pub async fn cases(
     }
 }
 
+/// PURPOSE: List TestRail suites
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/suite", tag = "Tests", summary = "List TestRail suites", description = "Fetches all same-origin TestRail section pages for the required plan and returns the stable suite projection.", params(TestSuiteQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Test suites", body = Vec<crate::test_catalog::TestSuite>), (status = 400, description = "planId is required", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "TestRail request failed", body = ErrorResponse), (status = 503, description = "TestRail is not configured", body = ErrorResponse)))]
 pub async fn suites(
     State(state): State<Arc<AppState>>,
@@ -154,6 +173,7 @@ pub async fn suites(
     Query(query): Query<TestSuiteQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "suites");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -162,6 +182,7 @@ pub async fn suites(
         return error_response(StatusCode::BAD_REQUEST, "validation", "planId is required");
     };
     let Some(catalog) = &state.test_catalog else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "test_catalog_unavailable",
@@ -181,6 +202,8 @@ pub async fn suites(
     }
 }
 
+/// PURPOSE: List TestRail plans
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/plan", tag = "Tests", summary = "List TestRail plans", description = "Fetches all same-origin TestRail suite pages, applies the optional case-insensitive filter, and returns the stable plan projection.", params(TestPlanQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Test plans", body = Vec<crate::test_catalog::TestPlan>), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "TestRail request failed", body = ErrorResponse), (status = 503, description = "TestRail is not configured", body = ErrorResponse)))]
 pub async fn plans(
     State(state): State<Arc<AppState>>,
@@ -188,12 +211,14 @@ pub async fn plans(
     Query(query): Query<TestPlanQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "plans");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let _ = (&query.build_id, &query.device_id);
     let Some(catalog) = &state.test_catalog else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "test_catalog_unavailable",

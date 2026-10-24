@@ -1,3 +1,7 @@
+//! Event builders and broadcast helpers used by workers and HTTP handlers.
+//!
+//! Shapes assignment, failure, device/owner/build refresh events for the UI.
+
 use axum::http::{HeaderMap, HeaderValue, header};
 use socketioxide::{
     SocketIo,
@@ -26,6 +30,7 @@ use crate::{
     },
 };
 
+/// Browser authorization.
 pub(crate) fn browser_authorization(query: &NativeSocketQuery) -> Result<BrowserAuthorization, ()> {
     match (
         query.client.as_deref(),
@@ -38,6 +43,7 @@ pub(crate) fn browser_authorization(query: &NativeSocketQuery) -> Result<Browser
     }
 }
 
+/// Browser auth headers.
 pub(crate) fn browser_auth_headers(headers: &HeaderMap) -> HeaderMap {
     let mut authorized = headers.clone();
     if authorized.contains_key(header::AUTHORIZATION) {
@@ -61,6 +67,7 @@ pub(crate) fn browser_auth_headers(headers: &HeaderMap) -> HeaderMap {
     authorized
 }
 
+/// Socket io layer.
 pub(crate) fn socket_io_layer(event_hub: &EventHub) -> SocketIoLayer {
     let (layer, socket_io) = SocketIo::builder()
         .max_payload(1024 * 1024)
@@ -71,6 +78,7 @@ pub(crate) fn socket_io_layer(event_hub: &EventHub) -> SocketIoLayer {
     layer
 }
 
+/// Socket io connect.
 async fn socket_io_connect(socket: SocketRef, TryData(auth): TryData<serde_json::Value>) {
     if let Ok(_auth) = auth {
         // Validate/authenticate `auth` here if required.
@@ -83,10 +91,12 @@ async fn socket_io_connect(socket: SocketRef, TryData(auth): TryData<serde_json:
     }
 }
 
+/// Normalize controller id.
 pub(crate) fn normalize_controller_id(value: &str) -> String {
     value.trim().replace([':', '-'], "").to_lowercase()
 }
 
+/// Publish frontend event.
 pub(crate) fn publish_frontend_event(state: &AppState, payload: FrontendMessagePayload) {
     if let Err(error) = state
         .event_publisher
@@ -98,12 +108,14 @@ pub(crate) fn publish_frontend_event(state: &AppState, payload: FrontendMessageP
 
 // ---------------- Socket Events ------------------
 
+/// Build performance event.
 pub(crate) fn build_performance_event(build_id: &str) -> ServerEvent {
     ServerEvent::frontend(FrontendMessagePayload::BuildPerformanceUpdate {
         build_id: build_id.to_owned(),
     })
 }
 
+/// Controller heartbeat payload.
 pub(crate) fn controller_heartbeat_payload(
     controller_id: String,
     heartbeat: &ControllerHeartbeat,
@@ -139,6 +151,7 @@ pub(crate) fn controller_heartbeat_payload(
     }
 }
 
+/// Device heartbeat events.
 pub(crate) fn device_heartbeat_events(
     device_id: &str,
     result: DeviceHeartbeatResult,
@@ -214,6 +227,7 @@ pub(crate) fn device_heartbeat_events(
 
 // ---------------- build_preparation ----------------
 
+/// Unit test: test failure events.
 pub(crate) fn test_failure_events(
     test_id: &str,
     build_id: &str,
@@ -248,6 +262,7 @@ pub(crate) fn test_failure_events(
     events
 }
 
+/// Build failure event.
 pub(crate) fn build_failure_event(
     release_id: uuid::Uuid,
     device_id: Option<&str>,
@@ -268,6 +283,7 @@ pub(crate) fn build_failure_event(
 
 // ------------- device_action ---------------
 
+/// Assignment events.
 pub(crate) fn assignment_events(assigned: &AssignedAction) -> Vec<ServerEvent> {
     let mut events = vec![device_state_event(&assigned.device_id, DeviceState::Busy)];
     if let Some(test_id) = assigned.action.test_id.as_deref() {
@@ -286,6 +302,7 @@ pub(crate) fn assignment_events(assigned: &AssignedAction) -> Vec<ServerEvent> {
     events
 }
 
+/// Dispatch failure events.
 pub(crate) fn dispatch_failure_events(assigned: &AssignedAction, error: &str) -> Vec<ServerEvent> {
     let mut events = vec![device_state_event(&assigned.device_id, DeviceState::Free)];
     if let Some(test_id) = assigned.action.test_id.as_deref() {
@@ -306,6 +323,7 @@ pub(crate) fn dispatch_failure_events(assigned: &AssignedAction, error: &str) ->
     events
 }
 
+/// Device state event.
 pub(crate) fn device_state_event(device_id: &str, state: DeviceState) -> ServerEvent {
     ServerEvent::frontend(FrontendMessagePayload::DeviceStateUpdate {
         device_id: device_id.to_owned(),
@@ -316,6 +334,7 @@ pub(crate) fn device_state_event(device_id: &str, state: DeviceState) -> ServerE
     })
 }
 
+/// Unit test: test status event.
 pub(crate) fn test_status_event(test_id: &str, status: TestStatus, _user_id: &str) -> ServerEvent {
     ServerEvent::frontend(FrontendMessagePayload::TestExecution {
         test_id: test_id.to_owned(),
@@ -331,6 +350,7 @@ pub(crate) fn test_status_event(test_id: &str, status: TestStatus, _user_id: &st
     })
 }
 
+/// Unit test: test build event.
 pub(crate) fn test_build_event(test_id: &str, build_id: &str, status: &str) -> ServerEvent {
     ServerEvent::frontend(FrontendMessagePayload::TestExecutionUpdate {
         build_id: Some(build_id.to_owned()),
@@ -342,6 +362,7 @@ pub(crate) fn test_build_event(test_id: &str, build_id: &str, status: &str) -> S
     })
 }
 
+/// Build status event.
 pub(crate) fn build_status_event(
     assigned: &AssignedAction,
     release_id: Uuid,
@@ -361,6 +382,7 @@ pub(crate) fn build_status_event(
 
 // ---------------- device_heartbeat ------------------
 
+/// Transition events.
 pub(crate) fn transition_events(transition: &DeviceStateTransition) -> [ServerEvent; 2] {
     [
         ServerEvent::frontend(FrontendMessagePayload::DeviceStateUpdate {
@@ -381,6 +403,7 @@ pub(crate) fn transition_events(transition: &DeviceStateTransition) -> [ServerEv
 
 // ---------------- device_controller ------------------
 
+/// Controller timeout events.
 pub(crate) fn controller_timeout_events(
     transition: &ControllerStateTransition,
 ) -> [ServerEvent; 2] {
@@ -400,6 +423,7 @@ pub(crate) fn controller_timeout_events(
 
 // ---------------- relay_service ------------------
 
+/// Relay timeout event.
 pub(crate) fn relay_timeout_event(pending: &ExpiredRelayConfiguration) -> ServerEvent {
     let message = format!(
         "Configuration timed out for device {} on channel {}",

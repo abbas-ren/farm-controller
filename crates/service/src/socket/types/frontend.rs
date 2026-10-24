@@ -1,3 +1,5 @@
+//! Frontend-facing message payloads and listener contract types.
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -30,6 +32,7 @@ pub enum Action {
 }
 
 impl From<&str> for Action {
+    /// From.
     fn from(action: &str) -> Self {
         match action {
             "added" => Action::Added,
@@ -309,6 +312,7 @@ pub enum TestStatus {
 }
 
 impl From<&str> for TestStatus {
+    /// From.
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "not_executed" => Self::NotExecuted,
@@ -331,6 +335,7 @@ pub enum DevicePower {
 }
 
 impl From<&str> for DevicePower {
+    /// From.
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "on" => Self::On,

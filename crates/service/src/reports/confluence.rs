@@ -14,6 +14,7 @@ use super::{
 };
 
 impl ReportService {
+    /// Upload confluence.
     pub async fn upload_confluence(
         &self,
         request: ConfluenceUploadRequest,
@@ -99,6 +100,7 @@ impl ReportService {
         })
     }
 
+    /// Lookup page.
     async fn lookup_page(
         &self,
         settings: &ConfluenceSettings,
@@ -122,6 +124,7 @@ impl ReportService {
         Ok(body.results.into_iter().next())
     }
 
+    /// Create page.
     async fn create_page(
         &self,
         settings: &ConfluenceSettings,
@@ -147,6 +150,7 @@ impl ReportService {
         Ok(page.id)
     }
 
+    /// Update page.
     async fn update_page(
         &self,
         settings: &ConfluenceSettings,
@@ -172,6 +176,7 @@ impl ReportService {
         Ok(page.id)
     }
 
+    /// Upload images.
     async fn upload_images(
         &self,
         settings: &ConfluenceSettings,
@@ -238,6 +243,7 @@ pub(crate) struct ConfluenceSettings {
 }
 
 impl ConfluenceSettings {
+    /// From config.
     pub(crate) fn from_config(
         config: &ReportsConfig,
         build_version: &str,
@@ -294,6 +300,7 @@ impl ConfluenceSettings {
         })
     }
 
+    /// Endpoint.
     fn endpoint(&self, path: &str) -> Result<Url, ConfluenceError> {
         let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "endpoint");
         self.api_base
@@ -323,11 +330,13 @@ struct ConfluencePageId {
     id: String,
 }
 
+/// Upstream transport.
 fn upstream_transport(error: reqwest::Error) -> ConfluenceError {
     let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "upstream_transport");
     ConfluenceError::Upstream(error.to_string())
 }
 
+/// Upstream response.
 async fn upstream_response(
     response: reqwest::Response,
 ) -> Result<reqwest::Response, ConfluenceError> {
@@ -343,6 +352,7 @@ async fn upstream_response(
     )))
 }
 
+/// Confluence body.
 pub(crate) fn confluence_body(document: &str) -> Result<String, ConfluenceError> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "confluence_body");
     let body = Regex::new(r"(?is)<body[^>]*>(.*)</body>")

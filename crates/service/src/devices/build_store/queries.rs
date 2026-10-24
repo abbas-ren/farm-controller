@@ -1,3 +1,7 @@
+//! Build list filters, detail, and paginated inventory queries.
+//!
+//! Used by build HTTP list/detail handlers. Ports Node `BuildService` list.
+
 use sea_orm::{
     ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -13,6 +17,8 @@ use super::super::{
     BuildFilters, BuildList, BuildListQuery,
 };
 
+/// PURPOSE: Build SeaORM filter/order clauses for `build filters`.
+/// USE: Shared by count and page queries.
 pub(crate) async fn build_filters(
     orm: &DatabaseConnection,
 ) -> Result<BuildFilters, DeviceRepositoryError> {
@@ -42,6 +48,8 @@ pub(crate) async fn build_filters(
     })
 }
 
+/// PURPOSE: Fetch a single record for `build by id`.
+/// USE: Detail handlers and repository lookups.
 pub(crate) async fn build_by_id(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -57,6 +65,8 @@ pub(crate) async fn build_by_id(
         .map(|row| release_json(&row)))
 }
 
+/// PURPOSE: Build SeaORM filter/order clauses for `build list filters`.
+/// USE: Shared by count and page queries.
 fn build_list_filters(
     mut select: sea_orm::Select<release::Entity>,
     query: &BuildListQuery,
@@ -87,6 +97,8 @@ fn build_list_filters(
     select
 }
 
+/// PURPOSE: Build SeaORM filter/order clauses for `order builds`.
+/// USE: Shared by count and page queries.
 fn order_builds(
     select: sea_orm::Select<release::Entity>,
     sort_by: &str,
@@ -106,6 +118,8 @@ fn order_builds(
     }
 }
 
+/// PURPOSE: List/filter `list builds` rows for the API.
+/// USE: HTTP list handlers and repository trait methods.
 pub(crate) async fn list_builds(
     orm: &DatabaseConnection,
     query: &BuildListQuery,

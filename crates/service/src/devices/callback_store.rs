@@ -1,3 +1,9 @@
+//! Persist Gen5 mapping callbacks and flash-confirmation side effects.
+//!
+//! Invoked from device callback HTTP handlers after edge controllers report
+//! mapping or IPL flash status. Ports Node `DeviceService` Gen5 mapping save
+//! and flash confirmation that may cancel the active execution and free the device.
+
 use chrono::{Duration, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
@@ -21,6 +27,8 @@ use super::{
     validation::normalize_mapping_mac,
 };
 
+/// PURPOSE: Persist a Gen5 mapping success/failure callback and claim matching queue jobs.
+/// USE: Mapping callback HTTP handler after the edge reports UART mapping status.
 pub(crate) async fn save_gen5_mapping(
     orm: &DatabaseConnection,
     caller_ip: &str,
@@ -33,6 +41,7 @@ pub(crate) async fn save_gen5_mapping(
     let transaction = orm.begin().await?;
     let controller = device_controller::Entity::find()
         .filter(device_controller::Column::IpAddress.eq(caller_ip))
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?;
@@ -77,6 +86,7 @@ pub(crate) async fn save_gen5_mapping(
                 ]))
                 .order_by_asc(gen5_mapping_queue::Column::CreatedAt)
                 .limit(1)
+                // SkipLocked: skip rows already claimed by another worker/transaction.
                 .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
                 .one(&transaction)
                 .await?;
@@ -113,6 +123,7 @@ pub(crate) async fn save_gen5_mapping(
                 )
                 .order_by_asc(gen5_mapping_queue::Column::CreatedAt)
                 .limit(1)
+                // SkipLocked: skip rows already claimed by another worker/transaction.
                 .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
                 .one(&transaction)
                 .await?;
@@ -140,6 +151,8 @@ pub(crate) async fn save_gen5_mapping(
     Ok(())
 }
 
+/// PURPOSE: Apply IPL flash confirmation: progress, cancel active test, free device.
+/// USE: Flash-confirmation callback handler / DeviceRegistrationRepository.
 pub(crate) async fn confirm_flash(
     orm: &DatabaseConnection,
     device_type: &str,
@@ -166,6 +179,7 @@ pub(crate) async fn confirm_flash(
         )
         .order_by_asc(device_action_queue::Column::CreatedAt)
         .limit(1)
+        // SkipLocked: skip rows already claimed by another worker/transaction.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .one(&transaction)
         .await?;
@@ -288,11 +302,14 @@ pub(crate) async fn confirm_flash(
 }
 
 #[derive(Debug, FromQueryResult)]
+/// Domain/DTO type `ExecutionProgressRow` used across device stores and handlers.
 struct ExecutionProgressRow {
     build_id: String,
     created_by: Option<String>,
 }
 
+/// PURPOSE: Implement `active_execution` domain/persistence logic.
+/// USE: Called as `active_execution` from handlers, repository impls, or sibling helpers.
 async fn active_execution(
     transaction: &impl ConnectionTrait,
     test_id: &str,
@@ -312,6 +329,8 @@ async fn active_execution(
         .await?)
 }
 
+/// PURPOSE: Implement `cancel_active_execution` domain/persistence logic.
+/// USE: Called as `cancel_active_execution` from handlers, repository impls, or sibling helpers.
 async fn cancel_active_execution(
     transaction: &impl ConnectionTrait,
     test_id: &str,
@@ -343,6 +362,8 @@ async fn cancel_active_execution(
     Ok(Some(execution))
 }
 
+/// PURPOSE: Create/persist `insert test log`.
+/// USE: Create handlers after validation.
 async fn insert_test_log(
     transaction: &impl ConnectionTrait,
     test_id: &str,

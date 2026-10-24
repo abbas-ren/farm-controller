@@ -1,3 +1,7 @@
+//! Build list, detail, and filter query handlers.
+//!
+//! Ports Node `BuildController.listBuilds`, `getBuild`, and `getFilters`.
+
 use std::sync::Arc;
 
 use axum::{
@@ -11,17 +15,21 @@ use crate::{auth, error::ErrorResponse, state::AppState};
 
 use super::super::{BuildFilters, BuildList, BuildListQuery, error_response, repository_error};
 
+/// PURPOSE: List build filters
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/build/filters", tag = "Builds", summary = "List build filters", description = "Returns deterministic distinct device-family and device-type values from retained release rows.", security(("bearer_auth" = [])), responses((status = 200, description = "Available build filters", body = BuildFilters), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Build filter query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn build_filters(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::queries", "build_filters");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -30,10 +38,13 @@ pub async fn build_filters(
     };
     match repository.build_filters().await {
         Ok(filters) => (response_headers, Json(filters)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get build filters"),
     }
 }
 
+/// PURPOSE: Get a build
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/build/{id}", tag = "Builds", summary = "Get a build", description = "Returns the complete heterogeneous legacy release row so existing frontend fields remain available.", params(("id" = String, Path, description = "Build ID")), security(("bearer_auth" = [])), responses((status = 200, description = "Complete legacy release row"), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Build not found", body = ErrorResponse), (status = 500, description = "Build query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn build_by_id(
     State(state): State<Arc<AppState>>,
@@ -41,11 +52,13 @@ pub async fn build_by_id(
     Path(build_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::queries", "build_by_id");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -55,10 +68,13 @@ pub async fn build_by_id(
     match repository.build_by_id(&build_id).await {
         Ok(Some(build)) => (response_headers, Json(build)).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "not_found", "Build not found"),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get build"),
     }
 }
 
+/// PURPOSE: List builds
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/build", tag = "Builds", summary = "List builds", description = "Returns paginated complete legacy release rows with allowlisted sorting and family, type, version, fault, and search filters.", params(BuildListQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Paginated builds", body = BuildList), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Build query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn list_builds(
     State(state): State<Arc<AppState>>,
@@ -66,11 +82,13 @@ pub async fn list_builds(
     Query(query): Query<BuildListQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::queries", "list_builds");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -79,6 +97,7 @@ pub async fn list_builds(
     };
     match repository.list_builds(&query).await {
         Ok(builds) => (response_headers, Json(builds)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to list builds"),
     }
 }

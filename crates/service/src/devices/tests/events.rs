@@ -1,4 +1,12 @@
+//! Frontend Socket.IO event payload contract tests for device flows.
+//!
+//! Asserts power, execution, cancellation, report-upload, and relay confirmation events
+//! match the committed frontend room/event schema.
+
 use super::*;
+
+/// PURPOSE: Assert device power event preserves frontend contract.
+/// USE: regression guard for legacy/API wire contracts covered by `events`.
 #[test]
 fn device_power_event_preserves_frontend_contract() {
     let event = device_power_event("device-1", "off");
@@ -8,6 +16,8 @@ fn device_power_event_preserves_frontend_contract() {
     assert!(event.payload["changedAt"].is_string());
 }
 
+/// PURPOSE: Assert new execution event preserves frontend contract.
+/// USE: regression guard for legacy/API wire contracts covered by `events`.
 #[test]
 fn new_execution_event_preserves_frontend_contract() {
     let event = test_execution_handlers::new_execution_event("test-1", "user-1");
@@ -22,6 +32,8 @@ fn new_execution_event_preserves_frontend_contract() {
     assert!(event.payload["data"]["timestamp"].is_string());
 }
 
+/// PURPOSE: Assert cancellation events preserve user and build contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `events`.
 #[test]
 fn cancellation_events_preserve_user_and_build_contracts() {
     let [user_event, build_event] = test_execution_handlers::cancellation_events(
@@ -40,6 +52,8 @@ fn cancellation_events_preserve_user_and_build_contracts() {
     assert_eq!(build_event.payload["cancelRequested"], true);
 }
 
+/// PURPOSE: Assert report upload events preserve frontend status and room contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `events`.
 #[test]
 fn report_upload_events_preserve_frontend_status_and_room_contracts() {
     let report_id = Uuid::new_v4();
@@ -63,6 +77,8 @@ fn report_upload_events_preserve_frontend_status_and_room_contracts() {
     assert_eq!(events[0].payload["uploadError"], "rejected");
 }
 
+/// PURPOSE: Assert relay confirmation events follow committed context.
+/// USE: regression guard for legacy/API wire contracts covered by `events`.
 #[test]
 fn relay_confirmation_events_follow_committed_context() {
     let response = RelayConfirmationResponse {

@@ -1,4 +1,6 @@
 //! Execution report enqueue, status, upload, and download handlers.
+//!
+//! Ports Node report routes under `/test/execution/report/{id}` from `testRoutes.ts`.
 
 use super::*;
 use crate::reports::{
@@ -13,6 +15,8 @@ use axum::{
 };
 use std::sync::Arc;
 
+/// PURPOSE: Get execution report metadata
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/execution/report/{id}", tag = "Tests", summary = "Get execution report metadata", description = "Returns the newest durable execution-report status row for the requested test execution.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Execution report metadata", body = ExecutionReportRecord), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Report not found", body = ErrorResponse), (status = 500, description = "Report query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn report(
     State(state): State<Arc<AppState>>,
@@ -20,11 +24,13 @@ pub async fn report(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "report");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -38,10 +44,13 @@ pub async fn report(
             "not_found",
             "No report found for this execution",
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get execution report"),
     }
 }
 
+/// PURPOSE: Download execution report HTML
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/execution/report/{id}/html", tag = "Tests", summary = "Download execution report HTML", description = "Resolves validated device/build/test path segments beneath the configured results root and returns the generated report HTML.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Execution report HTML", body = String, content_type = "text/html"), (status = 400, description = "Invalid report path", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Execution or HTML not found", body = ErrorResponse), (status = 500, description = "Report lookup or file read failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn report_html(
     State(state): State<Arc<AppState>>,
@@ -49,11 +58,13 @@ pub async fn report_html(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "report_html");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -69,6 +80,7 @@ pub async fn report_html(
                 "Test execution not found",
             );
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to get execution report HTML"),
     };
     if !super::validation::safe_segment(&target.0)
@@ -107,6 +119,8 @@ pub async fn report_html(
     }
 }
 
+/// PURPOSE: Queue execution report generation
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(put, path = "/api/v1/device/test/execution/report/{id}", tag = "Tests", summary = "Queue execution report generation", description = "Creates durable report metadata before enqueueing the bounded native report worker.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Report generation queued", body = ExecutionReportRecord), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Execution missing or incomplete", body = ErrorResponse), (status = 409, description = "Report already active", body = ErrorResponse), (status = 500, description = "Report persistence failed", body = ErrorResponse), (status = 503, description = "Device persistence or report queue unavailable", body = ErrorResponse)))]
 pub async fn create_report(
     State(state): State<Arc<AppState>>,
@@ -114,12 +128,14 @@ pub async fn create_report(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "create_report");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let user_id = auth::token_subject(&headers).unwrap_or_else(|| "system".to_owned());
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -127,6 +143,7 @@ pub async fn create_report(
         );
     };
     let Some(reports) = &state.reports else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "reports_unavailable",
@@ -142,6 +159,7 @@ pub async fn create_report(
                 "Test Execution Not Found or not completed yet",
             );
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to create execution report"),
     };
     let job_id = uuid::Uuid::new_v4();
@@ -150,6 +168,7 @@ pub async fn create_report(
         .await
     {
         Ok(report) => report,
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to create execution report"),
     };
     if let Err(error) = reports
@@ -175,6 +194,7 @@ pub async fn create_report(
                 Some(&message),
             )
             .await;
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "reports_unavailable",
@@ -184,6 +204,8 @@ pub async fn create_report(
     (response_headers, Json(report)).into_response()
 }
 
+/// PURPOSE: Upload an execution report to Confluence
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(put, path = "/api/v1/device/test/execution/report/{id}/upload", tag = "Tests", summary = "Upload an execution report to Confluence", description = "Uploads a completed native report and persists uploaded or failed status before publishing room events.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 202, description = "Report uploaded to Confluence", body = ConfluenceUploadResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Completed report missing", body = ErrorResponse), (status = 500, description = "Report persistence failed", body = ErrorResponse), (status = 502, description = "Confluence upload failed", body = ErrorResponse), (status = 503, description = "Device persistence or reports unavailable", body = ErrorResponse)))]
 pub async fn upload_report(
     State(state): State<Arc<AppState>>,
@@ -191,12 +213,14 @@ pub async fn upload_report(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "upload_report");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let user_id = auth::token_subject(&headers).unwrap_or_else(|| "system".to_owned());
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -204,6 +228,7 @@ pub async fn upload_report(
         );
     };
     let Some(reports) = &state.reports else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "reports_unavailable",
@@ -219,6 +244,7 @@ pub async fn upload_report(
                 "No completed report found for this test execution. Generate the report first.",
             );
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to upload execution report"),
     };
     let Some(report_id) = report
@@ -262,6 +288,7 @@ pub async fn upload_report(
         .update_execution_report_status(report_id, super::validation::REPORT_STATUS_UPLOADING, None)
         .await
     {
+        // Map: translate repository failure into the legacy HTTP error envelope.
         return repository_error(error, "Failed to update execution report");
     }
     publish_report_update(
@@ -290,6 +317,7 @@ pub async fn upload_report(
                 )
                 .await
             {
+                // Map: translate repository failure into the legacy HTTP error envelope.
                 return repository_error(error, "Failed to update execution report");
             }
             publish_report_update(
@@ -335,6 +363,8 @@ pub async fn upload_report(
     }
 }
 
+/// PURPOSE: Publish execution-report status updates to the frontend room.
+/// USE: Report create/upload handlers after persistence.
 fn publish_report_update(
     state: &AppState,
     report_id: uuid::Uuid,
@@ -353,6 +383,7 @@ fn publish_report_update(
         error,
         upload_error,
     ) {
+        // Publish: notify connected frontend clients via Socket.IO.
         if let Err(publish_error) = state.event_publisher.publish(event) {
             tracing::warn!(%publish_error, %report_id, "failed to publish report update");
         }

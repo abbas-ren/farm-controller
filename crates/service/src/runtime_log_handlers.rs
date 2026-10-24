@@ -1,3 +1,5 @@
+//! HTTP handlers for recent runtime logs and dynamic log-level changes.
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{
@@ -74,6 +76,7 @@ struct RuntimeLogsResponse {
         (status = 401, description = "Admin authentication required", body = crate::error::ErrorResponse)
     )
 )]
+/// Logs.
 pub async fn logs(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -147,6 +150,7 @@ pub async fn logs(
         (status = 401, description = "Admin authentication required", body = crate::error::ErrorResponse)
     )
 )]
+/// Update level.
 pub async fn update_level(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -190,6 +194,7 @@ pub async fn update_level(
     }
 }
 
+/// Proxy agent.
 async fn proxy_agent(
     state: &AppState,
     response_headers: HeaderMap,
@@ -270,6 +275,7 @@ async fn proxy_agent(
     (status, response_headers, Json(payload)).into_response()
 }
 
+/// Canonical device id.
 fn canonical_device_id(device_id: Option<&str>) -> Result<String, &'static str> {
     let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "canonical_device_id");
     let Some(device_id) = device_id.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -281,6 +287,7 @@ fn canonical_device_id(device_id: Option<&str>) -> Result<String, &'static str> 
     Ok(device_id.to_ascii_lowercase())
 }
 
+/// Approved device address.
 async fn approved_device_address(
     state: &AppState,
     device_id: &str,
@@ -311,6 +318,7 @@ async fn approved_device_address(
     Ok(Some(address))
 }
 
+/// Proxy edge.
 async fn proxy_edge(
     state: &AppState,
     response_headers: HeaderMap,
@@ -397,6 +405,7 @@ async fn proxy_edge(
     (status, response_headers, Json(payload)).into_response()
 }
 
+/// Controller address.
 async fn controller_address(
     state: &AppState,
     controller_id: &str,
@@ -426,11 +435,13 @@ async fn controller_address(
     }))
 }
 
+/// Bad request.
 fn bad_request(message: impl Into<String>) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "bad_request");
     error(StatusCode::BAD_REQUEST, "invalid_request", message)
 }
 
+/// Internal error.
 fn internal_error(message: impl Into<String>) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "internal_error");
     tracing::error!(error = %message.into(), "runtime logging request failed");
@@ -441,6 +452,7 @@ fn internal_error(message: impl Into<String>) -> Response {
     )
 }
 
+/// Error.
 fn error(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "error");
     (
@@ -457,6 +469,7 @@ mod tests {
     use super::canonical_device_id;
 
     #[test]
+    /// Edge agent device id is canonical mac without separators.
     fn edge_agent_device_id_is_canonical_mac_without_separators() {
         let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "edge_agent_device_id_is_canonical_mac_without_separators");
         assert_eq!(

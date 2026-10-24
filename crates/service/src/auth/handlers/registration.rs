@@ -21,6 +21,7 @@ use crate::{
 };
 
 #[utoipa::path(post, path = "/api/v1/auth/register", tag = "Authentication", summary = "Create a managed user", description = "Creates a Keycloak user, assigns the requested admin or user role, and returns the legacy registration envelope.", security(("bearer_auth" = [])), request_body = AdminRegistrationRequest, responses((status = 201, description = "User created", body = AdminRegistrationResponse), (status = 400, description = "Invalid user or role", body = AuthErrorResponse), (status = 401, description = "Authentication required", body = AuthErrorResponse), (status = 403, description = "Administrator role required", body = AuthErrorResponse), (status = 409, description = "User already exists", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// Register user.
 pub async fn register_user(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -67,6 +68,7 @@ pub async fn register_user(
 }
 
 #[utoipa::path(post, path = "/api/v1/auth/user-registration/confirmation/send-mail", tag = "Authentication", summary = "Acknowledge a registration mail event", description = "Compatibility webhook consumed by the Keycloak event-listener provider.", request_body = UserEventRequest, responses((status = 200, description = "Event acknowledged", body = AuthMessageResponse), (status = 400, description = "Invalid event", body = AuthErrorResponse)))]
+/// User event webhook.
 pub async fn user_event_webhook(Json(payload): Json<UserEventRequest>) -> Response {
     let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "user_event_webhook");
     if payload.user_id.trim().is_empty() || payload.event_type.trim().is_empty() {
@@ -80,6 +82,7 @@ pub async fn user_event_webhook(Json(payload): Json<UserEventRequest>) -> Respon
 }
 
 #[utoipa::path(post, path = "/api/v1/auth/forgot-password", tag = "Authentication", summary = "Request a password reset email", description = "Asks Keycloak to send its signed UPDATE_PASSWORD action email; no admin token is embedded by FarmController.", request_body = ForgotPasswordRequest, responses((status = 200, description = "Password reset email requested", body = AuthMessageResponse), (status = 400, description = "Username or email is missing", body = AuthErrorResponse), (status = 404, description = "User not found", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// Forgot password.
 pub async fn forgot_password(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ForgotPasswordRequest>,
@@ -106,6 +109,7 @@ pub async fn forgot_password(
 }
 
 #[utoipa::path(post, path = "/api/v1/auth/verify-user", tag = "Authentication", summary = "Verify a legacy password-reset link", description = "Retained compatibility endpoint that validates the supplied reset token and Keycloak user before the legacy reset form is shown.", request_body = VerifyUserRequest, responses((status = 200, description = "Reset link and user are valid", body = AuthMessageResponse), (status = 400, description = "Reset link is missing, invalid, or expired", body = AuthErrorResponse), (status = 404, description = "User not found", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// Verify user.
 pub async fn verify_user(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<VerifyUserRequest>,
@@ -133,6 +137,7 @@ pub async fn verify_user(
 }
 
 #[utoipa::path(post, path = "/api/v1/auth/reset-password", tag = "Authentication", summary = "Reset a user password", description = "Retained compatibility endpoint that validates the legacy reset token and replaces the Keycloak credential. New reset requests use Keycloak-owned signed action emails.", request_body = ResetPasswordRequest, responses((status = 200, description = "Password reset", body = AuthMessageResponse), (status = 400, description = "Invalid request or reset link", body = AuthErrorResponse), (status = 404, description = "User not found", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
+/// Reset password.
 pub async fn reset_password(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ResetPasswordRequest>,
@@ -179,6 +184,7 @@ pub async fn reset_password(
         (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)
     )
 )]
+/// Request registration.
 pub async fn request_registration(
     State(state): State<Arc<AppState>>,
     Json(mut payload): Json<RegistrationRequest>,
@@ -233,6 +239,7 @@ pub async fn request_registration(
     request_body = RegistrationActionRequest,
     responses((status = 200, description = "Registration action completed", body = AuthMessageResponse), (status = 400, description = "User ID is missing", body = AuthErrorResponse), (status = 401, description = "Invalid session", body = AuthErrorResponse), (status = 403, description = "Admin role required", body = AuthErrorResponse), (status = 404, description = "User not found", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse))
 )]
+/// Registration action.
 pub async fn registration_action(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,

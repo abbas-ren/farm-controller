@@ -1,3 +1,5 @@
+//! Wiremock coverage for Jira create-vs-comment defect filing.
+
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path, query_param},
@@ -5,6 +7,8 @@ use wiremock::{
 
 use super::*;
 
+/// PURPOSE: Build TestsConfig pointed at a mock Jira server.
+/// USE: Shared fixture for create/comment tests.
 fn config(server: &MockServer) -> TestsConfig {
     TestsConfig {
         jira_base_url: server.uri(),
@@ -17,6 +21,8 @@ fn config(server: &MockServer) -> TestsConfig {
     }
 }
 
+/// PURPOSE: Sample defect payload used by both create and comment paths.
+/// USE: shared fixture for JiraClient::add_defect tests.
 fn defect() -> JiraDefect {
     JiraDefect {
         summary: "Case failed".to_owned(),
@@ -31,6 +37,8 @@ fn defect() -> JiraDefect {
     }
 }
 
+/// PURPOSE: Empty search → POST /issue and return browse URL.
+/// USE: regression for Jira create-vs-comment filing when no open issue matches.
 #[tokio::test]
 async fn creates_bug_when_no_open_issue_matches() {
     let server = MockServer::start().await;
@@ -55,6 +63,8 @@ async fn creates_bug_when_no_open_issue_matches() {
     );
 }
 
+/// PURPOSE: Matching open issue → comment instead of creating a duplicate.
+/// USE: regression for Jira create-vs-comment filing when an open issue matches.
 #[tokio::test]
 async fn comments_on_existing_open_issue() {
     let server = MockServer::start().await;

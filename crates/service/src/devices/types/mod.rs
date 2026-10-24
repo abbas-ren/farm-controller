@@ -1,3 +1,8 @@
+//! Public request/response and domain types for the `/api/v1/device` HTTP surface.
+//!
+//! Mirrors JSON shapes expected by the frontend and EdgeController, replacing Node
+//! `device-service` TypeScript types / Sequelize JSON projections.
+
 mod alerts;
 mod analytics;
 mod builds_artifacts;

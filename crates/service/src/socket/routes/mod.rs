@@ -1,3 +1,5 @@
+//! Axum routers for WebSocket upgrade and JSON companion endpoints.
+
 pub mod edge_agent;
 pub mod edge_controller;
 pub mod terminal;
@@ -17,6 +19,7 @@ use axum::{
     routing::{get, post},
 };
 
+/// Router.
 pub fn router() -> Router<Arc<AppState>> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::mod", "router");
     Router::new()

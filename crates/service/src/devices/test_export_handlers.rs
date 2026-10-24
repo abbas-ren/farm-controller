@@ -1,3 +1,8 @@
+//! Test execution CSV export handler.
+//!
+//! Ports Node `TestController.downloadCSV` (`GET /api/v1/device/test/export`) from
+//! `testRoutes.ts`. Authenticated frontend downloads the user's execution CSV.
+
 use super::{error_response, repository_error, test_export};
 use crate::{auth, error::ErrorResponse, state::AppState};
 use axum::{
@@ -8,18 +13,22 @@ use axum::{
 use chrono::{SecondsFormat, Utc};
 use std::sync::Arc;
 
+/// PURPOSE: Export test executions as CSV
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/export", tag = "Tests", summary = "Export test executions as CSV", description = "Exports current-user executions with legacy status, duration, count, percentage, and timestamp calculations.", security(("bearer_auth" = [])), responses((status = 200, description = "Test execution CSV", body = String, content_type = "text/csv", headers(("Content-Disposition" = String, description = "Timestamped CSV attachment filename"))), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "CSV export failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn export_tests(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_export_handlers", "export_tests");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let user_id = auth::token_subject(&headers).unwrap_or_else(|| "system".to_owned());
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -28,10 +37,12 @@ pub async fn export_tests(
     };
     let rows = match repository.test_export_rows(&user_id).await {
         Ok(rows) => rows,
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to export test executions"),
     };
     let csv = match test_export::format_rows(&rows, Utc::now()) {
         Ok(csv) => csv,
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to export test executions"),
     };
     let mut response = (response_headers, csv).into_response();

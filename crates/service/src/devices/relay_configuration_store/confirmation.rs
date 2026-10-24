@@ -1,3 +1,7 @@
+//! Apply relay configuration success/failure callbacks from the edge.
+//!
+//! Used by confirm-relay handlers and timeout workers.
+
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
     QuerySelect, TransactionTrait,
@@ -8,6 +12,8 @@ use crate::persistence::entity::{device, pending_relay_config, relay, relay_chan
 
 use super::super::{RelayConfirmationResponse, error::DeviceRepositoryError};
 
+/// PURPOSE: Record relay configuration success/failure from the edge callback.
+/// USE: Confirm-relay handler and RelayConfigTimeoutService equivalent.
 pub(crate) async fn confirm(
     orm: &DatabaseConnection,
     mac: &str,
@@ -32,6 +38,7 @@ pub(crate) async fn confirm(
                 .eq(pending_relay_config::PendingRelayConfigStatus::Pending),
         )
         .order_by_asc(pending_relay_config::Column::CreatedAt)
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?;

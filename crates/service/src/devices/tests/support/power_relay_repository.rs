@@ -1,7 +1,13 @@
+//! In-memory power/relay repository fake for device route tests.
+//!
+//! Stands in for production power toggle, relay config, and legacy relay CRUD methods.
+
 use super::*;
 
 #[async_trait]
 impl PowerRelayRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::device_reboot_target`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn device_reboot_target(
         &self,
         _device_id: &str,
@@ -9,6 +15,8 @@ impl PowerRelayRepository for RegistrationRepository {
         Ok(None)
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::device_power_target`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn device_power_target(
         &self,
         device_id: &str,
@@ -24,6 +32,8 @@ impl PowerRelayRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::apply_device_power`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn apply_device_power(
         &self,
         device_id: &str,
@@ -45,6 +55,8 @@ impl PowerRelayRepository for RegistrationRepository {
         })))
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::relays_for_controller`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn relays_for_controller(
         &self,
         _controller_id: &str,
@@ -52,6 +64,8 @@ impl PowerRelayRepository for RegistrationRepository {
         Ok(Vec::new())
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::channels_for_relay`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn channels_for_relay(
         &self,
         _relay_id: Uuid,
@@ -59,6 +73,8 @@ impl PowerRelayRepository for RegistrationRepository {
         Ok(Some(Vec::new()))
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::available_relay_devices`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn available_relay_devices(
         &self,
         query: &AvailableRelayDevicesQuery,
@@ -87,6 +103,8 @@ impl PowerRelayRepository for RegistrationRepository {
         }}))
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::relay_state_target`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn relay_state_target(
         &self,
         _device_id: &str,
@@ -94,6 +112,8 @@ impl PowerRelayRepository for RegistrationRepository {
         Ok(None)
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::update_relay_state`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn update_relay_state(
         &self,
         _channel_id: Uuid,
@@ -102,6 +122,8 @@ impl PowerRelayRepository for RegistrationRepository {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::relay_identity_target`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn relay_identity_target(
         &self,
         _relay_id: Uuid,
@@ -113,6 +135,8 @@ impl PowerRelayRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::update_relay_identity`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn update_relay_identity(
         &self,
         _relay_id: Uuid,
@@ -124,6 +148,8 @@ impl PowerRelayRepository for RegistrationRepository {
         Ok(true)
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::configure_relay_channels`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn configure_relay_channels(
         &self,
         configurations: &[RelayChannelConfiguration],
@@ -143,6 +169,8 @@ impl PowerRelayRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::confirm_relay_configuration`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn confirm_relay_configuration(
         &self,
         mac: &str,
@@ -158,6 +186,8 @@ impl PowerRelayRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::legacy_relays`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn legacy_relays(
         &self,
         query: &LegacyRelayListQuery,
@@ -169,6 +199,8 @@ impl PowerRelayRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::legacy_relay_channels`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn legacy_relay_channels(
         &self,
         query: &LegacyRelayChannelListQuery,
@@ -181,6 +213,8 @@ impl PowerRelayRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::legacy_relay_by_id`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn legacy_relay_by_id(
         &self,
         relay_id: Uuid,
@@ -190,6 +224,8 @@ impl PowerRelayRepository for RegistrationRepository {
         ))
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::legacy_relay_channel_by_id`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn legacy_relay_channel_by_id(
         &self,
         channel_id: Uuid,
@@ -199,10 +235,14 @@ impl PowerRelayRepository for RegistrationRepository {
         ))
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::delete_legacy_relay`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn delete_legacy_relay(&self, _relay_id: Uuid) -> Result<bool, DeviceRepositoryError> {
         Ok(true)
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::delete_legacy_relay_channel`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn delete_legacy_relay_channel(
         &self,
         _channel_id: Uuid,
@@ -210,6 +250,8 @@ impl PowerRelayRepository for RegistrationRepository {
         Ok(true)
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::configure_legacy_relay`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn configure_legacy_relay(
         &self,
         request: &LegacyRelayConfiguration,
@@ -224,10 +266,14 @@ impl PowerRelayRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::fresh_legacy_relay`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn fresh_legacy_relay(&self, _relay_id: Uuid) -> Result<(), DeviceRepositoryError> {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::remap_legacy_relay`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn remap_legacy_relay(
         &self,
         _relay_id: Uuid,
@@ -238,6 +284,8 @@ impl PowerRelayRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `PowerRelayRepository::legacy_relay_conflicts`.
+    /// USE: device route tests exercising power relay persistence without a live database.
     async fn legacy_relay_conflicts(
         &self,
         query: &LegacyRelayConflictQuery,

@@ -1,4 +1,6 @@
 //! Create and update test execution commands.
+//!
+//! Ports Node `POST /test/execution` and `PUT /test/execution/{id}` (+ status).
 
 use super::*;
 use crate::{
@@ -27,6 +29,8 @@ const EXECUTION_STATUSES: [&str; 6] = [
     "failed",
 ];
 
+/// PURPOSE: Set test execution status
+/// USE: Frontend admin UI (bearer + admin role); publishes Socket.IO frontend events.
 #[utoipa::path(put, path = "/api/v1/device/test/execution/{id}/status", tag = "Tests", summary = "Set test execution status", description = "Allows an administrator to override a persisted test execution status and publishes the standard execution update event.", params(("id" = String, Path)), security(("bearer_auth" = [])), request_body = ExecutionStatusRequest, responses((status = 200, description = "Execution status updated", body = ExecutionStatusResponse), (status = 400, description = "Invalid execution status", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Execution not found", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn update_status(
     State(state): State<Arc<AppState>>,
@@ -35,6 +39,7 @@ pub async fn update_status(
     Json(request): Json<ExecutionStatusRequest>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::commands", "update_status");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -48,6 +53,7 @@ pub async fn update_status(
         );
     }
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -70,6 +76,7 @@ pub async fn update_status(
                 cancel_requested: None,
             });
 
+            // Publish: notify connected frontend clients via Socket.IO.
             if let Err(error) = state.event_publisher.publish(event) {
                 tracing::warn!(%error, %test_id, "failed to publish admin execution status update");
             }
@@ -84,10 +91,13 @@ pub async fn update_status(
             "not_found",
             "Test execution not found",
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to update test execution status"),
     }
 }
 
+/// PURPOSE: Create a test execution
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(post, path = "/api/v1/device/test/execution", tag = "Tests", summary = "Create a test execution", description = "Expands the requested TestRail selection, atomically persists the execution and cases, and queues artifact preparation after commit.", security(("bearer_auth" = [])), request_body = CreateExecutionRequest, responses((status = 201, description = "Complete legacy test-execution row", body = Object), (status = 400, description = "Invalid execution selection", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Build not found", body = ErrorResponse), (status = 500, description = "Execution creation failed", body = ErrorResponse)))]
 pub async fn create(
     State(state): State<Arc<AppState>>,
@@ -95,6 +105,7 @@ pub async fn create(
     Json(request): Json<CreateExecutionRequest>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::commands", "create");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -102,10 +113,13 @@ pub async fn create(
     let user_id = auth::token_subject(&headers).unwrap_or_else(|| "system".to_owned());
     match create_for_user(&state, request, user_id).await {
         Ok(created) => (StatusCode::CREATED, response_headers, Json(created)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to create test execution"),
     }
 }
 
+/// PURPOSE: Create a test execution
+/// USE: publishes Socket.IO frontend events.
 pub(crate) async fn create_for_user(
     state: &AppState,
     request: CreateExecutionRequest,
@@ -123,6 +137,7 @@ pub(crate) async fn create_for_user(
     if let Some(test_id) = created.get("testId").and_then(serde_json::Value::as_str) {
         let event = super::events::new_execution_event(test_id, &execution.user_id);
         tracing::info!("Created new test execution event: {:#?}", event);
+        // Publish: notify connected frontend clients via Socket.IO.
         if let Err(error) = state.event_publisher.publish(event) {
             tracing::warn!(%error, test_id, "failed to publish new test execution");
         }
@@ -130,6 +145,8 @@ pub(crate) async fn create_for_user(
     Ok(created)
 }
 
+/// PURPOSE: Update a TestRail case result
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(put, path = "/api/v1/device/test/execution/{id}", tag = "Tests", summary = "Update a TestRail case result", description = "Preserves the legacy best-effort contract: TestRail failures are logged and the request still receives an empty 201 acknowledgement.", params(("id" = String, Path, description = "Test case identifier")), security(("bearer_auth" = [])), request_body = UpdateExecutionRequest, responses((status = 201, description = "Update processed", body = EmptyObjectResponse), (status = 400, description = "Invalid update", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse)))]
 pub async fn update(
     State(state): State<Arc<AppState>>,
@@ -138,6 +155,7 @@ pub async fn update(
     Json(request): Json<UpdateExecutionRequest>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::commands", "update");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

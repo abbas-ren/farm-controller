@@ -1,3 +1,11 @@
+//! Database connectivity, SeaORM entities, and retention cleanup.
+//!
+//! This module replaces the Sequelize pool and model layer from
+//! `farm_controller_old/device-service` with a shared `sqlx` [`PgPool`] plus a
+//! SeaORM view over the same connections. Application services and workers obtain
+//! [`Database`] from `AppState` for queries, migrations, readiness probes, and
+//! batched retention deletes of high-volume tables.
+
 pub mod entity;
 pub mod projection;
 #[cfg(test)]
@@ -27,15 +35,22 @@ use self::entity::{
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
+/// Shared Postgres access for FarmController.
+///
+/// Holds one `sqlx` pool and a SeaORM connector derived from it so ORM and raw
+/// SQL never open separate pools.
 #[derive(Clone)]
 pub struct Database {
-    // SeaORM view over the same PgPool.
+    // SeaORM view over the same PgPool — avoids a second connection pool.
     orm: sea_orm::DatabaseConnection,
     pool: PgPool,
     metrics: Metrics,
 }
 
 impl Database {
+    /// PURPOSE: Open the Postgres pool, wrap it in SeaORM, optionally migrate.
+    /// USE: Called once during `AppState::bootstrap`. Records connect/migrate
+    /// metrics. Side effect: may apply embedded sqlx migrations when configured.
     pub async fn connect(config: &DatabaseConfig, metrics: Metrics) -> Result<Self, AppError> {
         let url = config
             .url
@@ -75,6 +90,8 @@ impl Database {
         Ok(Self { orm, pool, metrics })
     }
 
+    /// PURPOSE: Cheap readiness check against Postgres via SeaORM ping.
+    /// USE: Health endpoints invoke this; records success/failure latency metrics.
     pub async fn ping(&self) -> Result<(), sea_orm::DbErr> {
         let started = Instant::now();
         let result = self.orm().ping().await;
@@ -86,14 +103,22 @@ impl Database {
         result
     }
 
+    /// PURPOSE: Expose the underlying sqlx pool for raw SQL or migrations.
+    /// USE: Prefer SeaORM via [`Self::orm`] for entity work; use the pool when
+    /// a crate needs sqlx-specific APIs.
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 
+    /// PURPOSE: Expose the SeaORM connection for entity queries and transactions.
+    /// USE: All typed persistence helpers and workers query through this handle.
     pub fn orm(&self) -> &sea_orm::DatabaseConnection {
         &self.orm
     }
 
+    /// PURPOSE: Load enabled retention policy rows from `farmcontroller.retention_policies`.
+    /// USE: Retention workers call this each cycle to decide which tables to clean.
+    /// Maps ORM models into the lightweight [`RetentionPolicy`] DTO.
     pub async fn enabled_retention_policies(
         &self,
     ) -> Result<Vec<RetentionPolicy>, sea_orm::DbErr> {
@@ -113,6 +138,11 @@ impl Database {
             .collect())
     }
 
+    /// PURPOSE: Delete one aged batch for a retention policy.
+    /// USE: Retention worker loops this until a batch returns zero rows.
+    /// Side effects: begins a transaction, locks candidate rows with
+    /// `FOR UPDATE SKIP LOCKED`, deletes them, commits. Refuses policies that
+    /// require archival first.
     pub async fn clean_retention_batch(
         &self,
         policy: &RetentionPolicy,
@@ -134,6 +164,7 @@ impl Database {
     }
 }
 
+/// Runtime DTO for a retention rule (not the SeaORM entity).
 #[derive(Debug, Deserialize)]
 pub struct RetentionPolicy {
     pub table_name: String,
@@ -143,16 +174,20 @@ pub struct RetentionPolicy {
     pub archive_before_delete: bool,
 }
 
+/// Errors from retention target resolution or delete batches.
 #[derive(Debug, thiserror::Error)]
 pub enum RetentionError {
+    /// Table/column pair is not in the hard-coded allow-list (SQL injection guard).
     #[error("unsupported retention target: {0}.{1}")]
     UnsupportedTarget(String, String),
+    /// Policy requires archival that this binary does not yet perform.
     #[error("retention target requires archival before deletion: {0}")]
     ArchiveRequired(String),
     #[error(transparent)]
     Database(#[from] sea_orm::DbErr),
 }
 
+/// Allow-listed high-volume tables eligible for automated cleanup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RetentionTarget {
     ControllerHeartbeats,
@@ -164,6 +199,9 @@ enum RetentionTarget {
 }
 
 impl RetentionTarget {
+    /// PURPOSE: Map a policy's table/column names onto a typed cleanup target.
+    /// USE: Called before every batch delete. Rejects unknown identifiers so
+    /// retention never interpolates arbitrary SQL table names.
     fn from_policy(policy: &RetentionPolicy) -> Result<Self, RetentionError> {
         match (policy.table_name.as_str(), policy.timestamp_column.as_str()) {
             ("device_controller_heartbeats", "timestamp") => Ok(Self::ControllerHeartbeats),
@@ -171,6 +209,7 @@ impl RetentionTarget {
             ("log_entries", "timestamp") => Ok(Self::LogEntries),
             ("device_action_queue", "updatedAt") => Ok(Self::DeviceActionQueue),
             ("gen5_mapping_queue", "updatedAt") => Ok(Self::Gen5MappingQueue),
+            // Alerts keep legacy snake_case created_at (unlike camelCase peers).
             ("alerts", "created_at") => Ok(Self::Alerts),
             _ => Err(RetentionError::UnsupportedTarget(
                 policy.table_name.clone(),
@@ -179,6 +218,11 @@ impl RetentionTarget {
         }
     }
 
+    /// PURPOSE: Delete up to `batch_size` aged rows for this target in one transaction.
+    /// USE: Invoked by [`Database::clean_retention_batch`]. Uses age filter
+    /// `timestamp < now() - retention_days`, optional terminal-status filters for
+    /// queues/alerts, and `FOR UPDATE SKIP LOCKED` so concurrent cleaners do not
+    /// block each other.
     async fn delete_batch(
         self,
         orm: &sea_orm::DatabaseConnection,
@@ -197,6 +241,7 @@ impl RetentionTarget {
                     ))
                     .order_by_asc(device_controller_heartbeat::Column::Timestamp)
                     .limit(limit)
+                    // Skip rows locked by another cleaner/worker.
                     .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
                     .select_only()
                     .column(device_controller_heartbeat::Column::Id)
@@ -262,6 +307,7 @@ impl RetentionTarget {
                 }
             }
             Self::DeviceActionQueue => {
+                // Only terminal jobs — never delete in-flight queue work.
                 let ids = device_action_queue::Entity::find()
                     .filter(Expr::cust_with_values(
                         r#""updatedAt" < now() - ($1 * interval '1 day')"#,
@@ -290,6 +336,7 @@ impl RetentionTarget {
                 }
             }
             Self::Gen5MappingQueue => {
+                // Same terminal-status gate as device_action_queue retention.
                 let ids = gen5_mapping_queue::Entity::find()
                     .filter(Expr::cust_with_values(
                         r#""updatedAt" < now() - ($1 * interval '1 day')"#,
@@ -318,6 +365,7 @@ impl RetentionTarget {
                 }
             }
             Self::Alerts => {
+                // Only acknowledged alerts; unread must remain for the UI.
                 let ids = alert::Entity::find()
                     .filter(Expr::cust_with_values(
                         r#"created_at < now() - ($1 * interval '1 day')"#,

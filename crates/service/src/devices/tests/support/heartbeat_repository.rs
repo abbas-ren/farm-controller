@@ -1,7 +1,13 @@
+//! In-memory `HeartbeatRepository` fake for device route tests.
+//!
+//! Stands in for production controller/device heartbeat recording used by public callbacks.
+
 use super::*;
 
 #[async_trait]
 impl HeartbeatRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `HeartbeatRepository::record_controller_heartbeat`.
+    /// USE: device route tests exercising heartbeat persistence without a live database.
     async fn record_controller_heartbeat(
         &self,
         heartbeat: &ControllerHeartbeat,
@@ -16,6 +22,8 @@ impl HeartbeatRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `HeartbeatRepository::record_device_heartbeat`.
+    /// USE: device route tests exercising heartbeat persistence without a live database.
     async fn record_device_heartbeat(
         &self,
         device_id: &str,

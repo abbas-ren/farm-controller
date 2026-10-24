@@ -1,3 +1,8 @@
+//! End-to-end registration / approval lifecycle tests.
+//!
+//! Guards pending-user filtering, accept-user role/password assignment, forgot-password
+//! action emails, and admin registration provisioning against Keycloak.
+
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_string_contains, method, path, path_regex},
@@ -6,6 +11,8 @@ use wiremock::{
 use super::support::{mount_admin_token, test_provider};
 use crate::auth::{IdentityProvider, RegistrationAction, RegistrationActionRequest};
 
+/// PURPOSE: Pending users listing excludes approved and admin users.
+/// USE: regression for admin pending-user filter contract.
 #[tokio::test]
 async fn keycloak_pending_users_excludes_approved_and_admin_users() {
     let server = MockServer::start().await;
@@ -41,6 +48,8 @@ async fn keycloak_pending_users_excludes_approved_and_admin_users() {
     assert_eq!(users[0].id, "pending");
 }
 
+/// PURPOSE: Acceptance assigns user role and default password.
+/// USE: guards admin accept-user Keycloak actions.
 #[tokio::test]
 async fn keycloak_acceptance_assigns_user_role_and_default_password() {
     let server = MockServer::start().await;
@@ -78,6 +87,8 @@ async fn keycloak_acceptance_assigns_user_role_and_default_password() {
         .unwrap();
 }
 
+/// PURPOSE: Forgot-password uses a single-purpose action email.
+/// USE: regression for Keycloak execute-actions email flow.
 #[tokio::test]
 async fn keycloak_forgot_password_uses_single_purpose_action_email() {
     let server = MockServer::start().await;
@@ -105,6 +116,8 @@ async fn keycloak_forgot_password_uses_single_purpose_action_email() {
         .unwrap();
 }
 
+/// PURPOSE: Admin registration creates role and password.
+/// USE: guards admin create-user Keycloak provisioning.
 #[tokio::test]
 async fn keycloak_admin_registration_creates_role_and_password() {
     let server = MockServer::start().await;

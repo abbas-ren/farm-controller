@@ -1,4 +1,6 @@
 //! Construct execution and report events with the established client payloads.
+//!
+//! Used by command/report handlers to publish Socket.IO frontend updates.
 
 use crate::{
     reports::ReportStatus,
@@ -10,6 +12,8 @@ use crate::{
     },
 };
 
+/// PURPOSE: Helper `new_execution_event` supporting device HTTP handlers (new execution event).
+/// USE: publishes Socket.IO frontend events.
 pub(crate) fn new_execution_event(test_id: &str, _user_id: &str) -> ServerEvent {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::events", "new_execution_event");
     ServerEvent::frontend(FrontendMessagePayload::TestExecution {
@@ -26,6 +30,8 @@ pub(crate) fn new_execution_event(test_id: &str, _user_id: &str) -> ServerEvent 
     })
 }
 
+/// PURPOSE: Helper `report_update_events` supporting device HTTP handlers (report update events).
+/// USE: publishes Socket.IO frontend events.
 pub(crate) fn report_update_events(
     _report_id: uuid::Uuid,
     test_id: &str,

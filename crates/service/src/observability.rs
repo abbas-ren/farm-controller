@@ -1,3 +1,8 @@
+//! Metrics registry, request tracing middleware, and logging bootstrap.
+//!
+//! Initializes Prometheus collectors, tracing subscribers (file/UDP/stdout),
+//! and exposes `track_request` / `ApiTrace` used across handlers and workers.
+
 use std::{
     fs,
     io::{self, Write},
@@ -61,6 +66,7 @@ impl ApiTrace {
 }
 
 impl Drop for ApiTrace {
+    /// Drop.
     fn drop(&mut self) {
         if std::thread::panicking() {
             tracing::error!(
@@ -117,6 +123,7 @@ pub struct Metrics {
 }
 
 impl Metrics {
+    /// New.
     pub fn new() -> Result<Self, prometheus::Error> {
         let registry = Registry::new_custom(Some("farmcontroller".to_owned()), None)?;
         let requests = IntCounterVec::new(
@@ -204,14 +211,17 @@ impl Metrics {
         })
     }
 
+    /// Record worker run.
     pub fn record_worker_run(&self, worker: &'static str, outcome: &'static str) {
         self.worker_runs.with_label_values(&[worker, outcome]).inc();
     }
 
+    /// Record worker items.
     pub fn record_worker_items(&self, worker: &'static str, count: u64) {
         self.worker_items.with_label_values(&[worker]).inc_by(count);
     }
 
+    /// Record database operation.
     pub fn record_database_operation(
         &self,
         operation: &'static str,
@@ -226,6 +236,7 @@ impl Metrics {
             .observe(elapsed.as_secs_f64());
     }
 
+    /// Encode.
     pub fn encode(
         &self,
         uptime: Duration,
@@ -279,6 +290,7 @@ pub struct DatabasePoolSnapshot {
     pub max: u32,
 }
 
+/// Resident memory bytes.
 fn resident_memory_bytes() -> Option<i64> {
     let status = fs::read_to_string("/proc/self/status").ok()?;
     let kibibytes = status.lines().find_map(|line| {
@@ -294,11 +306,13 @@ fn resident_memory_bytes() -> Option<i64> {
 struct ActiveRequestGuard(IntGauge);
 
 impl Drop for ActiveRequestGuard {
+    /// Drop.
     fn drop(&mut self) {
         self.0.dec();
     }
 }
 
+/// Axum middleware recording latency/status Prometheus metrics.
 pub async fn track_request(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
@@ -428,6 +442,7 @@ struct FanoutWriter {
 impl<'a> MakeWriter<'a> for LogFanout {
     type Writer = FanoutWriter;
 
+    /// Make writer.
     fn make_writer(&'a self) -> Self::Writer {
         let stream = match self.stream {
             LogStream::Stdout => Some(StreamWriter::Stdout(io::stdout())),
@@ -444,6 +459,7 @@ impl<'a> MakeWriter<'a> for LogFanout {
 }
 
 impl Write for FanoutWriter {
+    /// Write.
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         match &mut self.stream {
             Some(StreamWriter::Stdout(stream)) => stream.write_all(bytes)?,
@@ -459,6 +475,7 @@ impl Write for FanoutWriter {
         Ok(bytes.len())
     }
 
+    /// Flush.
     fn flush(&mut self) -> io::Result<()> {
         match &mut self.stream {
             Some(StreamWriter::Stdout(stream)) => stream.flush()?,
@@ -473,6 +490,7 @@ impl Write for FanoutWriter {
 }
 
 impl Drop for FanoutWriter {
+    /// Drop.
     fn drop(&mut self) {
         if !self.network_buffer.is_empty()
             && let Some(network) = &self.network
@@ -482,6 +500,7 @@ impl Drop for FanoutWriter {
     }
 }
 
+/// Network writer.
 fn network_writer(address: std::net::SocketAddr) -> Result<Arc<UdpSocket>, AppError> {
     let bind = if address.is_ipv4() {
         "0.0.0.0:0"
@@ -499,6 +518,7 @@ fn network_writer(address: std::net::SocketAddr) -> Result<Arc<UdpSocket>, AppEr
     Ok(Arc::new(socket))
 }
 
+/// Init logging.
 pub fn init_logging(config: &LoggingConfig) -> Result<Option<WorkerGuard>, AppError> {
     let filter = EnvFilter::try_new(&config.level)
         .map_err(|error| AppError::Telemetry(format!("invalid log filter: {error}")))?;
@@ -552,6 +572,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Network writer emits one nonblocking datagram per event.
     fn network_writer_emits_one_nonblocking_datagram_per_event() {
         let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
         receiver

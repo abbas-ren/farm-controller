@@ -1,3 +1,7 @@
+//! `DeviceInventoryRepository` impl: families, types, topology, device list.
+//!
+//! Ports Node `DeviceService` inventory queries.
+
 use super::*;
 use super::json_models::{device_json, interface_json, test_execution_json};
 
@@ -10,6 +14,8 @@ use sea_orm::{
     sea_query::{Expr, extension::postgres::PgExpr},
 };
 
+/// PURPOSE: Build SeaORM filter/order clauses for `device list filters`.
+/// USE: Shared by count and page queries.
 fn device_list_filters(
     mut select: sea_orm::Select<device::Entity>,
     is_admin: bool,
@@ -54,6 +60,8 @@ fn device_list_filters(
     select
 }
 
+/// PURPOSE: Implement `controller_id_for_device` domain/persistence logic.
+/// USE: Called as `controller_id_for_device` from handlers, repository impls, or sibling helpers.
 async fn controller_id_for_device(
     orm: &sea_orm::DatabaseConnection,
     device_id: &str,
@@ -77,6 +85,8 @@ async fn controller_id_for_device(
 
 #[async_trait]
 impl DeviceInventoryRepository for PostgresDeviceRepository {
+    /// PURPOSE: Implement `device_families` domain/persistence logic.
+    /// USE: Called as `device_families` from handlers, repository impls, or sibling helpers.
     async fn device_families(&self) -> Result<Vec<String>, DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::postgres::inventory",
@@ -95,6 +105,8 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
         Ok(families)
     }
 
+    /// PURPOSE: Implement `device_types` domain/persistence logic.
+    /// USE: Called as `device_types` from handlers, repository impls, or sibling helpers.
     async fn device_types(
         &self,
         device_family: Option<&str>,
@@ -118,6 +130,8 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
         Ok(types)
     }
 
+    /// PURPOSE: Fetch a single record for `device by id`.
+    /// USE: Detail handlers and repository lookups.
     async fn device_by_id(
         &self,
         device_id: &str,
@@ -155,6 +169,8 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
         Ok(Some(value))
     }
 
+    /// PURPOSE: Implement `latest_heartbeat` domain/persistence logic.
+    /// USE: Called as `latest_heartbeat` from handlers, repository impls, or sibling helpers.
     async fn latest_heartbeat(
         &self,
         device_id: &str,
@@ -202,6 +218,8 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
             }))
     }
 
+    /// PURPOSE: Implement `topology` domain/persistence logic.
+    /// USE: Called as `topology` from handlers, repository impls, or sibling helpers.
     async fn topology(&self) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
         let _api_trace =
             crate::observability::ApiTrace::enter("devices::postgres::inventory", "topology");
@@ -236,6 +254,8 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
         Ok(rows)
     }
 
+    /// PURPOSE: List/filter `list devices` rows for the API.
+    /// USE: HTTP list handlers and repository trait methods.
     async fn list_devices(
         &self,
         query: &DeviceListQuery,

@@ -1,3 +1,8 @@
+//! Shared fakes and fixtures for auth tests.
+//!
+//! `FixtureIdentityProvider` stands in for production `IdentityProvider` methods so
+//! handlers can be exercised without Keycloak.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,6 +27,8 @@ pub(super) struct FixtureIdentityProvider {
 
 #[async_trait]
 impl IdentityProvider for FixtureIdentityProvider {
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::signin`.
+    /// USE: auth handler tests needing controlled signin success/error.
     async fn signin(
         &self,
         _username: &str,
@@ -47,6 +54,8 @@ impl IdentityProvider for FixtureIdentityProvider {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::validate`.
+    /// USE: auth handler tests that require bearer validation.
     async fn validate(
         &self,
         _access_token: &str,
@@ -58,6 +67,8 @@ impl IdentityProvider for FixtureIdentityProvider {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::request_registration`.
+    /// USE: auth registration route tests.
     async fn request_registration(
         &self,
         request: &RegistrationRequest,
@@ -65,10 +76,14 @@ impl IdentityProvider for FixtureIdentityProvider {
         Ok(serde_json::json!({"username": request.username, "enabled": true}))
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::pending_users`.
+    /// USE: auth pending-user listing tests.
     async fn pending_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         Ok(vec![fixture_user("pending", Vec::new())])
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::managed_users`.
+    /// USE: auth managed-user listing tests.
     async fn managed_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         Ok(vec![
             fixture_user("pending", Vec::new()),
@@ -76,18 +91,26 @@ impl IdentityProvider for FixtureIdentityProvider {
         ])
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::user_by_id`.
+    /// USE: auth flows that resolve a user by id.
     async fn user_by_id(&self, user_id: &str) -> Result<ManagedUser, IdentityError> {
         Ok(fixture_user(user_id, vec!["user".to_owned()]))
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::delete_user`.
+    /// USE: auth user-deletion tests.
     async fn delete_user(&self, _user_id: &str) -> Result<(), IdentityError> {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::verify_reset_user`.
+    /// USE: auth password-reset verification tests.
     async fn verify_reset_user(&self, _token: &str, _user_id: &str) -> Result<(), IdentityError> {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::reset_password`.
+    /// USE: auth password-reset tests.
     async fn reset_password(
         &self,
         _token: &str,
@@ -97,10 +120,14 @@ impl IdentityProvider for FixtureIdentityProvider {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::forgot_password`.
+    /// USE: auth forgot-password route tests.
     async fn forgot_password(&self, _username: &str) -> Result<(), IdentityError> {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::register_user`.
+    /// USE: auth admin registration tests.
     async fn register_user(
         &self,
         request: &AdminRegistrationRequest,
@@ -112,6 +139,8 @@ impl IdentityProvider for FixtureIdentityProvider {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `IdentityProvider::registration_action`.
+    /// USE: auth accept/reject registration action tests.
     async fn registration_action(
         &self,
         _request: &RegistrationActionRequest,
@@ -120,6 +149,8 @@ impl IdentityProvider for FixtureIdentityProvider {
     }
 }
 
+/// PURPOSE: Build a `ManagedUser` fixture with the given id and realm roles.
+/// USE: auth provider/lifecycle tests needing canned Keycloak user shapes.
 pub(super) fn fixture_user(id: &str, realm_roles: Vec<String>) -> ManagedUser {
     ManagedUser {
         id: id.to_owned(),
@@ -131,6 +162,8 @@ pub(super) fn fixture_user(id: &str, realm_roles: Vec<String>) -> ManagedUser {
     }
 }
 
+/// PURPOSE: Mount the auth router with an optional fixture identity provider.
+/// USE: auth handler tests that oneshot HTTP requests against `/signin` and siblings.
 pub(super) fn handler_app(provider: Option<FixtureIdentityProvider>) -> Router {
     let mut config = AppConfig::load(&Cli::try_parse_from(["farmcontroller"]).unwrap()).unwrap();
     config.modules.enabled.insert(crate::config::Module::Auth);
@@ -144,6 +177,8 @@ pub(super) fn handler_app(provider: Option<FixtureIdentityProvider>) -> Router {
     router().with_state(Arc::new(state))
 }
 
+/// PURPOSE: Stub Keycloak client-credentials token endpoint on a mock server.
+/// USE: auth provider/lifecycle tests that need an admin token before user APIs.
 pub(super) async fn mount_admin_token(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/realms/dev-realm/protocol/openid-connect/token"))
@@ -155,6 +190,8 @@ pub(super) async fn mount_admin_token(server: &MockServer) {
         .await;
 }
 
+/// PURPOSE: Build a `KeycloakIdentityProvider` pointed at a wiremock server.
+/// USE: auth provider/lifecycle tests exercising real Keycloak HTTP mapping.
 pub(super) fn test_provider(server: &MockServer) -> KeycloakIdentityProvider {
     KeycloakIdentityProvider::new(AuthConfig {
         keycloak_url: server.uri(),

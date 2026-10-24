@@ -1,3 +1,10 @@
+//! Input validation and normalization for device / controller / relay registration.
+//!
+//! Shared by registration stores, relay configuration apply, and HTTP handlers
+//! before persistence. Ports the Joi / custom validators from Node
+//! `device-service/src/validations` and bits of `DeviceService` / `RelayService`
+//! (MAC normalization, firmware compare direction, relay channel uniqueness).
+
 use std::{collections::HashSet, net::Ipv4Addr, str::FromStr};
 
 use super::{
@@ -8,13 +15,17 @@ use super::{
     },
 };
 
+/// Flattened interface row ready for `device_interfaces` insert.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DeviceInterfaceInput {
+    /// Interface class (ethernet, usb, …).
     pub interface_type: String,
+    /// Interface identifier reported by the device (eth0, usb0, …).
     pub interface_id: String,
 }
 
-/// Validates a device registration and returns its normalized MAC identifier.
+/// PURPOSE: Validate device registration fields and return a normalized MAC (no separators, lowercase).
+/// USE: Device registration store / handler before insert or update.
 pub(crate) fn validate_device_registration(
     registration: &DeviceRegistration,
 ) -> Result<String, DeviceRepositoryError> {
@@ -58,7 +69,8 @@ pub(crate) fn validate_device_registration(
     Ok(octets.concat().to_lowercase())
 }
 
-/// Flattens grouped interface IDs into rows suitable for persistence.
+/// PURPOSE: Flatten grouped interface IDs into rows suitable for persistence.
+/// USE: Device registration store when writing `device_interfaces`.
 pub(crate) fn device_interfaces(registration: &DeviceRegistration) -> Vec<DeviceInterfaceInput> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_interfaces");
     registration
@@ -75,9 +87,11 @@ pub(crate) fn device_interfaces(registration: &DeviceRegistration) -> Vec<Device
         .collect()
 }
 
-/// Compares dotted firmware versions using the legacy upgrade direction.
+/// PURPOSE: Compare dotted firmware versions using the legacy upgrade direction.
+/// USE: Flashing / upgrade paths decide whether `target` is newer (`1`), older (`-1`), or equal (`0`).
 pub(crate) fn compare_versions(current: &str, target: &str) -> i8 {
     let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "compare_versions");
+    // Strip leading v/V and pre-release suffix so `v1.2.3-beta` compares as `1.2.3`.
     let normalize = |version: &str| {
         version
             .trim()
@@ -106,7 +120,8 @@ pub(crate) fn compare_versions(current: &str, target: &str) -> i8 {
     0
 }
 
-/// Validates single or batch relay assignments and reports whether input was batched.
+/// PURPOSE: Validate single or batch relay assignments and report whether input was batched.
+/// USE: Relay configuration apply before persisting channel ↔ device mappings.
 pub(crate) fn relay_configurations(
     request: RelayConfigurationRequest,
 ) -> Result<(Vec<RelayChannelConfiguration>, bool), DeviceRepositoryError> {
@@ -115,6 +130,7 @@ pub(crate) fn relay_configurations(
         RelayConfigurationRequest::One(configuration) => (vec![configuration], false),
         RelayConfigurationRequest::Many(configurations) => (configurations, true),
     };
+    // Uniqueness mirrors Node RelayService: one channel id and one non-empty device per batch.
     let mut channels = HashSet::new();
     let mut devices = HashSet::new();
     for configuration in &configurations {
@@ -155,7 +171,8 @@ pub(crate) fn relay_configurations(
     Ok((configurations, is_batch))
 }
 
-/// Normalizes explicit or legacy state-map relay channels for persistence.
+/// PURPOSE: Normalize explicit or legacy state-map relay channels for persistence.
+/// USE: Relay registration store when channels array is empty and `state.channel_N` is used.
 pub(crate) fn relay_channels(
     relay: &RelayRegistration,
 ) -> Result<Vec<RelayChannelRegistration>, DeviceRepositoryError> {
@@ -201,7 +218,8 @@ pub(crate) fn relay_channels(
         .collect()
 }
 
-/// Validates the controller fields required before registration.
+/// PURPOSE: Validate the controller fields required before registration.
+/// USE: Controller registration store / handler entry.
 pub(crate) fn validate_registration(
     registration: &ControllerRegistration,
 ) -> Result<(), DeviceRepositoryError> {
@@ -214,7 +232,8 @@ pub(crate) fn validate_registration(
     normalized_controller_id(&registration.mac_address).map(|_| ())
 }
 
-/// Removes supported MAC separators and validates a hexadecimal controller ID.
+/// PURPOSE: Remove supported MAC separators and validate a hexadecimal controller ID.
+/// USE: Controller registration and any path that keys controllers by MAC-derived id.
 pub(crate) fn normalized_controller_id(mac_address: &str) -> Result<String, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "normalized_controller_id");
     let controller_id = mac_address.trim().replace([':', '-'], "").to_lowercase();
@@ -230,7 +249,8 @@ pub(crate) fn normalized_controller_id(mac_address: &str) -> Result<String, Devi
     Ok(controller_id)
 }
 
-/// Normalizes a mapping callback MAC with the controller identity rules.
+/// PURPOSE: Normalize a Gen5 mapping callback MAC with the controller identity rules.
+/// USE: Mapping callback / Gen5 mapping worker when correlating device MACs.
 pub(crate) fn normalize_mapping_mac(mac_address: &str) -> Result<String, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "normalize_mapping_mac");
     normalized_controller_id(mac_address)
@@ -238,6 +258,8 @@ pub(crate) fn normalize_mapping_mac(mac_address: &str) -> Result<String, DeviceR
 
 #[cfg(test)]
 mod tests {
+    //! Unit tests for MAC normalization, interface flattening, and relay uniqueness.
+
     use std::collections::BTreeMap;
 
     use uuid::Uuid;
@@ -246,6 +268,8 @@ mod tests {
 
     use super::*;
 
+/// PURPOSE: Build a minimal valid DeviceRegistration fixture for unit tests.
+/// USE: validation module tests.
     fn device_registration() -> DeviceRegistration {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration");
         DeviceRegistration {
@@ -265,6 +289,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert MAC separator stripping and IPv4 acceptance on registration.
+/// USE: regression for Node DeviceService MAC normalization.
     fn device_registration_normalizes_mac_and_accepts_ipv4() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration_normalizes_mac_and_accepts_ipv4");
         assert_eq!(
@@ -274,6 +300,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert rejection of compacted MAC, IPv6, and empty device names.
+/// USE: regression for registration validation edge cases.
     fn device_registration_rejects_invalid_mac_ipv4_and_empty_name() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration_rejects_invalid_mac_ipv4_and_empty_name");
         let mut registration = device_registration();
@@ -290,6 +318,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert interface map flattens into typed DeviceInterfaceInput rows.
+/// USE: regression for device_interfaces persistence shaping.
     fn device_registration_flattens_interfaces_by_type() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration_flattens_interfaces_by_type");
         let mut registration = device_registration();
@@ -321,6 +351,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert compare_versions matches Node upgrade direction (target vs current).
+/// USE: regression for flashing/upgrade version gates.
     fn firmware_version_comparison_matches_legacy_direction() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "firmware_version_comparison_matches_legacy_direction");
         assert_eq!(compare_versions("v1.2.3", "1.3.0-beta"), 1);
@@ -329,6 +361,8 @@ mod tests {
         assert_eq!(compare_versions("1.bad.3", "1.0.3"), 0);
     }
 
+/// PURPOSE: Build a RelayChannelConfiguration fixture with optional device/GPIO.
+/// USE: relay configuration uniqueness tests.
     fn configuration(channel_id: Uuid, device_id: Option<&str>) -> RelayChannelConfiguration {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "configuration");
         let gpio = device_id
@@ -345,6 +379,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert batch relay config rejects duplicate channel IDs.
+/// USE: regression for RelayService channel uniqueness.
     fn relay_configuration_rejects_duplicate_channels() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_configuration_rejects_duplicate_channels");
         let channel_id = Uuid::new_v4();
@@ -357,6 +393,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert batch relay config rejects the same non-empty device twice.
+/// USE: regression for RelayService device uniqueness.
     fn relay_configuration_rejects_duplicate_non_empty_devices() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_configuration_rejects_duplicate_non_empty_devices");
         let error = relay_configurations(RelayConfigurationRequest::Many(vec![
@@ -368,6 +406,8 @@ mod tests {
     }
 
     #[test]
+/// PURPOSE: Assert empty/whitespace device_id clears may repeat across channels.
+/// USE: regression for unassigning multiple relay channels in one batch.
     fn relay_configuration_allows_multiple_clears() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_configuration_allows_multiple_clears");
         let (configurations, is_batch) =

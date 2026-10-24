@@ -1,9 +1,16 @@
+//! Extract and validate uploaded build zip layouts before release insert.
+//!
+//! Called from build upload finalization after the TUS/multipart file lands.
+//! Ports Node `BuildService` zip extraction and required-layout checks.
+
 use std::{
     fs::File,
     io::{self, Write},
     path::{Component, Path, PathBuf},
 };
 
+/// PURPOSE: Extract a build zip under size limits and return the layout root.
+/// USE: Upload finalization before validate_layout / release insert.
 pub(crate) fn extract_zip(
     archive_path: &Path,
     target: &Path,
@@ -113,6 +120,8 @@ pub(crate) fn extract_zip(
     Ok(artifacts)
 }
 
+/// PURPOSE: Normalize `normalize entry` (MAC/keys) for stable lookups.
+/// USE: Registration, mapping, and heartbeat correlation paths.
 fn normalize_entry(name: &str) -> io::Result<PathBuf> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "normalize_entry");
     let replaced = name.replace('\\', "/");
@@ -135,6 +144,8 @@ fn normalize_entry(name: &str) -> io::Result<PathBuf> {
         .collect())
 }
 
+/// PURPOSE: Implement `strip_root` domain/persistence logic.
+/// USE: Called as `strip_root` from handlers, repository impls, or sibling helpers.
 fn strip_root(path: &Path, expected_root: &str) -> Option<PathBuf> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "strip_root");
     let mut components = path.components();
@@ -153,6 +164,8 @@ fn strip_root(path: &Path, expected_root: &str) -> Option<PathBuf> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// PURPOSE: Ensure required build layout files/dirs exist after extraction.
+/// USE: Upload finalization after extract_zip.
 fn validate_layout(
     relative: &str,
     family: &str,
@@ -201,6 +214,8 @@ fn validate_layout(
     Ok(())
 }
 
+/// PURPOSE: Implement `invalid` domain/persistence logic.
+/// USE: Called as `invalid` from handlers, repository impls, or sibling helpers.
 fn invalid(message: &str) -> io::Error {
     let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "invalid");
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -212,6 +227,8 @@ mod tests {
 
     use super::*;
 
+    /// PURPOSE: Implement `archive` domain/persistence logic.
+    /// USE: Called as `archive` from handlers, repository impls, or sibling helpers.
     fn archive(path: &Path, entries: &[(&str, &[u8])]) {
         let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "archive");
         let file = File::create(path).unwrap();
@@ -226,6 +243,8 @@ mod tests {
     }
 
     #[test]
+    /// PURPOSE: Implement `extracts_legacy_root_layout` domain/persistence logic.
+    /// USE: Called as `extracts_legacy_root_layout` from handlers, repository impls, or sibling helpers.
     fn extracts_legacy_root_layout() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "extracts_legacy_root_layout");
         let directory = tempfile::tempdir().unwrap();
@@ -259,6 +278,8 @@ mod tests {
     }
 
     #[test]
+    /// PURPOSE: Implement `rejects_parent_paths_and_expansion_limit` domain/persistence logic.
+    /// USE: Called as `rejects_parent_paths_and_expansion_limit` from handlers, repository impls, or sibling helpers.
     fn rejects_parent_paths_and_expansion_limit() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "rejects_parent_paths_and_expansion_limit");
         let directory = tempfile::tempdir().unwrap();
@@ -294,6 +315,8 @@ mod tests {
     }
 
     #[test]
+    /// PURPOSE: Implement `accepts_configured_rootfs_archive_extension` domain/persistence logic.
+    /// USE: Called as `accepts_configured_rootfs_archive_extension` from handlers, repository impls, or sibling helpers.
     fn accepts_configured_rootfs_archive_extension() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "accepts_configured_rootfs_archive_extension");
         let directory = tempfile::tempdir().unwrap();

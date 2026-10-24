@@ -1,4 +1,12 @@
+//! Device analytics HTTP contract tests.
+//!
+//! Covers `/api/v1/device/analytics/*` auth, grouping, comparison, performance, and usage shapes
+//! ported from Node `analyticsRoutes.ts`.
+
 use super::*;
+
+/// PURPOSE: Assert device state analytics preserve auth and grouping contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `analytics`.
 #[tokio::test]
 async fn device_state_analytics_preserve_auth_and_grouping_contracts() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -59,6 +67,8 @@ async fn device_state_analytics_preserve_auth_and_grouping_contracts() {
     assert_eq!(body["Gen5"][0]["state"], "free");
 }
 
+/// PURPOSE: Assert execution activity analytics preserve legacy shapes.
+/// USE: regression guard for legacy/API wire contracts covered by `analytics`.
 #[tokio::test]
 async fn execution_activity_analytics_preserve_legacy_shapes() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -133,6 +143,8 @@ async fn execution_activity_analytics_preserve_legacy_shapes() {
     assert_eq!(body["message"], "Test execution not found");
 }
 
+/// PURPOSE: Assert build analytics preserve comparison and performance shapes.
+/// USE: regression guard for legacy/API wire contracts covered by `analytics`.
 #[tokio::test]
 async fn build_analytics_preserve_comparison_and_performance_shapes() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -210,6 +222,8 @@ async fn build_analytics_preserve_comparison_and_performance_shapes() {
     assert_eq!(body["uniqueDeviceCount"], 1);
 }
 
+/// PURPOSE: Assert device usage analytics preserve daily and period shapes.
+/// USE: regression guard for legacy/API wire contracts covered by `analytics`.
 #[tokio::test]
 async fn device_usage_analytics_preserve_daily_and_period_shapes() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

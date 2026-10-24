@@ -1,3 +1,9 @@
+//! Device action queue dispatcher (legacy `DeviceActionQueueService`).
+//!
+//! Polls `device_action_queue` for eligible queued jobs, claims one under
+//! `FOR UPDATE SKIP LOCKED`, assigns a free device, and dispatches flash/test/IPL
+//! work to the edge controller. Publishes assignment and failure farm events.
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
@@ -25,6 +31,7 @@ use sea_orm::{
     sea_query::{Expr, LockBehavior, LockType},
 };
 
+/// Poll loop for the device-action queue until cancellation.
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     info!(worker = "device_action", "worker started");
     let mut interval = tokio::time::interval(Duration::from_secs(
@@ -40,6 +47,9 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "device_action", "worker stopped");
 }
 
+/// Claim and dispatch up to `device_action_batch_size` jobs in one tick.
+///
+/// Publishes assignment events, appends test logs, and records metrics per dispatch.
 async fn run_cycle(state: &AppState) {
     for _ in 0..state.config.workers.device_action_batch_size {
         let assigned = match assign_next(state).await {
@@ -103,6 +113,10 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
+/// Atomically claim the next eligible queued action and a free device.
+///
+/// Uses a transaction with `FOR UPDATE SKIP LOCKED` so concurrent workers do not
+/// double-assign the same queue row or device. Returns `Ok(None)` when idle.
 async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
 
@@ -134,7 +148,9 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
         .column_as(test_execution::Column::BuildId, "build_id")
         .column_as(test_execution::Column::BuildVersion, "build_version")
         .column_as(test_execution::Column::CreatedBy, "created_by")
+        // Claim filter: only QUEUED rows.
         .filter(device_action_queue::Column::Status.eq(device_action_queue::QueueJobStatus::Queued))
+        // Claim filter: skip raw x5h types unless this is a post-IPL confirm requeue.
         .filter(
             sea_orm::Condition::any()
                 .add(device_action_queue::Column::DeviceType.not_like("%x5h%"))
@@ -209,6 +225,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
         )
         .order_by_asc(device_action_queue::Column::CreatedAt)
         .limit(1)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .into_model::<QueuedAction>()
         .one(&transaction)
@@ -252,6 +269,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
             .select_only()
             .column(device::Column::DeviceId)
             .column(device::Column::IpAddress)
+            // SKIP LOCKED: concurrent worker ticks must not claim the same row.
             .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
             .into_tuple::<(String, Option<String>)>()
             .all(&transaction)
@@ -268,6 +286,7 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
             .select_only()
             .column(device::Column::DeviceId)
             .column(device::Column::IpAddress)
+            // SKIP LOCKED: concurrent worker ticks must not claim the same row.
             .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
             .into_tuple::<(String, Option<String>)>()
             .all(&transaction)
@@ -416,6 +435,10 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
     }))
 }
 
+/// Send the assigned flash/test/IPL command to the edge controller.
+///
+/// Side effects: HTTP to the controller, possible Gen4 IPL relay GPIO sequence,
+/// and queue/test status updates on success paths inside helpers.
 async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), String> {
     if assigned.action.ipl_flash_confirm.is_none()
         && is_gen4_device(state, &assigned.device_id).await?
@@ -540,6 +563,7 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
     Err(last_error)
 }
 
+/// Return whether the device family string indicates Gen4 (needs IPL GPIO path).
 async fn is_gen4_device(state: &AppState, device_id: &str) -> Result<bool, String> {
     let database = state
         .database
@@ -560,6 +584,7 @@ async fn is_gen4_device(state: &AppState, device_id: &str) -> Result<bool, Strin
         .unwrap_or(false))
 }
 
+/// Load relay serial, channel, and GPIO mapping for a Gen4 IPL flash target.
 async fn resolve_gen4_ipl_target(
     state: &AppState,
     device_id: &str,
@@ -649,10 +674,12 @@ async fn resolve_gen4_ipl_target(
     Ok(None)
 }
 
+/// Uppercase and colon-normalize a MAC for mapping table lookups.
 fn normalize_mac(value: &str) -> String {
     value.to_ascii_lowercase().replace([':', '-'], "")
 }
 
+/// Find a controller mapping JSON entry whose MAC matches `mac`.
 fn mapping_entry_for_mac<'a>(
     mappings: &'a serde_json::Value,
     normalized_mac: &str,
@@ -663,6 +690,7 @@ fn mapping_entry_for_mac<'a>(
     })
 }
 
+/// Drive Gen4 IPL mode via relay/GPIO then POST the flash payload to the DC.
 async fn request_gen4_ipl(
     state: &AppState,
     assigned: &AssignedAction,
@@ -782,6 +810,7 @@ async fn request_gen4_ipl(
     Ok(())
 }
 
+/// Mark the action/test failed after dispatch error and build failure WS events.
 async fn fail_dispatch(
     state: &AppState,
     assigned: &AssignedAction,
@@ -855,6 +884,7 @@ async fn fail_dispatch(
     Ok(dispatch_failure_events(assigned, error))
 }
 
+/// Record a worker failure metric and log the sqlx-shaped error.
 fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
     state.metrics.record_worker_run("device_action", "failure");
     tracing::error!(%error, worker = "device_action", "{message}");
@@ -870,6 +900,7 @@ mod tests {
 
     use super::*;
 
+    /// Test fixture: an AssignedAction for a TEST job.
     fn assigned_test() -> AssignedAction {
         AssignedAction {
             action: QueuedAction {
@@ -892,6 +923,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: assignment event set matches frontend listeners.
     fn assignment_events_refresh_device_owner_and_build_views() {
         let events = assignment_events(&assigned_test());
         assert_eq!(
@@ -910,6 +942,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: failure events free the device and fail the test.
     fn dispatch_failure_events_restore_device_and_fail_test() {
         let events = dispatch_failure_events(&assigned_test(), "connection refused");
         assert_eq!(events[0].payload["state"], DeviceState::Free.to_string());

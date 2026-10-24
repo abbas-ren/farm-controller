@@ -1,3 +1,10 @@
+//! Jira defect filing for failed test cases.
+//!
+//! Ports the Jira creation/comment flow previously embedded in device-service
+//! test tooling. Searches for an open issue with a matching summary and either
+//! comments on it or creates a Bug; returns a browse URL for storage on the
+//! `testcase.jira_defect` column.
+
 #[cfg(test)]
 mod tests;
 
@@ -7,6 +14,7 @@ use serde::Deserialize;
 
 use crate::config::TestsConfig;
 
+/// Failures talking to or configuring the Jira REST API.
 #[derive(Debug, thiserror::Error)]
 pub enum JiraError {
     #[error("invalid Jira URL: {0}")]
@@ -17,6 +25,8 @@ pub enum JiraError {
     MissingIssueKey,
 }
 
+/// Fields assembled into a Jira issue description / comment body.
+#[derive(Debug)]
 pub struct JiraDefect {
     pub summary: String,
     pub script_file: String,
@@ -29,6 +39,7 @@ pub struct JiraDefect {
     pub comments: String,
 }
 
+/// Authenticated Jira REST client bound to one project.
 pub struct JiraClient {
     client: reqwest::Client,
     api_base: reqwest::Url,
@@ -38,12 +49,16 @@ pub struct JiraClient {
 }
 
 impl JiraClient {
+    /// PURPOSE: Build a client from `[tests]` Jira settings, or `None` if unset.
+    /// USE: Service bootstrap when wiring defect filing. Marks the Bearer token
+    /// header as sensitive so it is redacted in debug logs.
     pub fn configured(config: &TestsConfig) -> Result<Option<Self>, JiraError> {
         if config.jira_base_url.trim().is_empty() {
             return Ok(None);
         }
         let mut browse_base = reqwest::Url::parse(&config.jira_base_url)
             .map_err(|error| JiraError::InvalidUrl(error.to_string()))?;
+        // Ensure join("browse/KEY") works regardless of trailing slash in config.
         if !browse_base.path().ends_with('/') {
             browse_base.set_path(&format!("{}/", browse_base.path()));
         }
@@ -71,7 +86,11 @@ impl JiraClient {
         }))
     }
 
+    /// PURPOSE: Deduplicate open bugs by summary, else create a new Bug issue.
+    /// USE: Called when a test case fails and defect filing is enabled.
+    /// Side effects: Jira search + comment or create; returns browse URL.
     pub async fn add_defect(&self, defect: &JiraDefect) -> Result<String, JiraError> {
+        // Escape characters that break JQL string literals in summary matching.
         let jql_summary = defect.summary.replace(['\\', '"'], " ");
         let jql = format!(
             "project = {} AND status IN (\"To Do\", \"In Progress\") AND summary ~ \"{}\"",
@@ -93,6 +112,7 @@ impl JiraClient {
                 .await
                 .map_err(|error| JiraError::Request(error.to_string()))?;
             if let Some(issue) = search.issues.first() {
+                // Reuse open issue: append context instead of creating duplicates.
                 let response = self
                     .client
                     .post(self.endpoint(&format!("issue/{}/comment", issue.key))?)
@@ -133,12 +153,16 @@ impl JiraClient {
         self.browse_url(&response.key)
     }
 
+    /// PURPOSE: Resolve a path under the configured Jira REST API base.
+    /// USE: Internal helper for search/issue/comment endpoints.
     fn endpoint(&self, path: &str) -> Result<reqwest::Url, JiraError> {
         self.api_base
             .join(path)
             .map_err(|error| JiraError::InvalidUrl(error.to_string()))
     }
 
+    /// PURPOSE: Build the human browse URL for an issue key.
+    /// USE: Returned to callers for persistence on test-case rows.
     fn browse_url(&self, key: &str) -> Result<String, JiraError> {
         self.browse_base
             .join(&format!("browse/{key}"))
@@ -146,6 +170,8 @@ impl JiraClient {
             .map_err(|error| JiraError::InvalidUrl(error.to_string()))
     }
 
+    /// PURPOSE: Render the multiline description/comment body for a defect.
+    /// USE: Shared by create-issue and comment-on-existing paths.
     fn description(&self, defect: &JiraDefect) -> String {
         let script_url = if self.script_base_url.trim().is_empty() {
             String::new()
@@ -174,17 +200,21 @@ impl JiraClient {
     }
 }
 
+/// Jira `/search` response subset.
 #[derive(Deserialize)]
 struct SearchResponse {
     #[serde(default)]
     issues: Vec<Issue>,
 }
 
+/// Minimal issue identity from create/search responses.
 #[derive(Deserialize)]
 struct Issue {
     key: String,
 }
 
+/// PURPOSE: Truncate summaries to Jira's practical field length.
+/// USE: Applied before create-issue so overlong titles do not 400.
 fn truncate_chars(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }

@@ -1,3 +1,7 @@
+//! `BuildRepository` impl for `PostgresDeviceRepository`.
+//!
+//! Delegates to `build_store` modules.
+
 use super::*;
 
 use crate::persistence::entity::{device, device_type_folder, release};
@@ -8,6 +12,8 @@ use sea_orm::{
 
 #[async_trait]
 impl BuildRepository for PostgresDeviceRepository {
+    /// PURPOSE: Implement `flag_build` domain/persistence logic.
+    /// USE: Called as `flag_build` from handlers, repository impls, or sibling helpers.
     async fn flag_build(
         &self,
         build_id: &str,
@@ -18,6 +24,8 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::flag_build(self.orm(), build_id, request.is_faulty).await
     }
 
+    /// PURPOSE: Mutate persisted state for `update build status`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn update_build_status(
         &self,
         build_id: &str,
@@ -30,6 +38,8 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::update_build_status(self.orm(), build_id, status).await
     }
 
+    /// PURPOSE: Delete `delete build` from persistence.
+    /// USE: Delete handlers after edge cleanup when required.
     async fn delete_build(
         &self,
         build_id: &str,
@@ -39,6 +49,8 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::delete_build(self.orm(), build_id).await
     }
 
+    /// PURPOSE: Implement `finalize_build_upload` domain/persistence logic.
+    /// USE: Called as `finalize_build_upload` from handlers, repository impls, or sibling helpers.
     async fn finalize_build_upload(
         &self,
         request: &BuildUploadFinalization,
@@ -50,6 +62,8 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::finalize_upload(self.orm(), request).await
     }
 
+    /// PURPOSE: Implement `init_build_upload` domain/persistence logic.
+    /// USE: Called as `init_build_upload` from handlers, repository impls, or sibling helpers.
     async fn init_build_upload(
         &self,
         file_count: i32,
@@ -62,6 +76,8 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::init_upload(self.orm(), file_count, user_id).await
     }
 
+    /// PURPOSE: Mutate persisted state for `mark build upload started`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn mark_build_upload_started(
         &self,
         upload_id: &str,
@@ -74,6 +90,8 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::mark_upload_started(self.orm(), upload_id, user_id).await
     }
 
+    /// PURPOSE: Mutate persisted state for `mark build upload failed`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn mark_build_upload_failed(&self, upload_id: &str) -> Result<(), DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::postgres::builds",
@@ -82,12 +100,16 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::mark_upload_failed(self.orm(), upload_id).await
     }
 
+    /// PURPOSE: Build SeaORM filter/order clauses for `build filters`.
+    /// USE: Shared by count and page queries.
     async fn build_filters(&self) -> Result<BuildFilters, DeviceRepositoryError> {
         let _api_trace =
             crate::observability::ApiTrace::enter("devices::postgres::builds", "build_filters");
         build_store::build_filters(self.orm()).await
     }
 
+    /// PURPOSE: Fetch a single record for `build by id`.
+    /// USE: Detail handlers and repository lookups.
     async fn build_by_id(
         &self,
         build_id: &str,
@@ -97,6 +119,8 @@ impl BuildRepository for PostgresDeviceRepository {
         build_store::build_by_id(self.orm(), build_id).await
     }
 
+    /// PURPOSE: List/filter `list builds` rows for the API.
+    /// USE: HTTP list handlers and repository trait methods.
     async fn list_builds(
         &self,
         query: &BuildListQuery,
@@ -109,6 +133,8 @@ impl BuildRepository for PostgresDeviceRepository {
 
 #[async_trait]
 impl DeviceArtifactRepository for PostgresDeviceRepository {
+    /// PURPOSE: Implement `builds_for_device_type` domain/persistence logic.
+    /// USE: Called as `builds_for_device_type` from handlers, repository impls, or sibling helpers.
     async fn builds_for_device_type(
         &self,
         device_type: &str,
@@ -148,6 +174,8 @@ impl DeviceArtifactRepository for PostgresDeviceRepository {
             .collect())
     }
 
+    /// PURPOSE: Apply or confirm `configure artifacts` configuration.
+    /// USE: Relay configuration handlers and timeout workers.
     async fn configure_artifacts(
         &self,
         entries: &[DeviceTypeFolder],
@@ -187,6 +215,8 @@ impl DeviceArtifactRepository for PostgresDeviceRepository {
         Ok(configured)
     }
 
+    /// PURPOSE: Implement `artifact_folders` domain/persistence logic.
+    /// USE: Called as `artifact_folders` from handlers, repository impls, or sibling helpers.
     async fn artifact_folders(&self) -> Result<Vec<DeviceTypeFolder>, DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::postgres::builds",
@@ -206,6 +236,8 @@ impl DeviceArtifactRepository for PostgresDeviceRepository {
             .collect())
     }
 
+    /// PURPOSE: Implement `artifact_folder_for_device` domain/persistence logic.
+    /// USE: Called as `artifact_folder_for_device` from handlers, repository impls, or sibling helpers.
     async fn artifact_folder_for_device(
         &self,
         device_id: &str,

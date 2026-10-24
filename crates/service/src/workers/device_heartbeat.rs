@@ -1,3 +1,8 @@
+//! Device heartbeat timeout worker (legacy `HeartbeatQueueService` timeout path).
+//!
+//! Transitions approved devices to `not_reachable` / `faulty` when heartbeats
+//! stop, raises alerts, and publishes device state-change events.
+
 use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
@@ -16,6 +21,7 @@ use crate::{
     workers::types::{DeviceState, DeviceStateTransition, StaleDevice},
 };
 
+/// Poll loop for device heartbeat timeouts (faulty / not_reachable).
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
         state.config.workers.device_heartbeat_poll_seconds,
@@ -30,6 +36,7 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     tracing::info!(worker = "device_heartbeat_timeout", "worker stopped");
 }
 
+/// Claim stale devices, apply state transitions, raise alerts, publish events.
 async fn run_cycle(state: &AppState) {
     let Some(database) = &state.database else {
         return;
@@ -83,6 +90,7 @@ async fn run_cycle(state: &AppState) {
             .into(),
         )
         .limit(batch_size)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .all(&transaction)
         .await
@@ -224,6 +232,7 @@ async fn run_cycle(state: &AppState) {
         .record_worker_run("device_heartbeat_timeout", "success");
 }
 
+/// Latest interface `last_seen` used when classifying reachability.
 async fn latest_connected_seen(
     transaction: &sea_orm::DatabaseTransaction,
     device_row: &device::Model,
@@ -243,17 +252,20 @@ async fn latest_connected_seen(
 }
 
 
+/// Choose target state from heartbeat age vs FAULTY / NOT_REACHABLE thresholds.
 fn classify_stale_device(
     device_row: &device::Model,
     last_seen: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Option<StaleDevice> {
     let timer = device_row.heartbeat_timer.max(1) as i64;
+    // Legacy HeartbeatTimeouts: NOT_REACHABLE = 6× timer, FAULTY = 12× timer (seconds).
     let not_reachable_after = chrono::Duration::seconds(timer * 6);
     let faulty_after = chrono::Duration::seconds(timer * 12);
     if now.signed_duration_since(last_seen) < not_reachable_after {
         return None;
     }
+    // Phase: free/busy → not_reachable → faulty as silence lengthens.
     let target_state = if now.signed_duration_since(last_seen) >= faulty_after {
         "faulty"
     } else {
@@ -281,6 +293,7 @@ fn classify_stale_device(
     })
 }
 
+/// Serialize a device alert into the frontend WS payload shape.
 fn device_alert_json(model: &alert::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -305,6 +318,7 @@ fn device_alert_json(model: &alert::Model) -> serde_json::Value {
     })
 }
 
+/// Record heartbeat worker failure metrics.
 fn record_failure(state: &AppState, error: &sea_orm::DbErr, message: &str) {
     state
         .metrics
@@ -319,6 +333,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Unit test: heartbeat timeout event shapes match the UI.
     fn timeout_events_preserve_device_frontend_contracts() {
         let [state, alert] = transition_events(&DeviceStateTransition {
             device_id: "device-1".to_owned(),

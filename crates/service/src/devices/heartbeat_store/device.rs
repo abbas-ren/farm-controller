@@ -1,3 +1,7 @@
+//! Record device heartbeats, interface changes, and deferred cancellations.
+//!
+//! Ports Node `HeartbeatQueueService` device heartbeat handling.
+
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
@@ -16,6 +20,8 @@ use crate::{
 use super::super::error::DeviceRepositoryError;
 use super::{interface, state_transition::process_device_post_update};
 
+/// PURPOSE: Persist device heartbeat, apply state transitions, queue deferred work.
+/// USE: Device heartbeat worker/handler (Node HeartbeatQueueService).
 pub(crate) async fn record_device(
     orm: &DatabaseConnection,
     device_id: &str,
@@ -36,6 +42,7 @@ pub(crate) async fn record_device(
         .filter(device::Column::DeviceId.eq(device_id))
         .filter(device::Column::DeletedAt.is_null())
         .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?;
@@ -78,6 +85,7 @@ pub(crate) async fn record_device(
     let existing = heartbeat::Entity::find()
         .filter(heartbeat::Column::DeviceId.eq(device_id))
         .order_by_desc(heartbeat::Column::Timestamp)
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?;
@@ -173,6 +181,7 @@ pub(crate) async fn record_device(
                 .filter(device_interface::Column::DeviceId.eq(device_id))
                 .filter(device_interface::Column::Type.eq(&interface_status.interface_type))
                 .filter(device_interface::Column::InterfaceId.eq(interface_id))
+                // Row lock: serialize concurrent updates on this controller/device/relay.
                 .lock(LockType::Update)
                 .one(&transaction)
                 .await?;
@@ -220,6 +229,7 @@ pub(crate) async fn record_device(
             let existing = device_interface::Entity::find()
                 .filter(device_interface::Column::DeviceId.eq(device_id))
                 .filter(device_interface::Column::Type.eq(&interface_status.interface_type))
+                // Row lock: serialize concurrent updates on this controller/device/relay.
                 .lock(LockType::Update)
                 .all(&transaction)
                 .await?;
@@ -307,6 +317,8 @@ pub(crate) async fn record_device(
     }))
 }
 
+/// PURPOSE: Serialize `alert json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn alert_json(model: &alert::Model) -> serde_json::Value {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::heartbeat_store::device", "alert_json");

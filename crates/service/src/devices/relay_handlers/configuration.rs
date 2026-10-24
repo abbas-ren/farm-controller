@@ -1,3 +1,8 @@
+//! Modern relay channel configuration and confirmation handlers.
+//!
+//! Ports Node `configureRelayAndChannels` and `confirmConfigDeviceRelay`
+//! (`POST /relay/configure`, `/relay/config/confirmation`).
+
 use crate::socket::types::{
     farm::ServerEvent,
     frontend::{Action, DevicePower, FrontendMessagePayload},
@@ -5,6 +10,8 @@ use crate::socket::types::{
 
 use super::*;
 
+/// PURPOSE: Configure relay channels
+/// USE: Frontend admin UI (bearer + admin role); also used by workers / other handlers.
 #[utoipa::path(post, path = "/api/v1/device/relay/configure", tag = "Devices", summary = "Configure relay channels", description = "Validates and atomically commits one or many channel mappings with clear-first move semantics, then queues hardware synchronization.", request_body = RelayConfigurationRequest, security(("bearer_auth" = [])), responses((status = 202, description = "Configuration committed and hardware sync started", body = RelayConfigurationAccepted), (status = 400, description = "Invalid configuration batch", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Relay, channel, controller, or device not found", body = ErrorResponse), (status = 409, description = "Device is already mapped", body = ErrorResponse), (status = 500, description = "Relay configuration failed", body = ErrorResponse), (status = 503, description = "Persistence or relay worker unavailable", body = ErrorResponse)))]
 pub(crate) async fn configure_relay_channels(
     State(state): State<Arc<AppState>>,
@@ -12,6 +19,7 @@ pub(crate) async fn configure_relay_channels(
     payload: Result<Json<RelayConfigurationRequest>, JsonRejection>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::configuration", "configure_relay_channels");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -28,9 +36,11 @@ pub(crate) async fn configure_relay_channels(
     };
     let (configurations, is_batch) = match relay_configurations(request) {
         Ok(configurations) => configurations,
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to configure relay channels"),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -39,6 +49,7 @@ pub(crate) async fn configure_relay_channels(
     };
     let result = match repository.configure_relay_channels(&configurations).await {
         Ok(result) => result,
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to configure relay channels"),
     };
     let relay_id = configurations
@@ -54,6 +65,7 @@ pub(crate) async fn configure_relay_channels(
             .unwrap_or(serde_json::Value::Null)
     };
     if let Err(error) = state.relay_sync.enqueue(result.actions, relay_id) {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "worker_unavailable",
@@ -71,6 +83,8 @@ pub(crate) async fn configure_relay_channels(
         .into_response()
 }
 
+/// PURPOSE: Confirm relay configuration
+/// USE: publishes Socket.IO frontend events.
 #[utoipa::path(post, path = "/api/v1/device/relay/config/confirmation", tag = "Devices", summary = "Confirm relay configuration", description = "Public EdgeController callback that reconciles durable pending relay state before emitting power, progress, and controller events.", request_body = RelayConfigurationConfirmation, responses((status = 200, description = "Confirmation reconciled", body = RelayConfirmationResponse), (status = 400, description = "Invalid callback payload", body = ErrorResponse), (status = 404, description = "Relay confirmation target not found", body = ErrorResponse), (status = 500, description = "Relay confirmation failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub(crate) async fn confirm_relay_configuration(
     State(state): State<Arc<AppState>>,
@@ -88,6 +102,7 @@ pub(crate) async fn confirm_relay_configuration(
         }
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -103,16 +118,20 @@ pub(crate) async fn confirm_relay_configuration(
     {
         Ok(response) => {
             for event in confirmation_events(&response) {
+                // Publish: notify connected frontend clients via Socket.IO.
                 if let Err(error) = state.event_publisher.publish(event) {
                     tracing::warn!(%error, mac = confirmation.mac, "failed to publish relay confirmation");
                 }
             }
             Json(response).into_response()
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to confirm relay configuration"),
     }
 }
 
+/// PURPOSE: Confirm relay configuration
+/// USE: publishes Socket.IO frontend events.
 pub(crate) fn confirmation_events(response: &RelayConfirmationResponse) -> Vec<ServerEvent> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::configuration", "confirmation_events");
     let Some(relay_id) = response.relay_id else {

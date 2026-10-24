@@ -10,6 +10,7 @@ pub(super) struct Benchmark {
     pub(super) target: f64,
 }
 
+/// Canonical category.
 pub(super) fn canonical_category(value: &str) -> Option<&'static str> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "canonical_category");
     match value.trim().to_ascii_lowercase().as_str() {
@@ -23,6 +24,7 @@ pub(super) fn canonical_category(value: &str) -> Option<&'static str> {
     }
 }
 
+/// Identify benchmark.
 pub(super) fn identify_benchmark(command: &str) -> Option<Benchmark> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "identify_benchmark");
     let command = command.to_ascii_lowercase();
@@ -82,6 +84,7 @@ pub(super) fn identify_benchmark(command: &str) -> Option<Benchmark> {
     })
 }
 
+/// Derive label.
 pub(super) fn derive_label(command: &str, benchmark: &str, raw_category: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "derive_label");
     let lower = command.to_ascii_lowercase();
@@ -160,6 +163,7 @@ pub(super) fn derive_label(command: &str, benchmark: &str, raw_category: &str) -
     }
 }
 
+/// Numbered label.
 pub(super) fn numbered_label(base: &str, sequence: usize, benchmark: Option<&str>) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "numbered_label");
     match benchmark {
@@ -169,6 +173,7 @@ pub(super) fn numbered_label(base: &str, sequence: usize, benchmark: Option<&str
     }
 }
 
+/// Metric value.
 pub(super) fn metric_value(content: &str, benchmark: Option<Benchmark>) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "metric_value");
     match benchmark.map(|value| value.name) {
@@ -180,6 +185,7 @@ pub(super) fn metric_value(content: &str, benchmark: Option<Benchmark>) -> f64 {
     }
 }
 
+/// Extract iperf mbps.
 fn extract_iperf_mbps(content: &str) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_iperf_mbps");
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
@@ -205,6 +211,7 @@ fn extract_iperf_mbps(content: &str) -> f64 {
     0.0
 }
 
+/// Extract dhrystone.
 fn extract_dhrystone(content: &str) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_dhrystone");
     let row =
@@ -225,6 +232,7 @@ fn extract_dhrystone(content: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Extract mbw.
 fn extract_mbw(content: &str) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_mbw");
     Regex::new(r"(?m)^AVG\s+Method:\s*MEMCPY.*?Copy:\s*([0-9]+(?:\.[0-9]+)?)\s*MiB/s")
@@ -235,6 +243,7 @@ fn extract_mbw(content: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Extract glmark2.
 fn extract_glmark2(content: &str) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_glmark2");
     if let Some(score) = Regex::new(r"(?i)\bglmark2\s+Score:\s*([0-9]+(?:\.[0-9]+)?)\b")
@@ -253,6 +262,7 @@ fn extract_glmark2(content: &str) -> f64 {
     )
 }
 
+/// Average.
 fn average(values: impl Iterator<Item = f64>) -> f64 {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "average");
     let values = values.collect::<Vec<_>>();

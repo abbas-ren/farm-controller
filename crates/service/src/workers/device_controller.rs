@@ -1,3 +1,8 @@
+//! Device-controller heartbeat timeout worker.
+//!
+//! Marks controllers not heard from within the heartbeat window as unreachable,
+//! creates alerts, and publishes controller/alert events to the farm hub.
+
 use crate::{
     persistence::entity::{alert, device_controller},
     socket::helpers::controller_timeout_events,
@@ -15,6 +20,7 @@ use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// Poll loop for device-controller heartbeat timeouts.
 pub(crate) async fn controller_heartbeat_timeout_worker(
     state: Arc<AppState>,
     cancellation: CancellationToken,
@@ -32,6 +38,7 @@ pub(crate) async fn controller_heartbeat_timeout_worker(
     tracing::info!(worker = "controller_heartbeat_timeout", "worker stopped");
 }
 
+/// Mark silent controllers unreachable, insert alerts, publish events.
 async fn run_controller_heartbeat_timeout_cycle(state: &AppState) {
     let Some(database) = &state.database else {
         return;
@@ -66,6 +73,7 @@ async fn run_controller_heartbeat_timeout_cycle(state: &AppState) {
         ))
         .order_by_asc(device_controller::Column::UpdatedAt)
         .limit(batch_size)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .all(&transaction)
         .await
@@ -164,6 +172,7 @@ async fn run_controller_heartbeat_timeout_cycle(state: &AppState) {
         .record_worker_run("controller_heartbeat_timeout", "success");
 }
 
+/// Serialize an alert model into the frontend alert event payload shape.
 fn controller_alert_json(model: &alert::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,

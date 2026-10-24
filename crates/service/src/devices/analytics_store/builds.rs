@@ -1,3 +1,8 @@
+//! Build comparison and performance analytics queries.
+//!
+//! Used by analytics HTTP handlers for build dashboards. Ports Node
+//! `AnalyticsService` build comparison / performance aggregations.
+
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
@@ -8,6 +13,8 @@ use crate::persistence::entity::{device_action_queue, release, test_case, test_e
 
 use super::super::error::DeviceRepositoryError;
 
+/// PURPOSE: Implement `build_comparisons` domain/persistence logic.
+/// USE: Called as `build_comparisons` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn build_comparisons(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -108,6 +115,8 @@ pub(crate) async fn build_comparisons(
         .collect())
 }
 
+/// PURPOSE: Fetch a single record for `build comparison by id`.
+/// USE: Detail handlers and repository lookups.
 pub(crate) async fn build_comparison_by_id(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -129,6 +138,8 @@ pub(crate) async fn build_comparison_by_id(
     Ok(Some(build_comparison_payload(orm, build_id).await?))
 }
 
+/// PURPOSE: Implement `build_performance` domain/persistence logic.
+/// USE: Called as `build_performance` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn build_performance(
     orm: &DatabaseConnection,
     count: i64,
@@ -167,6 +178,8 @@ pub(crate) async fn build_performance(
     Ok(result)
 }
 
+/// PURPOSE: Fetch a single record for `build performance by id`.
+/// USE: Detail handlers and repository lookups.
 pub(crate) async fn build_performance_by_id(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -180,6 +193,8 @@ pub(crate) async fn build_performance_by_id(
         .unwrap_or_else(|| serde_json::json!({})))
 }
 
+/// PURPOSE: Implement `build_comparison_payload` domain/persistence logic.
+/// USE: Called as `build_comparison_payload` from handlers, repository impls, or sibling helpers.
 async fn build_comparison_payload(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -237,6 +252,8 @@ async fn build_comparison_payload(
     }))
 }
 
+/// PURPOSE: Implement `build_performance_payload` domain/persistence logic.
+/// USE: Called as `build_performance_payload` from handlers, repository impls, or sibling helpers.
 async fn build_performance_payload(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -335,6 +352,7 @@ async fn build_performance_payload(
 }
 
 #[derive(Default)]
+/// Domain/DTO type `BuildMetrics` used across device stores and handlers.
 struct BuildMetrics {
     last_used: Option<DateTime<Utc>>,
     executions: i64,
@@ -343,6 +361,8 @@ struct BuildMetrics {
     passed_cases: i64,
 }
 
+/// PURPOSE: Implement `execution_ids` domain/persistence logic.
+/// USE: Called as `execution_ids` from handlers, repository impls, or sibling helpers.
 fn execution_ids(executions: &[test_execution::Model]) -> Vec<String> {
     executions
         .iter()
@@ -350,6 +370,8 @@ fn execution_ids(executions: &[test_execution::Model]) -> Vec<String> {
         .collect()
 }
 
+/// PURPOSE: Load or save `load releases`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_releases(
     orm: &DatabaseConnection,
     build_ids: &HashSet<String>,
@@ -363,6 +385,8 @@ async fn load_releases(
     Ok(map)
 }
 
+/// PURPOSE: Implement `find_release` domain/persistence logic.
+/// USE: Called as `find_release` from handlers, repository impls, or sibling helpers.
 async fn find_release(
     orm: &DatabaseConnection,
     build_id: &str,
@@ -373,6 +397,8 @@ async fn find_release(
     Ok(release::Entity::find_by_id(id).one(orm).await?)
 }
 
+/// PURPOSE: Load or save `load cases`.
+/// USE: Internal store helpers during multi-step transactions.
 async fn load_cases(
     orm: &DatabaseConnection,
     ids: &[String],
@@ -399,10 +425,14 @@ async fn load_cases(
     Ok(map)
 }
 
+/// PURPOSE: Implement `round2` domain/persistence logic.
+/// USE: Called as `round2` from handlers, repository impls, or sibling helpers.
 fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
+/// PURPOSE: Serialize `release status str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn release_status_str(status: &release::ReleaseTestStatus) -> &'static str {
     match status {
         release::ReleaseTestStatus::Untested => "untested",
@@ -412,6 +442,8 @@ fn release_status_str(status: &release::ReleaseTestStatus) -> &'static str {
     }
 }
 
+/// PURPOSE: Serialize `test status str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn test_status_str(status: &test_execution::TestStatus) -> &'static str {
     match status {
         test_execution::TestStatus::NotExecuted => "not_executed",

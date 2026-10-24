@@ -1,3 +1,5 @@
+//! Keycloak sign-in (ROPC) and access-token validation / refresh.
+
 use axum::http::StatusCode;
 
 use super::super::transport::{KeycloakRole, KeycloakUser, UserInfo};
@@ -7,6 +9,7 @@ use crate::auth::constants::{FORBIDDEN, INVALID_CREDENTIALS, SESSION_EXPIRED};
 use crate::auth::{IdentityError, SigninResult, ValidationResult};
 
 impl KeycloakIdentityProvider {
+    /// Resource-owner password sign-in; falls back to email→username lookup on 400.
     pub(super) async fn signin_impl(
         &self,
         username: &str,
@@ -58,6 +61,7 @@ impl KeycloakIdentityProvider {
         Ok(mapping::signin_result(token, user_info, roles))
     }
 
+    /// Validate access token (and optional refresh), enforcing `required_role` when set.
     pub(super) async fn validate_impl(
         &self,
         access_token: &str,

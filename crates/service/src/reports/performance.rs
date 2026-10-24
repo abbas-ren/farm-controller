@@ -6,6 +6,7 @@ use regex::Regex;
 
 use super::{ReportRequest, artifact_writers::escape_html, validation::report_root};
 
+/// Write performance comparisons.
 pub(crate) async fn write_performance_comparisons(
     results_root: &Path,
     current_root: &Path,
@@ -161,6 +162,7 @@ pub(crate) async fn write_performance_comparisons(
     Ok(())
 }
 
+/// Render performance comparison.
 fn render_performance_comparison(
     path: &Path,
     labels: &[String],
@@ -216,6 +218,7 @@ fn render_performance_comparison(
         .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
+/// Performance metrics.
 pub(crate) fn performance_metrics(content: &str) -> (HashMap<String, f64>, String) {
     let _api_trace = crate::observability::ApiTrace::enter("reports::performance", "performance_metrics");
     let lines = content.lines().collect::<Vec<_>>();

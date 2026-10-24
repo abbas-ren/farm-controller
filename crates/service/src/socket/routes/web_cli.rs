@@ -1,3 +1,5 @@
+//! In-browser CLI over WebSocket (legacy WebCliHandler command registry).
+
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -25,6 +27,7 @@ const HELP: &str = "\
     racer-clear                 Clear the terminal screen\r\n\
     racer-help                  Show this help message";
 
+/// Session.
 pub(super) async fn session(
     state: Arc<AppState>,
     user_id: String,
@@ -121,6 +124,7 @@ pub(super) async fn session(
     }
 }
 
+/// Unit test: run test.
 async fn run_test(
     state: &AppState,
     user_id: &str,
@@ -354,6 +358,7 @@ async fn run_test(
     }
 }
 
+/// Interactive selection.
 async fn interactive_selection(
     socket: &mut WebSocket,
     catalog: &Arc<dyn crate::test_catalog::TestCatalog>,
@@ -443,6 +448,7 @@ async fn interactive_selection(
     ))
 }
 
+/// Prompt string.
 async fn prompt_string(
     socket: &mut WebSocket,
     prompt_type: &str,
@@ -458,6 +464,7 @@ async fn prompt_string(
         .ok_or_else(|| "Prompt returned an invalid value".to_owned())
 }
 
+/// Prompt value.
 async fn prompt_value(
     socket: &mut WebSocket,
     prompt_type: &str,
@@ -523,11 +530,13 @@ async fn prompt_value(
     .map_err(|_| "Prompt timeout".to_owned())?
 }
 
+/// Choice.
 fn choice(label: &str, value: &str) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "choice");
     serde_json::json!({"label": label, "value": value})
 }
 
+/// Value strings.
 fn value_strings(value: &serde_json::Value) -> Result<Vec<String>, String> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "value_strings");
     value
@@ -544,11 +553,13 @@ fn value_strings(value: &serde_json::Value) -> Result<Vec<String>, String> {
         .collect()
 }
 
+/// Cancelled.
 fn cancelled() -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "cancelled");
     "\x1b[90mTest execution cancelled\x1b[0m".to_owned()
 }
 
+/// All selection.
 fn all_selection(plan_id: u64) -> ExecutionSelection {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "all_selection");
     ExecutionSelection::All {
@@ -558,6 +569,7 @@ fn all_selection(plan_id: u64) -> ExecutionSelection {
     }
 }
 
+/// Partial selection.
 fn partial_selection(plan_id: u64, suites: Vec<ExecutionSuiteSelection>) -> ExecutionSelection {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "partial_selection");
     ExecutionSelection::Partial {
@@ -576,6 +588,7 @@ struct RunTestArgs {
     logs: bool,
 }
 
+/// Parse run test args.
 fn parse_run_test_args(args: &[&str]) -> Result<RunTestArgs, String> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "parse_run_test_args");
     let value_flags = [
@@ -646,6 +659,7 @@ fn parse_run_test_args(args: &[&str]) -> Result<RunTestArgs, String> {
     })
 }
 
+/// Comma ids.
 fn comma_ids(value: &str) -> Result<Vec<String>, String> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "comma_ids");
     let ids = value
@@ -659,6 +673,7 @@ fn comma_ids(value: &str) -> Result<Vec<String>, String> {
     Ok(ids.into_iter().map(str::to_owned).collect())
 }
 
+/// Case selections.
 fn case_selections(value: &str) -> Result<Vec<ExecutionSuiteSelection>, String> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "case_selections");
     let mut selections = Vec::<ExecutionSuiteSelection>::new();
@@ -696,6 +711,7 @@ fn case_selections(value: &str) -> Result<Vec<ExecutionSuiteSelection>, String> 
     Ok(selections)
 }
 
+/// Execute.
 async fn execute(state: &AppState, command: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "execute");
     if command.is_empty() {
@@ -730,6 +746,7 @@ async fn execute(state: &AppState, command: &str) -> String {
     }
 }
 
+/// List builds.
 async fn list_builds(orm: &sea_orm::DatabaseConnection, args: Vec<&str>) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_builds");
     let parsed = match parse_build_args(&args) {
@@ -753,6 +770,7 @@ async fn list_builds(orm: &sea_orm::DatabaseConnection, args: Vec<&str>) -> Stri
     }
 }
 
+/// List test plans.
 async fn list_test_plans(state: &AppState, args: Vec<&str>) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_test_plans");
     let filter = match flag_value(&args, "--filter", "-f") {
@@ -776,6 +794,7 @@ async fn list_test_plans(state: &AppState, args: Vec<&str>) -> String {
     }
 }
 
+/// List test suites.
 async fn list_test_suites(state: &AppState, args: Vec<&str>) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_test_suites");
     let Some(plan_id) = positive_id(args.first().copied()) else {
@@ -798,6 +817,7 @@ async fn list_test_suites(state: &AppState, args: Vec<&str>) -> String {
     }
 }
 
+/// List test cases.
 async fn list_test_cases(state: &AppState, args: Vec<&str>) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_test_cases");
     let Some(plan_id) = positive_id(args.first().copied()) else {
@@ -834,6 +854,7 @@ struct BuildArgs {
     flagged: bool,
 }
 
+/// Parse build args.
 fn parse_build_args(args: &[&str]) -> Result<BuildArgs, String> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "parse_build_args");
     let positional = args
@@ -865,6 +886,7 @@ fn parse_build_args(args: &[&str]) -> Result<BuildArgs, String> {
     })
 }
 
+/// Flag value.
 fn flag_value(args: &[&str], long: &str, short: &str) -> Result<Option<String>, String> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "flag_value");
     let Some(index) = args
@@ -879,6 +901,7 @@ fn flag_value(args: &[&str], long: &str, short: &str) -> Result<Option<String>, 
         .ok_or_else(|| format!("{long} requires a value"))
 }
 
+/// Positive id.
 fn positive_id(value: Option<&str>) -> Option<u64> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "positive_id");
     value
@@ -886,6 +909,7 @@ fn positive_id(value: Option<&str>) -> Option<u64> {
         .filter(|id| *id > 0)
 }
 
+/// Format builds.
 fn format_builds(builds: &[serde_json::Value]) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "format_builds");
     let mut output =
@@ -921,11 +945,13 @@ fn format_builds(builds: &[serde_json::Value]) -> String {
     output
 }
 
+/// Cli error.
 fn cli_error(error: impl std::fmt::Display) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "cli_error");
     format!("\x1b[31m Error: {error}\x1b[0m")
 }
 
+/// Load device types.
 async fn load_device_types(
     orm: &sea_orm::DatabaseConnection,
     family: &str,
@@ -947,6 +973,7 @@ async fn load_device_types(
     Ok(types)
 }
 
+/// List devices.
 async fn list_devices(orm: &sea_orm::DatabaseConnection, available_only: bool) -> String {
     use crate::persistence::entity::device;
     use crate::devices::postgres::json_models::device_state_str;
@@ -989,6 +1016,7 @@ async fn list_devices(orm: &sea_orm::DatabaseConnection, available_only: bool) -
     }
 }
 
+/// Device stats.
 async fn device_stats(orm: &sea_orm::DatabaseConnection) -> String {
     use crate::persistence::entity::device;
     use crate::devices::postgres::json_models::device_state_str;
@@ -1033,6 +1061,7 @@ async fn device_stats(orm: &sea_orm::DatabaseConnection) -> String {
     }
 }
 
+/// Device detail.
 async fn device_detail(orm: &sea_orm::DatabaseConnection, device_id: &str) -> String {
     use crate::devices::postgres::json_models::{device_json, interface_json};
     use crate::persistence::entity::{device, device_interface, heartbeat};
@@ -1075,16 +1104,19 @@ async fn device_detail(orm: &sea_orm::DatabaseConnection, device_id: &str) -> St
     }
 }
 
+/// Truncate.
 fn truncate(value: &str, width: usize) -> &str {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "truncate");
     value.get(..width).unwrap_or(value)
 }
 
+/// Send cli.
 async fn send_cli(socket: &mut WebSocket, output: &str) -> Result<(), axum::Error> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "send_cli");
     send_json(socket, serde_json::json!({"type": "cli", "output": output})).await
 }
 
+/// Send json.
 async fn send_json(socket: &mut WebSocket, value: serde_json::Value) -> Result<(), axum::Error> {
     let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "send_json");
     socket.send(Message::Text(value.to_string().into())).await
@@ -1095,6 +1127,7 @@ mod tests {
     use super::{case_selections, format_builds, parse_build_args, parse_run_test_args, truncate};
 
     #[test]
+    /// Table values are width bounded.
     fn table_values_are_width_bounded() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "table_values_are_width_bounded");
         assert_eq!(truncate("123456", 4), "1234");
@@ -1102,6 +1135,7 @@ mod tests {
     }
 
     #[test]
+    /// Build arguments are bounded and parse legacy flags.
     fn build_arguments_are_bounded_and_parse_legacy_flags() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "build_arguments_are_bounded_and_parse_legacy_flags");
         let parsed = parse_build_args(&["Gen4", "h3", "--limit", "20", "--flagged"]).unwrap();
@@ -1113,6 +1147,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: build table preserves frontend fields.
     fn build_table_preserves_frontend_fields() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "build_table_preserves_frontend_fields");
         let output = format_builds(&[serde_json::json!({
@@ -1125,6 +1160,7 @@ mod tests {
     }
 
     #[test]
+    /// Run test arguments build all and partial selections.
     fn run_test_arguments_build_all_and_partial_selections() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "run_test_arguments_build_all_and_partial_selections");
         let all = parse_run_test_args(&["Gen4", "h3", "build-1", "6", "--all", "--logs"]).unwrap();
@@ -1143,6 +1179,7 @@ mod tests {
     }
 
     #[test]
+    /// Case spec groups cases under their suite.
     fn case_spec_groups_cases_under_their_suite() {
         let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "case_spec_groups_cases_under_their_suite");
         let selections = case_selections("30:38,39,31:101,102").unwrap();

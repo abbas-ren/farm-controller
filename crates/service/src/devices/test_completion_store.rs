@@ -1,3 +1,9 @@
+//! Resolve edge targets and persist RTOS log paths when a test completes.
+//!
+//! Used by the test-completion HTTP handler and workers that tear down Gen4
+//! relay / Gen5 UART mappings after an execution finishes. Ports the lookup
+//! logic from Node `TestService` completion callbacks.
+
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     sea_query::Expr,
@@ -13,6 +19,8 @@ use super::{
     repository_types::TestCompletionTarget,
 };
 
+/// PURPOSE: Load execution status plus Gen4 relay / Gen5 UART teardown targets for a device.
+/// USE: Test-completion handler before issuing edge cleanup commands.
 pub(crate) async fn test_completion_target(
     orm: &DatabaseConnection,
     test_id: &str,
@@ -67,6 +75,8 @@ pub(crate) async fn test_completion_target(
     }))
 }
 
+/// PURPOSE: Find the newest non-deleted relay channel mapped to a device and its controller IP.
+/// USE: Gen4 completion teardown needs serial + channel number on the edge.
 async fn resolve_relay_mapping(
     orm: &DatabaseConnection,
     device_id: &str,
@@ -100,6 +110,8 @@ async fn resolve_relay_mapping(
     Ok((None, None, None))
 }
 
+/// PURPOSE: Locate an active approved controller whose mappings JSON contains the device MAC.
+/// USE: Gen5 completion teardown needs controller IP + UART port from mappings.
 async fn resolve_gen5_mapping(
     orm: &DatabaseConnection,
     device_model: &device::Model,
@@ -107,6 +119,7 @@ async fn resolve_gen5_mapping(
     let Some(mac) = device_model.mac_address.as_deref() else {
         return Ok((None, None));
     };
+    // Normalize MAC the same way controller mappings keys are stored.
     let mac_key = normalize_mapping_lookup_key(mac);
     if mac_key.is_empty() {
         return Ok((None, None));
@@ -122,6 +135,7 @@ async fn resolve_gen5_mapping(
         .await?;
 
     controllers.retain(|c| mapping_entry_for_mac(&c.mappings, mac).is_some());
+    // Prefer the device's assigned controller, then most recently updated.
     controllers.sort_by(|a, b| {
         let a_preferred = device_model
             .controller_id
@@ -146,6 +160,8 @@ async fn resolve_gen5_mapping(
     Ok((Some(controller.ip_address), uart))
 }
 
+/// PURPOSE: Persist the RTOS capture log path on the test execution row.
+/// USE: After Gen5 RTOS log capture succeeds during completion.
 pub(crate) async fn store_rtos_log_path(
     orm: &DatabaseConnection,
     test_id: &str,

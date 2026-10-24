@@ -11,6 +11,7 @@ use crate::auth::{IdentityError, RefreshedTokens};
 use crate::{config::AuthConfig, error::AppError};
 
 impl KeycloakIdentityProvider {
+    /// New.
     pub fn new(config: AuthConfig) -> Result<Self, AppError> {
         let base_url = Url::parse(&config.keycloak_url).map_err(|error| {
             AppError::IdentityProvider(format!("invalid Keycloak URL: {error}"))
@@ -25,6 +26,7 @@ impl KeycloakIdentityProvider {
         })
     }
 
+    /// Endpoint.
     pub(super) fn endpoint(&self, path: &str) -> Result<Url, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "endpoint");
         self.base_url
@@ -32,6 +34,7 @@ impl KeycloakIdentityProvider {
             .map_err(|error| IdentityError::upstream(StatusCode::BAD_GATEWAY, error.to_string()))
     }
 
+    /// Client secret.
     fn client_secret(&self) -> Result<&str, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "client_secret");
         self.config.client_secret.as_deref().ok_or_else(|| {
@@ -42,6 +45,7 @@ impl KeycloakIdentityProvider {
         })
     }
 
+    /// Token request.
     pub(super) async fn token_request<T: DeserializeOwned>(
         &self,
         form: &[(&str, &str)],
@@ -61,6 +65,7 @@ impl KeycloakIdentityProvider {
         transport::decode_response(response).await
     }
 
+    /// Client token.
     pub(super) async fn client_token(&self) -> Result<String, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "client_token");
         let response: transport::ClientTokenResponse = self
@@ -73,6 +78,7 @@ impl KeycloakIdentityProvider {
         Ok(response.access_token)
     }
 
+    /// Password token.
     pub(super) async fn password_token(
         &self,
         username: &str,
@@ -90,6 +96,7 @@ impl KeycloakIdentityProvider {
         .await
     }
 
+    /// Introspect.
     pub(super) async fn introspect(
         &self,
         token: &str,
@@ -114,6 +121,7 @@ impl KeycloakIdentityProvider {
         transport::decode_response(response).await
     }
 
+    /// Refresh.
     pub(super) async fn refresh(
         &self,
         refresh_token: &str,
@@ -134,6 +142,7 @@ impl KeycloakIdentityProvider {
         })
     }
 
+    /// Get bearer.
     pub(super) async fn get_bearer<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -143,6 +152,7 @@ impl KeycloakIdentityProvider {
         self.get_bearer_url(self.endpoint(path)?, token).await
     }
 
+    /// Get bearer url.
     pub(super) async fn get_bearer_url<T: DeserializeOwned>(
         &self,
         url: Url,

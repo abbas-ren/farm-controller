@@ -1,3 +1,9 @@
+//! Legacy (pre-modern) relay CRUD, configure, remap, and conflict queries.
+//!
+//! Used by legacy relay HTTP handlers still called by older UI flows.
+//! Ports Node `RelayService` legacy endpoints that operate on the older
+//! relay/channel schema and conflict detection.
+
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, TransactionTrait,
@@ -15,6 +21,8 @@ use super::{
     repository_types::{RelayConfigurationResult, RelayControllerAction},
 };
 
+/// PURPOSE: List/filter `list relays` rows for the API.
+/// USE: HTTP list handlers and repository trait methods.
 pub(crate) async fn list_relays(
     orm: &DatabaseConnection,
     query: &LegacyRelayListQuery,
@@ -34,6 +42,8 @@ pub(crate) async fn list_relays(
         .collect())
 }
 
+/// PURPOSE: List/filter `list channels` rows for the API.
+/// USE: HTTP list handlers and repository trait methods.
 pub(crate) async fn list_channels(
     orm: &DatabaseConnection,
     query: &LegacyRelayChannelListQuery,
@@ -56,6 +66,8 @@ pub(crate) async fn list_channels(
         .collect())
 }
 
+/// PURPOSE: Fetch a single record for `relay by id`.
+/// USE: Detail handlers and repository lookups.
 pub(crate) async fn relay_by_id(
     orm: &DatabaseConnection,
     relay_id: Uuid,
@@ -69,6 +81,8 @@ pub(crate) async fn relay_by_id(
         .map(|row| relay_json(&row)))
 }
 
+/// PURPOSE: Fetch a single record for `channel by id`.
+/// USE: Detail handlers and repository lookups.
 pub(crate) async fn channel_by_id(
     orm: &DatabaseConnection,
     channel_id: Uuid,
@@ -82,6 +96,8 @@ pub(crate) async fn channel_by_id(
         .map(|row| relay_channel_json(&row)))
 }
 
+/// PURPOSE: Delete `delete relay` from persistence.
+/// USE: Delete handlers after edge cleanup when required.
 pub(crate) async fn delete_relay(
     orm: &DatabaseConnection,
     relay_id: Uuid,
@@ -99,6 +115,8 @@ pub(crate) async fn delete_relay(
     Ok(result.rows_affected > 0)
 }
 
+/// PURPOSE: Delete `delete channel` from persistence.
+/// USE: Delete handlers after edge cleanup when required.
 pub(crate) async fn delete_channel(
     orm: &DatabaseConnection,
     channel_id: Uuid,
@@ -116,6 +134,8 @@ pub(crate) async fn delete_channel(
     Ok(result.rows_affected > 0)
 }
 
+/// PURPOSE: Apply or confirm `configure` configuration.
+/// USE: Relay configuration handlers and timeout workers.
 pub(crate) async fn configure(
     orm: &DatabaseConnection,
     request: &LegacyRelayConfiguration,
@@ -134,6 +154,7 @@ pub(crate) async fn configure(
     let transaction = orm.begin().await?;
     let channel = relay_channel::Entity::find_by_id(channel_id)
         .filter(relay_channel::Column::DeletedAt.is_null())
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?
@@ -214,6 +235,8 @@ pub(crate) async fn configure(
     })
 }
 
+/// PURPOSE: Implement `fresh` domain/persistence logic.
+/// USE: Called as `fresh` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn fresh(orm: &DatabaseConnection, relay_id: Uuid) -> Result<(), DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::legacy_relay_store", "fresh");
     let transaction = orm.begin().await?;
@@ -231,6 +254,8 @@ pub(crate) async fn fresh(orm: &DatabaseConnection, relay_id: Uuid) -> Result<()
     Ok(())
 }
 
+/// PURPOSE: Implement `remap` domain/persistence logic.
+/// USE: Called as `remap` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn remap(
     orm: &DatabaseConnection,
     relay_id: Uuid,
@@ -239,6 +264,7 @@ pub(crate) async fn remap(
     let transaction = orm.begin().await?;
     let relay_row = relay::Entity::find_by_id(relay_id)
         .filter(relay::Column::DeletedAt.is_null())
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(&transaction)
         .await?
@@ -318,6 +344,8 @@ pub(crate) async fn remap(
     })
 }
 
+/// PURPOSE: Implement `check_conflicts` domain/persistence logic.
+/// USE: Called as `check_conflicts` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn check_conflicts(
     orm: &DatabaseConnection,
     query: &LegacyRelayConflictQuery,
@@ -390,6 +418,8 @@ pub(crate) async fn check_conflicts(
     })
 }
 
+/// PURPOSE: Serialize `channel json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 async fn channel_json(
     transaction: &impl ConnectionTrait,
     channel_id: Uuid,

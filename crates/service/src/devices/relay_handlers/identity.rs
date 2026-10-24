@@ -1,3 +1,8 @@
+//! Relay identity update and device power-state read handlers.
+//!
+//! Ports Node identity updates and `getDeviceStateById` (`PUT /relay/{id}/identity`,
+//! `GET /relay/state/{id}`).
+
 use super::*;
 
 #[derive(Debug, Deserialize)]
@@ -19,6 +24,8 @@ struct EdgeRelayIdentity {
     pid: u16,
 }
 
+/// PURPOSE: Validate optional serial and required hexadecimal VID:PID for relay identity.
+/// USE: update_relay_identity request guard before EdgeController call.
 fn valid_relay_identity(request: &RelayIdentityUpdateRequest) -> bool {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "valid_relay_identity");
     let serial_valid = request.serial_number.as_deref().is_none_or(|serial| {
@@ -45,6 +52,8 @@ mod identity_validation_tests {
     use super::{RelayIdentityUpdateRequest, valid_relay_identity};
 
     #[test]
+/// PURPOSE: Assert VID:PID is required while serialNumber may be omitted.
+/// USE: regression for relay identity validation rules.
     fn vid_pid_is_required_and_serial_is_optional() {
         let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "vid_pid_is_required_and_serial_is_optional");
         assert!(valid_relay_identity(&RelayIdentityUpdateRequest {
@@ -63,6 +72,8 @@ mod identity_validation_tests {
 }
 
 #[utoipa::path(put, path = "/api/v1/device/relay/{id}/identity", tag = "Devices", summary = "Replace a Gen4 relay board identity", description = "Updates EdgeController's active USB relay identity and persists the resolved serial and VID:PID.", params(("id" = Uuid, Path)), request_body = RelayIdentityUpdateRequest, security(("bearer_auth" = [])), responses((status = 200, description = "Relay identity updated", body = RelayIdentityUpdateResponse), (status = 400, description = "Invalid relay identity", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Relay not found", body = ErrorResponse), (status = 409, description = "Relay serial already assigned", body = ErrorResponse), (status = 502, description = "EdgeController rejected the update", body = ErrorResponse), (status = 503, description = "Persistence unavailable", body = ErrorResponse)))]
+/// PURPOSE: Replace a Gen4 relay board identity on EdgeController and persist it.
+/// USE: Frontend admin UI (bearer + admin role); talks to EdgeController over HTTP.
 pub(crate) async fn update_relay_identity(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -70,6 +81,7 @@ pub(crate) async fn update_relay_identity(
     payload: Result<Json<RelayIdentityUpdateRequest>, JsonRejection>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "update_relay_identity");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -85,6 +97,7 @@ pub(crate) async fn update_relay_identity(
         }
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -96,6 +109,7 @@ pub(crate) async fn update_relay_identity(
         Ok(None) => {
             return error_response(StatusCode::NOT_FOUND, "relay_not_found", "Relay not found");
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to load relay identity target"),
     };
     let url = match reqwest::Url::parse(&format!(
@@ -176,22 +190,27 @@ pub(crate) async fn update_relay_identity(
                 .into_response()
         }
         Ok(false) => error_response(StatusCode::NOT_FOUND, "relay_not_found", "Relay not found"),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to persist relay identity"),
     }
 }
 
 #[utoipa::path(get, path = "/api/v1/device/relay/state/{id}", tag = "Devices", summary = "Read device relay state", description = "Queries the mapped EdgeController for the live channel state, validates the response, then persists the observed state.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Current relay state", body = String), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Relay mapping not found", body = ErrorResponse), (status = 500, description = "Stored mapping or persistence failed", body = ErrorResponse), (status = 502, description = "Controller state request failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
+/// PURPOSE: Read live device relay channel state from EdgeController and persist it.
+/// USE: Frontend admin UI (bearer + admin role); talks to EdgeController over HTTP.
 pub(crate) async fn relay_device_state(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "relay_device_state");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -207,6 +226,7 @@ pub(crate) async fn relay_device_state(
                 "Relay channel is not linked to this device",
             );
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to load relay mapping"),
     };
     let Ok(channel) = u8::try_from(target.channel_number) else {
@@ -279,6 +299,7 @@ pub(crate) async fn relay_device_state(
         .update_relay_state(target.channel_id, &relay_state)
         .await
     {
+        // Map: translate repository failure into the legacy HTTP error envelope.
         return repository_error(error, "Failed to save relay state");
     }
     (response_headers, Json(relay_state)).into_response()

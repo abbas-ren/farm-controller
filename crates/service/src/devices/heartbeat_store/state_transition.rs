@@ -1,3 +1,8 @@
+//! Device state transition rules during heartbeat processing.
+//!
+//! Encodes busy/free/faulty/not_reachable transitions and test-log inserts
+//! matching Node heartbeat worker behavior.
+
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel,
     QueryFilter, QueryOrder, QuerySelect, Set,
@@ -12,7 +17,8 @@ use crate::{
     socket::types::{farm::ServerEvent, frontend::FrontendMessagePayload},
 };
 
-/// Applies heartbeat-confirmed recovery work within the device heartbeat transaction.
+/// PURPOSE: Apply heartbeat-confirmed recovery (fallback flash, action queue, cancel busy tests).
+/// USE: Inside `record_device` after the device row is updated, still in the same transaction.
 pub(super) async fn process_device_post_update(
     transaction: &impl ConnectionTrait,
     device_id: &str,
@@ -35,6 +41,7 @@ pub(super) async fn process_device_post_update(
             fallback_update::FallbackStatus::Flashing,
         ]))
         .order_by_desc(fallback_update::Column::CreatedAt)
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(transaction)
         .await?;
@@ -82,6 +89,7 @@ pub(super) async fn process_device_post_update(
         .filter(device_action_queue::Column::Type.eq(device_action_queue::QueueJobType::Flash))
         .filter(device_action_queue::Column::Status.eq(device_action_queue::QueueJobStatus::Running))
         .order_by_asc(device_action_queue::Column::CreatedAt)
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(transaction)
         .await?;
@@ -103,6 +111,7 @@ pub(super) async fn process_device_post_update(
                 .await?;
             for release_row in releases {
                 let mut release_active = release_row.clone().into_active_model();
+                // Status transition: fallback flash success marks the release passed.
                 release_active.status = Set(Some(release::ReleaseTestStatus::Passed));
                 release_active.is_faulty = Set(Some(false));
                 release_active.updated_at = Set(now);
@@ -130,6 +139,7 @@ pub(super) async fn process_device_post_update(
         .filter(device_action_queue::Column::Status.eq(device_action_queue::QueueJobStatus::Waiting))
         .filter(device_action_queue::Column::IplFlashConfirm.eq(true))
         .order_by_asc(device_action_queue::Column::CreatedAt)
+        // Row lock: serialize concurrent updates on this controller/device/relay.
         .lock(LockType::Update)
         .one(transaction)
         .await?;
@@ -138,6 +148,7 @@ pub(super) async fn process_device_post_update(
         let can_requeue = if let Some(tid) = test_id.as_deref() {
             let execution = test_execution::Entity::find()
                 .filter(test_execution::Column::TestId.eq(tid))
+                // Row lock: serialize concurrent updates on this controller/device/relay.
                 .lock(LockType::Update)
                 .one(transaction)
                 .await?;
@@ -176,6 +187,7 @@ pub(super) async fn process_device_post_update(
             if let Some(execution) = execution {
                 let terminal = matches!(
                     execution.status,
+                    // Status transition: cancel in-progress execution when heartbeat frees a busy device.
                     Some(test_execution::TestStatus::Cancelled)
                         | Some(test_execution::TestStatus::Completed)
                         | Some(test_execution::TestStatus::Failed)
@@ -185,6 +197,7 @@ pub(super) async fn process_device_post_update(
                     let created_by = execution.created_by.clone();
                     let started = execution.started_at.unwrap_or(now);
                     let mut active = execution.into_active_model();
+                    // Status transition: cancel in-progress execution when heartbeat frees a busy device.
                     active.status = Set(Some(test_execution::TestStatus::Cancelled));
                     active.cancel_handled = Set(Some(true));
                     active.execution_phase =
@@ -273,6 +286,8 @@ pub(super) async fn process_device_post_update(
     Ok((events, deferred_cancellations, deferred_test_logs))
 }
 
+/// PURPOSE: Create/persist `insert test log`.
+/// USE: Create handlers after validation.
 async fn insert_test_log(
     transaction: &impl ConnectionTrait,
     test_id: &str,

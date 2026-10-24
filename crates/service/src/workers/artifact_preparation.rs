@@ -1,3 +1,8 @@
+//! Local artifact unpack helpers for NFS/TFTP staging.
+//!
+//! Shared by build upload preparation and the artifact scanner: path sanitization,
+//! rootfs tar unpack, hard-link restoration, and permission/mtime fixups.
+
 use std::{
     error::Error,
     fs::{self, File, Permissions},
@@ -12,6 +17,7 @@ use uuid::Uuid;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+/// Parse release artifact JSON into typed local/remote path descriptors.
 pub(crate) fn artifact_paths(
     value: &serde_json::Value,
     rootfs_archive_extension: &str,
@@ -38,6 +44,7 @@ pub(crate) fn artifact_paths(
     Ok([image, dtb, rootfs])
 }
 
+/// Unpack rootfs and stage files into NFS and TFTP destination trees.
 pub(crate) fn prepare_artifacts(
     paths: &[PathBuf; 3],
     nfs_path: &Path,
@@ -108,6 +115,7 @@ struct PendingHardLink {
     relative_target: PathBuf,
 }
 
+/// Extract a tar rootfs archive, deferring hard links until after file writes.
 fn unpack_rootfs<R: io::Read>(mut archive: tar::Archive<R>, destination: &Path) -> io::Result<()> {
     let destination = destination.canonicalize()?;
     let mut directories = Vec::<DirectoryMetadata>::new();
@@ -184,6 +192,7 @@ fn unpack_rootfs<R: io::Read>(mut archive: tar::Archive<R>, destination: &Path) 
     Ok(())
 }
 
+/// Create deferred hard links after regular members are unpacked.
 fn create_hard_links(destination: &Path, mut pending: Vec<PendingHardLink>) -> io::Result<()> {
     while !pending.is_empty() {
         let previous_count = pending.len();
@@ -224,6 +233,7 @@ fn create_hard_links(destination: &Path, mut pending: Vec<PendingHardLink>) -> i
     Ok(())
 }
 
+/// Create a single hard link, falling back to copy if link fails.
 fn create_one_hard_link(destination: &Path, link: &PendingHardLink) -> io::Result<()> {
     let source = destination
         .join(&link.relative_target)
@@ -283,6 +293,7 @@ fn create_one_hard_link(destination: &Path, link: &PendingHardLink) -> io::Resul
     })
 }
 
+/// Apply saved directory modes and mtimes after unpack.
 fn restore_directory_metadata(
     destination: &Path,
     mut directories: Vec<DirectoryMetadata>,
@@ -314,6 +325,7 @@ fn restore_directory_metadata(
     Ok(())
 }
 
+/// Set filesystem mtime from archive metadata seconds.
 fn set_modified_time(path: &Path, seconds: u64) -> io::Result<()> {
     let modified = UNIX_EPOCH
         .checked_add(Duration::from_secs(seconds))
@@ -323,15 +335,18 @@ fn set_modified_time(path: &Path, seconds: u64) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+/// Writable dir mode used while unpacking.
 fn temporary_directory_permissions() -> Permissions {
     Permissions::from_mode(0o755)
 }
 
 #[cfg(unix)]
+/// Convert a Unix mode bitfield into `Permissions`.
 fn permissions_from_mode(mode: u32) -> Permissions {
     Permissions::from_mode(mode)
 }
 
+/// Reject `..` and absolute paths inside archives.
 fn normalize_archive_path(path: &Path, allow_empty: bool) -> io::Result<PathBuf> {
     let mut normalized = PathBuf::new();
 
@@ -357,6 +372,7 @@ fn normalize_archive_path(path: &Path, allow_empty: bool) -> io::Result<PathBuf>
     Ok(normalized)
 }
 
+/// Attach a human-readable context string to an `io::Error`.
 fn with_context(error: io::Error, context: String) -> io::Error {
     let kind = error.kind();
     let mut message = context;
@@ -376,6 +392,7 @@ fn with_context(error: io::Error, context: String) -> io::Error {
     io::Error::new(kind, message)
 }
 
+/// Reject empty or path-separator-containing path segments.
 pub(crate) fn safe_segment(value: &str) -> Result<&str, String> {
     let mut components = Path::new(value).components();
     match (components.next(), components.next()) {
@@ -393,6 +410,7 @@ mod tests {
 
     use super::*;
 
+    /// Test helper: write a bzip2 tar with caller-supplied entries.
     fn create_archive(path: &Path, entries: impl FnOnce(&mut tar::Builder<BzEncoder<File>>)) {
         let encoder = BzEncoder::new(File::create(path).unwrap(), Compression::default());
         let mut archive = tar::Builder::new(encoder);
@@ -407,6 +425,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: prepare_artifacts stages expected NFS/TFTP layout.
     fn stages_release_for_nfs_and_tftp() {
         let directory = tempfile::tempdir().unwrap();
         let image = directory.path().join("source-image");
@@ -436,6 +455,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: hard-link members whose target appears later still unpack.
     fn stages_rootfs_with_hard_link_before_target() {
         let directory = tempfile::tempdir().unwrap();
         let image = directory.path().join("source-image");
@@ -474,6 +494,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: archive members with `..` are rejected.
     fn rejects_unsafe_archive_paths() {
         assert!(normalize_archive_path(Path::new("../escape"), false).is_err());
         assert!(normalize_archive_path(Path::new("/absolute"), false).is_err());
@@ -484,6 +505,7 @@ mod tests {
     }
 
     #[test]
+    /// Unit test: `safe_segment` rejects separators and empty values.
     fn rejects_unsafe_path_segments() {
         assert_eq!(safe_segment("x5h").unwrap(), "x5h");
         assert!(safe_segment("../x5h").is_err());

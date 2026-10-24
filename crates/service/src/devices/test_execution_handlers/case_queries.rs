@@ -1,4 +1,6 @@
 //! Execution case, testcase detail, and log query handlers.
+//!
+//! Ports Node case/log routes under `/test/execution/cases`, `/testcase`, `/logs`.
 
 use super::*;
 use crate::{auth, error::ErrorResponse, state::AppState};
@@ -10,6 +12,8 @@ use axum::{
 };
 use std::sync::Arc;
 
+/// PURPOSE: Get one execution with cases
+/// USE: HTTP handler invoked via `devices::routes`.
 pub(super) async fn add_logs(state: &AppState, execution: &mut serde_json::Value) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "add_logs");
     let test_id = execution
@@ -25,6 +29,8 @@ pub(super) async fn add_logs(state: &AppState, execution: &mut serde_json::Value
         .unwrap_or_else(|| serde_json::json!([]));
 }
 
+/// PURPOSE: Get one execution with cases
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/execution/single/{testId}", tag = "Tests", summary = "Get one execution with cases", description = "Returns one unscoped complete legacy execution row with its ordered testcase rows.", params(("testId" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Complete legacy execution row with testCases", body = Object), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Execution not found", body = ErrorResponse), (status = 500, description = "Execution query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn single(
     State(state): State<Arc<AppState>>,
@@ -32,11 +38,13 @@ pub async fn single(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "single");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -50,10 +58,13 @@ pub async fn single(
             "not_found",
             "Test Execution Not Found",
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get test execution"),
     }
 }
 
+/// PURPOSE: List testcase IDs for an execution
+/// USE: HTTP handler invoked via `devices::routes`.
 #[utoipa::path(get, path = "/api/v1/device/test/execution/list/{id}", tag = "Tests", summary = "List testcase IDs for an execution", description = "Public device compatibility route returning ordered testcase IDs only while the execution is active and not failed or cancelled.", params(("id" = String, Path)), responses((status = 200, description = "Testcase IDs", body = Vec<String>), (status = 404, description = "Execution not found", body = ErrorResponse), (status = 500, description = "Execution query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn case_ids(
     State(state): State<Arc<AppState>>,
@@ -61,6 +72,7 @@ pub async fn case_ids(
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "case_ids");
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -74,10 +86,13 @@ pub async fn case_ids(
             "not_found",
             "Test Execution Not Found",
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get test execution"),
     }
 }
 
+/// PURPOSE: List execution testcase results
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/execution/cases/{id}", tag = "Tests", summary = "List execution testcase results", description = "Returns ordered testcase result projections only when the execution belongs to the current user; missing ownership preserves the legacy 500.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Execution testcases", body = [ExecutionCaseRecord]), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Execution missing or lookup failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn cases(
     State(state): State<Arc<AppState>>,
@@ -85,12 +100,14 @@ pub async fn cases(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "cases");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let user_id = auth::token_subject(&headers).unwrap_or_else(|| "system".to_owned());
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -104,10 +121,13 @@ pub async fn cases(
             "internal",
             "Failed to get test cases for execution: Test Execution Not Found",
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get test cases for execution"),
     }
 }
 
+/// PURPOSE: Get testcase detail
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/testcase/{testCaseId}", tag = "Tests", summary = "Get testcase detail", description = "Returns the complete unscoped legacy testcase row; a missing row intentionally preserves the historical 500 response.", params(("testCaseId" = i64, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Complete legacy testcase row", body = Object), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Testcase missing or lookup failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn testcase(
     State(state): State<Arc<AppState>>,
@@ -115,11 +135,13 @@ pub async fn testcase(
     Path(case_id): Path<i64>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "testcase");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -133,10 +155,13 @@ pub async fn testcase(
             "internal",
             "Failed to get test case: Test Case Not Found",
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get test case"),
     }
 }
 
+/// PURPOSE: Download execution logs
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/execution/logs/{id}", tag = "Tests", summary = "Download execution logs", description = "Reads configured JSON log entries and returns newline-delimited text; missing or invalid files intentionally produce an empty attachment.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Newline-delimited test logs; missing log files produce an empty download", body = String, content_type = "text/plain", headers(("Content-Disposition" = String, description = "Attachment filename test-{id}-logs.txt"))), (status = 401, description = "Authentication required", body = ErrorResponse)))]
 pub async fn logs(
     State(state): State<Arc<AppState>>,
@@ -144,6 +169,7 @@ pub async fn logs(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "logs");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -179,6 +205,8 @@ pub async fn logs(
     response
 }
 
+/// PURPOSE: Download a testcase log
+/// USE: Authenticated frontend (bearer).
 #[utoipa::path(get, path = "/api/v1/device/test/testcase/{testCaseId}/log", tag = "Tests", summary = "Download a testcase log", description = "Canonicalizes the stored testcase output path beneath the configured results root and serves it with a sanitized attachment filename.", params(("testCaseId" = i64, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Testcase log", body = String, content_type = "text/plain", headers(("Content-Disposition" = String, description = "Attachment filename derived from the stored log"))), (status = 400, description = "Stored log path escapes the configured root", body = ErrorResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 404, description = "Log not found", body = ErrorResponse), (status = 500, description = "Log lookup or file read failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn testcase_log(
     State(state): State<Arc<AppState>>,
@@ -186,11 +214,13 @@ pub async fn testcase_log(
     Path(case_id): Path<i64>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "testcase_log");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -206,6 +236,7 @@ pub async fn testcase_log(
                 "No log file associated with this test case",
             );
         }
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => return repository_error(error, "Failed to download test case log"),
     };
     let root = std::path::Path::new(&state.config.reports.test_results_dir);

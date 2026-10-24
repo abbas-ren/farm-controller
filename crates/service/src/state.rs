@@ -1,3 +1,7 @@
+//! Shared process state: config, DB, identity, catalogs, reports, event hub.
+//!
+//! `AppState::bootstrap` wires optional modules from config (auth/device/reports).
+
 use std::{sync::Arc, time::Instant};
 
 use crate::{
@@ -32,10 +36,12 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Flush/shutdown the in-process EventHub on process stop.
     pub async fn shutdown_events(&self) {
         self.event_publisher.shutdown().await;
     }
 
+    /// Construct AppState: connect DB, wire identity/reports/catalogs per config modules.
     pub async fn bootstrap(config: AppConfig, metrics: Metrics) -> Result<Self, AppError> {
         let database = if config.database_required() {
             Some(Database::connect(&config.database, metrics.clone()).await?)
@@ -92,6 +98,7 @@ impl AppState {
     }
 
     #[cfg(test)]
+    /// Without dependencies.
     pub fn without_dependencies(config: AppConfig, metrics: Metrics) -> Self {
         let relay_sync = RelaySyncService::new(config.workers.relay_sync_queue_capacity);
         Self {
@@ -111,6 +118,7 @@ impl AppState {
     }
 
     #[cfg(test)]
+    /// With identity provider.
     pub fn with_identity_provider(
         config: AppConfig,
         metrics: Metrics,
@@ -134,6 +142,7 @@ impl AppState {
     }
 
     #[cfg(test)]
+    /// With device repository.
     pub(crate) fn with_device_repository(
         mut self,
         device_repository: Arc<dyn DeviceRepository>,
@@ -144,18 +153,21 @@ impl AppState {
     }
 
     #[cfg(test)]
+    /// With test catalog.
     pub(crate) fn with_test_catalog(mut self, test_catalog: Arc<dyn TestCatalog>) -> Self {
         self.test_catalog = Some(test_catalog);
         self
     }
 
     #[cfg(test)]
+    /// With qmetry catalog.
     pub(crate) fn with_qmetry_catalog(mut self, qmetry_catalog: Arc<dyn QmetryCatalog>) -> Self {
         self.qmetry_catalog = Some(qmetry_catalog);
         self
     }
 
     #[cfg(test)]
+    /// With reports.
     pub(crate) fn with_reports(mut self, reports: ReportService) -> Self {
         self.reports = Some(reports.with_event_publisher(self.event_publisher.clone()));
         self

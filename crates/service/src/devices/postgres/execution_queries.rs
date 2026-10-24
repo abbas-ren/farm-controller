@@ -1,3 +1,7 @@
+//! `ExecutionQueryRepository` impl: list/detail/summary/export queries.
+//!
+//! Ports Node `TestService` execution listing and analytics helpers.
+
 use super::*;
 use super::json_models::{
     device_json, duration_seconds, test_case_json, test_execution_json, test_status_str,
@@ -11,6 +15,8 @@ use sea_orm::{
     sea_query::{Expr, extension::postgres::PgExpr},
 };
 
+/// PURPOSE: Implement `pg_week_start` domain/persistence logic.
+/// USE: Called as `pg_week_start` from handlers, repository impls, or sibling helpers.
 fn pg_week_start(now: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
     // PostgreSQL date_trunc('week') uses ISO weeks starting Monday 00:00.
     let days_from_monday = now.weekday().num_days_from_monday() as i64;
@@ -21,6 +27,8 @@ fn pg_week_start(now: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
         .and_utc()
 }
 
+/// PURPOSE: Implement `pg_month_start` domain/persistence logic.
+/// USE: Called as `pg_month_start` from handlers, repository impls, or sibling helpers.
 fn pg_month_start(now: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
     now.date_naive()
         .with_day(1)
@@ -30,6 +38,8 @@ fn pg_month_start(now: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
         .and_utc()
 }
 
+/// PURPOSE: Implement `execution_analytics` domain/persistence logic.
+/// USE: Called as `execution_analytics` from handlers, repository impls, or sibling helpers.
 async fn execution_analytics(
     orm: &sea_orm::DatabaseConnection,
     user_id: &str,
@@ -150,6 +160,8 @@ async fn execution_analytics(
     }))
 }
 
+/// PURPOSE: Build SeaORM filter/order clauses for `execution list base`.
+/// USE: Shared by count and page queries.
 fn execution_list_base(
     user_id: &str,
     search: &str,
@@ -170,6 +182,8 @@ fn execution_list_base(
 
 #[async_trait]
 impl ExecutionQueryRepository for PostgresDeviceRepository {
+    /// PURPOSE: List/filter `list test executions` rows for the API.
+    /// USE: HTTP list handlers and repository trait methods.
     async fn list_test_executions(
         &self,
         user_id: &str,
@@ -266,6 +280,8 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
         })
     }
 
+    /// PURPOSE: Implement `test_execution_by_device` domain/persistence logic.
+    /// USE: Called as `test_execution_by_device` from handlers, repository impls, or sibling helpers.
     async fn test_execution_by_device(
         &self,
         user_id: &str,
@@ -284,6 +300,8 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
             .map(|model| test_execution_json(&model)))
     }
 
+    /// PURPOSE: Implement `in_progress_test_executions` domain/persistence logic.
+    /// USE: Called as `in_progress_test_executions` from handlers, repository impls, or sibling helpers.
     async fn in_progress_test_executions(
         &self,
         user_id: &str,
@@ -312,6 +330,8 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
             .collect())
     }
 
+    /// PURPOSE: Implement `single_test_execution` domain/persistence logic.
+    /// USE: Called as `single_test_execution` from handlers, repository impls, or sibling helpers.
     async fn single_test_execution(
         &self,
         test_id: &str,
@@ -340,6 +360,8 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
         Ok(Some(value))
     }
 
+    /// PURPOSE: Implement `execution_case_ids` domain/persistence logic.
+    /// USE: Called as `execution_case_ids` from handlers, repository impls, or sibling helpers.
     async fn execution_case_ids(
         &self,
         test_id: &str,
@@ -375,6 +397,8 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
         ))
     }
 
+    /// PURPOSE: Implement `test_execution` domain/persistence logic.
+    /// USE: Called as `test_execution` from handlers, repository impls, or sibling helpers.
     async fn test_execution(
         &self,
         user_id: &str,
@@ -410,6 +434,8 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
         Ok(Some(value))
     }
 
+    /// PURPOSE: Implement `test_execution_summary` domain/persistence logic.
+    /// USE: Called as `test_execution_summary` from handlers, repository impls, or sibling helpers.
     async fn test_execution_summary(
         &self,
         user_id: &str,
@@ -467,6 +493,8 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
         Ok(Some(summary))
     }
 
+    /// PURPOSE: Implement `test_export_rows` domain/persistence logic.
+    /// USE: Called as `test_export_rows` from handlers, repository impls, or sibling helpers.
     async fn test_export_rows(
         &self,
         user_id: &str,

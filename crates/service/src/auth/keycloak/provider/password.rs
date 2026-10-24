@@ -1,3 +1,5 @@
+//! Password reset, verify-token, and forgot-password Keycloak flows.
+
 use axum::http::StatusCode;
 
 use super::super::transport::{self, KeycloakUser};
@@ -5,6 +7,7 @@ use super::KeycloakIdentityProvider;
 use crate::auth::IdentityError;
 
 impl KeycloakIdentityProvider {
+    /// Confirm a password-reset token belongs to `user_id` before accepting a new password.
     pub(super) async fn verify_reset_user_impl(
         &self,
         token: &str,
@@ -27,6 +30,7 @@ impl KeycloakIdentityProvider {
         Ok(())
     }
 
+    /// Set a new password in Keycloak after reset-token verification.
     pub(super) async fn reset_password_impl(
         &self,
         token: &str,
@@ -61,6 +65,7 @@ impl KeycloakIdentityProvider {
         transport::decode_empty_response(response).await
     }
 
+    /// Trigger Keycloak's forgot-password email flow for `username`.
     pub(super) async fn forgot_password_impl(&self, username: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::password", "forgot_password_impl");
         let token = self.client_token().await?;

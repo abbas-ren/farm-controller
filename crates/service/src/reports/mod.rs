@@ -1,4 +1,7 @@
-//! Report API facade; implementation is organized by responsibility.
+//! Test-report generation API and background worker (legacy reports-service).
+//!
+//! HTTP handlers enqueue jobs; `ReportService` drains them to write suite HTML,
+//! performance graphs, Confluence uploads, and farm WebSocket progress events.
 
 mod artifact_writers;
 mod combined_report;

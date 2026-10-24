@@ -33,6 +33,7 @@ pub enum ReportStatus {
 }
 
 impl From<&str> for ReportStatus {
+    /// From.
     fn from(status: &str) -> Self {
         match status {
             "queued" => ReportStatus::Queued,

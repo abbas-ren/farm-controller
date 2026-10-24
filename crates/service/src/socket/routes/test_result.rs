@@ -1,8 +1,11 @@
+//! Live test-result streaming from workers to subscribed frontends.
+
 use crate::state::AppState;
 use axum::extract::ws::close_code;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use std::sync::Arc;
 
+/// Unit test: test result session.
 pub(crate) async fn test_result_session(
     state: Arc<AppState>,
     test_id: String,

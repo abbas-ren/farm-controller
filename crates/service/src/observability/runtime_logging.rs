@@ -1,3 +1,7 @@
+//! In-memory ring buffer of recent runtime logs for the admin UI.
+//!
+//! A tracing `Layer` captures events; HTTP handlers read/filter and change level.
+
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
@@ -36,6 +40,7 @@ struct RuntimeLogStore {
 }
 
 impl RuntimeLogStore {
+    /// New.
     fn new() -> Self {
         Self {
             sequence: AtomicU64::new(0),
@@ -43,6 +48,7 @@ impl RuntimeLogStore {
         }
     }
 
+    /// Push.
     fn push(&self, mut entry: RuntimeLogEntry) {
         entry.sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
         let mut entries = self
@@ -55,6 +61,7 @@ impl RuntimeLogStore {
         entries.push_back(entry);
     }
 
+    /// Recent.
     fn recent(&self, limit: usize) -> Vec<RuntimeLogEntry> {
         let entries = self
             .entries
@@ -76,6 +83,7 @@ struct EventVisitor {
 }
 
 impl EventVisitor {
+    /// Insert.
     fn insert(&mut self, field: &tracing::field::Field, value: serde_json::Value) {
         if field.name() == "message" {
             self.message = value
@@ -89,28 +97,34 @@ impl EventVisitor {
 }
 
 impl Visit for EventVisitor {
+    /// Record f64.
     fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
         if let Some(number) = serde_json::Number::from_f64(value) {
             self.insert(field, serde_json::Value::Number(number));
         }
     }
 
+    /// Record i64.
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         self.insert(field, value.into());
     }
 
+    /// Record u64.
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
         self.insert(field, value.into());
     }
 
+    /// Record bool.
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
         self.insert(field, value.into());
     }
 
+    /// Record str.
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         self.insert(field, value.into());
     }
 
+    /// Record debug.
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
         self.insert(field, format!("{value:?}").into());
     }
@@ -124,6 +138,7 @@ impl<S> Layer<S> for RuntimeLogLayer
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
+    /// On event.
     fn on_event(&self, event: &Event<'_>, _context: tracing_subscriber::layer::Context<'_, S>) {
         let metadata = event.metadata();
         let mut visitor = EventVisitor::default();
@@ -155,6 +170,7 @@ struct RuntimeLogControl {
 
 static RUNTIME_LOG_CONTROL: OnceLock<RuntimeLogControl> = OnceLock::new();
 
+/// Prepare.
 pub(super) fn prepare(
     filter: EnvFilter,
     initial_level: &str,
@@ -178,6 +194,7 @@ pub(super) fn prepare(
     )
 }
 
+/// Install.
 pub(super) fn install(control: PendingRuntimeLogControl) -> Result<(), AppError> {
     RUNTIME_LOG_CONTROL
         .set(RuntimeLogControl {
@@ -188,6 +205,7 @@ pub(super) fn install(control: PendingRuntimeLogControl) -> Result<(), AppError>
         .map_err(|_| AppError::Telemetry("runtime logging was already initialized".to_owned()))
 }
 
+/// Runtime log level.
 pub fn runtime_log_level() -> Result<String, AppError> {
     let control = control()?;
     Ok(control
@@ -197,6 +215,7 @@ pub fn runtime_log_level() -> Result<String, AppError> {
         .clone())
 }
 
+/// Set runtime log level.
 pub fn set_runtime_log_level(level: &str) -> Result<String, AppError> {
     let normalized = level.trim().to_ascii_lowercase();
     let filter = runtime_filter(&normalized)?;
@@ -212,16 +231,19 @@ pub fn set_runtime_log_level(level: &str) -> Result<String, AppError> {
     Ok(normalized)
 }
 
+/// Recent runtime logs.
 pub fn recent_runtime_logs(limit: usize) -> Result<Vec<RuntimeLogEntry>, AppError> {
     Ok(control()?.store.recent(limit))
 }
 
+/// Control.
 fn control() -> Result<&'static RuntimeLogControl, AppError> {
     RUNTIME_LOG_CONTROL
         .get()
         .ok_or_else(|| AppError::Telemetry("runtime logging is not initialized".to_owned()))
 }
 
+/// Runtime filter.
 fn runtime_filter(level: &str) -> Result<EnvFilter, AppError> {
     match level {
         "trace" | "debug" | "info" | "warn" | "error" | "off" => EnvFilter::try_new(level)
@@ -237,12 +259,14 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Runtime filter accepts supported levels only.
     fn runtime_filter_accepts_supported_levels_only() {
         assert!(runtime_filter("debug").is_ok());
         assert!(runtime_filter("verbose").is_err());
     }
 
     #[test]
+    /// Runtime log store evicts oldest entries.
     fn runtime_log_store_evicts_oldest_entries() {
         let store = RuntimeLogStore::new();
         for index in 0..=MAX_RECENT_LOGS {

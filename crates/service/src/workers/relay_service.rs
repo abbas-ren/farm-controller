@@ -1,3 +1,9 @@
+//! Relay sync consumer and pending-config timeout (legacy RelayService +
+//! `RelayConfigTimeoutService`).
+//!
+//! Drains `RelaySyncJob` actions to controllers and expires `pending_relay_config`
+//! rows past `device_controller_config_timeout`, publishing relay config events.
+
 use std::{sync::Arc, time::Duration};
 
 use tokio::{
@@ -27,6 +33,7 @@ use sea_orm::{
 };
 
 impl RelaySyncService {
+    /// Construct the typed handle (channel, sampler, scanner, etc.).
     pub(crate) fn new(capacity: usize) -> Self {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
@@ -35,6 +42,7 @@ impl RelaySyncService {
         }
     }
 
+    /// Enqueue work for the background consumer without blocking the HTTP path.
     pub(crate) fn enqueue(
         &self,
         actions: Vec<RelayControllerAction>,
@@ -52,6 +60,7 @@ impl RelaySyncService {
             })
     }
 
+    /// Spawn the consumer task; panics or no-ops if the receiver was already taken.
     pub(crate) fn start_worker(
         &self,
         cancellation: CancellationToken,
@@ -76,6 +85,7 @@ impl RelaySyncService {
     }
 }
 
+/// Execute each controller action in a job and publish per-action status events.
 async fn dispatch_relay_actions(job: RelaySyncJob, event_publisher: &EventHub) {
     let total = job.actions.len();
     let has_config_actions = job
@@ -188,6 +198,7 @@ async fn dispatch_relay_actions(job: RelaySyncJob, event_publisher: &EventHub) {
     }
 }
 
+/// Emit a relay status/config WS event for one action outcome.
 fn publish_relay_status(
     event_publisher: &EventHub,
     relay_id: Option<uuid::Uuid>,
@@ -219,11 +230,13 @@ fn publish_relay_status(
     }
 }
 
+/// Parse GenN from a device-family string when selecting action variants.
 fn device_generation_number(value: &str) -> Option<u32> {
     let digits: String = value.chars().filter(char::is_ascii_digit).collect();
     (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
 }
 
+/// Poll loop for expired pending relay configurations.
 pub(crate) async fn relay_configuration_timeout_worker(
     state: Arc<AppState>,
     cancellation: CancellationToken,
@@ -241,6 +254,7 @@ pub(crate) async fn relay_configuration_timeout_worker(
     tracing::info!(worker = "relay_config_timeout", "worker stopped");
 }
 
+/// Expire PENDING configs older than the DC config timeout and notify UI.
 async fn run_relay_configuration_timeout_cycle(state: &AppState) {
     let Some(database) = &state.database else {
         return;
@@ -255,6 +269,7 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
             return;
         }
     };
+    // Expire PENDING rows whose created_at is older than device_controller_config_timeout.
     let timeout_seconds =
         i64::try_from(state.config.workers.relay_config_timeout_seconds).unwrap_or(i64::MAX);
     let batch_size = u64::from(state.config.workers.relay_config_batch_size);
@@ -269,6 +284,7 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
         ))
         .order_by_asc(pending_relay_config::Column::CreatedAt)
         .limit(batch_size)
+        // SKIP LOCKED: concurrent worker ticks must not claim the same row.
         .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
         .all(&transaction)
         .await

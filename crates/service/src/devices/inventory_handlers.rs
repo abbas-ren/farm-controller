@@ -1,3 +1,8 @@
+//! Device inventory read handlers for frontend lists, detail, heartbeat, and topology.
+//!
+//! Ports Node `DeviceController` getters: `GET /api/v1/device/`, `/families`, `/deviceTypes`,
+//! `/{id}`, `/{id}/heartbeat`, `/topology` from `deviceRoutes.ts`.
+
 use std::sync::Arc;
 
 use super::types::DeviceTypesQuery;
@@ -12,6 +17,8 @@ use axum::{
 };
 
 #[utoipa::path(get, path = "/api/v1/device/", tag = "Devices", summary = "List devices", description = "Returns paginated device inventory with retained filters and role-sensitive visibility for frontend configuration views.", params(DeviceListQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Paginated device inventory", body = DeviceList), (status = 401, description = "Access token is missing or invalid", body = ErrorResponse), (status = 500, description = "Device query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
+/// PURPOSE: List paginated device inventory with role-sensitive visibility.
+/// USE: Frontend device configuration views (admin or authenticated user).
 pub async fn list_devices(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -19,14 +26,17 @@ pub async fn list_devices(
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "list_devices");
     let (response_headers, is_admin) =
+        // Auth: require valid bearer token with administrator role.
         match auth::authorize_request(&state, &headers, Some("admin")).await {
             Ok(headers) => (headers, true),
+            // Auth: require any authenticated bearer token.
             Err(_) => match auth::authorize_request(&state, &headers, None).await {
                 Ok(headers) => (headers, false),
                 Err(error) => return error.into_response(),
             },
         };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -35,6 +45,7 @@ pub async fn list_devices(
     };
     match repository.list_devices(&query, is_admin).await {
         Ok(devices) => (response_headers, Json(devices)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to list devices"),
     }
 }
@@ -53,11 +64,14 @@ pub async fn list_devices(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: List distinct non-null device family values for frontend filters.
+/// USE: Authenticated frontend (bearer).
 pub async fn device_families(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_families");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -83,12 +97,15 @@ pub async fn device_families(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: List distinct device types, optionally filtered by family (ALL = no filter).
+/// USE: Authenticated frontend (bearer).
 pub async fn device_types(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(query): Query<DeviceTypesQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_types");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -117,17 +134,21 @@ pub async fn device_types(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Return one device with interfaces and latest execution context.
+/// USE: Authenticated frontend device detail view (bearer).
 pub async fn device_by_id(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_by_id");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -141,6 +162,7 @@ pub async fn device_by_id(
         )
             .into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "not_found", "Device not found"),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get device"),
     }
 }
@@ -160,17 +182,21 @@ pub async fn device_by_id(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Return the latest non-disconnected heartbeat for a device or controller.
+/// USE: Authenticated frontend heartbeat polling (bearer).
 pub async fn latest_heartbeat(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "latest_heartbeat");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -183,6 +209,7 @@ pub async fn latest_heartbeat(
             Json(serde_json::json!({"success": true, "data": heartbeat})),
         )
             .into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get device heartbeat"),
     }
 }
@@ -201,16 +228,20 @@ pub async fn latest_heartbeat(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: List lightweight non-deleted device nodes for the topology view.
+/// USE: Authenticated frontend topology diagram (bearer).
 pub async fn device_topology(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_topology");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -223,10 +254,13 @@ pub async fn device_topology(
             Json(serde_json::json!({"success": true, "data": devices})),
         )
             .into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to get device topology"),
     }
 }
 
+/// PURPOSE: Run a repository string-list query and return JSON with auth response headers.
+/// USE: device_families and device_types handlers.
 async fn protected_string_list<F, Fut>(
     state: &AppState,
     response_headers: HeaderMap,
@@ -238,6 +272,7 @@ where
 {
     let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "protected_string_list");
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -246,6 +281,7 @@ where
     };
     match operation(repository).await {
         Ok(values) => (response_headers, Json(values)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Device query failed"),
     }
 }

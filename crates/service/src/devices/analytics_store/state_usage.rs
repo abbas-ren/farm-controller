@@ -1,3 +1,8 @@
+//! Device state counts/details and time-window usage analytics.
+//!
+//! Used by analytics HTTP handlers for farm utilization views. Ports Node
+//! `AnalyticsService` device-state and usage queries.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
@@ -12,6 +17,8 @@ use super::super::{
     error::DeviceRepositoryError,
 };
 
+/// PURPOSE: Implement `device_state_counts` domain/persistence logic.
+/// USE: Called as `device_state_counts` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn device_state_counts(
     orm: &DatabaseConnection,
 ) -> Result<DeviceStateAnalytics, DeviceRepositoryError> {
@@ -37,6 +44,8 @@ pub(crate) async fn device_state_counts(
     })
 }
 
+/// PURPOSE: Implement `device_state_details` domain/persistence logic.
+/// USE: Called as `device_state_details` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn device_state_details(
     orm: &DatabaseConnection,
 ) -> Result<DeviceStateDetailedAnalytics, DeviceRepositoryError> {
@@ -68,6 +77,8 @@ pub(crate) async fn device_state_details(
     Ok(DeviceStateDetailedAnalytics(analytics))
 }
 
+/// PURPOSE: Implement `device_usage` domain/persistence logic.
+/// USE: Called as `device_usage` from handlers, repository impls, or sibling helpers.
 pub(crate) async fn device_usage(
     orm: &DatabaseConnection,
     start: DateTime<Utc>,
@@ -216,6 +227,8 @@ pub(crate) async fn device_usage(
     }))
 }
 
+/// PURPOSE: Serialize `device state str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn device_state_str(state: Option<&device::DeviceState>) -> Option<&'static str> {
     state.map(|s| match s {
         device::DeviceState::Busy => "busy",
@@ -226,6 +239,8 @@ fn device_state_str(state: Option<&device::DeviceState>) -> Option<&'static str>
     })
 }
 
+/// PURPOSE: Serialize `change state str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn change_state_str(state: &device_state_change::DeviceStateChangeState) -> &'static str {
     match state {
         device_state_change::DeviceStateChangeState::Busy => "busy",

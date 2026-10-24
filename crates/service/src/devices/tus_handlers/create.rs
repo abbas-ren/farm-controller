@@ -1,3 +1,7 @@
+//! TUS upload creation and OPTIONS discovery handlers.
+//!
+//! Ports Node TUS POST `/build/upload/tus` and OPTIONS on collection/resource.
+
 use std::{path::Path, sync::Arc};
 
 use axum::{
@@ -29,6 +33,8 @@ use super::*;
         (status = 401, description = "Authentication required", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Discover TUS 1.0 resumable upload capabilities on the collection URL.
+/// USE: TUS clients probing /build/upload/tus before create.
 pub async fn options(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -65,6 +71,8 @@ pub async fn options(
         (status = 401, description = "Authentication required", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Discover TUS capabilities on an existing upload resource URL.
+/// USE: TUS clients probing /build/upload/tus/{id}.
 pub async fn options_resource(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -99,6 +107,8 @@ pub async fn options_resource(
         (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
     )
 )]
+/// PURPOSE: Create a TUS 1.0 upload resource for a build archive.
+/// USE: Authenticated frontend/TUS client starting a resumable build upload.
 pub async fn create(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -132,6 +142,7 @@ pub async fn create(
         Ok(upload) => {
             if let Some(upload_id) = upload.metadata.get("uploadId") {
                 let Some(repository) = &state.device_repository else {
+                    // Guard: device repository is not wired in this process.
                     return error_response(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "device_unavailable",
@@ -142,6 +153,7 @@ pub async fn create(
                     .mark_build_upload_started(upload_id, &user_id)
                     .await
                 {
+                    // Map: translate repository failure into the legacy HTTP error envelope.
                     return repository_error(error, "Failed to start build upload");
                 }
                 upload_events::progress(&state, &user_id, upload_id, 0);

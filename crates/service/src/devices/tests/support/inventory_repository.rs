@@ -1,8 +1,14 @@
+//! In-memory inventory/registration repository fake for device route tests.
+//!
+//! Stands in for production device/controller inventory, flash, topology, and artifact methods.
+
 use super::*;
 use crate::devices::repository::UserDeviceRepository;
 
 #[async_trait]
 impl DeviceRegistrationRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::test_completion_target`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn test_completion_target(
         &self,
         test_id: &str,
@@ -26,6 +32,8 @@ impl DeviceRegistrationRepository for RegistrationRepository {
         )
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::store_rtos_log_path`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn store_rtos_log_path(
         &self,
         _test_id: &str,
@@ -34,6 +42,8 @@ impl DeviceRegistrationRepository for RegistrationRepository {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::mark_device_flashing`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn mark_device_flashing(
         &self,
         device_id: &str,
@@ -49,6 +59,8 @@ impl DeviceRegistrationRepository for RegistrationRepository {
         )
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::export_devices`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn export_devices(
         &self,
         _query: &DeviceCsvQuery,
@@ -68,6 +80,8 @@ impl DeviceRegistrationRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::register_device`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn register_device(
         &self,
         registration: &DeviceRegistration,
@@ -96,6 +110,8 @@ impl DeviceRegistrationRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::register_controller`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn register_controller(
         &self,
         registration: &ControllerRegistration,
@@ -121,6 +137,8 @@ impl DeviceRegistrationRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::save_gen5_mapping`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn save_gen5_mapping(
         &self,
         caller_ip: &str,
@@ -135,6 +153,8 @@ impl DeviceRegistrationRepository for RegistrationRepository {
         Ok(())
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceRegistrationRepository::confirm_flash`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn confirm_flash(
         &self,
         device_type: &str,
@@ -162,10 +182,14 @@ impl DeviceRegistrationRepository for RegistrationRepository {
 
 #[async_trait]
 impl DeviceInventoryRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `DeviceInventoryRepository::device_families`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn device_families(&self) -> Result<Vec<String>, DeviceRepositoryError> {
         Ok(vec!["Gen4".to_owned(), "Gen5".to_owned()])
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceInventoryRepository::device_types`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn device_types(
         &self,
         device_family: Option<&str>,
@@ -176,6 +200,8 @@ impl DeviceInventoryRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceInventoryRepository::device_by_id`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn device_by_id(
         &self,
         device_id: &str,
@@ -190,6 +216,8 @@ impl DeviceInventoryRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceInventoryRepository::latest_heartbeat`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn latest_heartbeat(
         &self,
         device_id: &str,
@@ -203,6 +231,8 @@ impl DeviceInventoryRepository for RegistrationRepository {
         }))
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceInventoryRepository::topology`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn topology(&self) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
         Ok(vec![serde_json::json!({
             "deviceId": "device-1",
@@ -218,6 +248,8 @@ impl DeviceInventoryRepository for RegistrationRepository {
         })])
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceInventoryRepository::list_devices`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn list_devices(
         &self,
         query: &DeviceListQuery,
@@ -240,6 +272,8 @@ impl DeviceInventoryRepository for RegistrationRepository {
 
 #[async_trait]
 impl ControllerRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::device_action_target`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn device_action_target(
         &self,
         device_id: &str,
@@ -257,6 +291,8 @@ impl ControllerRepository for RegistrationRepository {
         )
     }
 
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::apply_device_action`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn apply_device_action(
         &self,
         device_id: &str,
@@ -271,6 +307,8 @@ impl ControllerRepository for RegistrationRepository {
             .then(|| serde_json::json!({"deviceId": device_id, "status": status})))
     }
 
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::list_controllers`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn list_controllers(
         &self,
         query: &ControllerListQuery,
@@ -284,6 +322,8 @@ impl ControllerRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::edit_controller`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn edit_controller(
         &self,
         _controller_id: &str,
@@ -292,6 +332,8 @@ impl ControllerRepository for RegistrationRepository {
         Ok(None)
     }
 
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::controller_delete_target`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn controller_delete_target(
         &self,
         _controller_id: &str,
@@ -299,10 +341,14 @@ impl ControllerRepository for RegistrationRepository {
         Ok(None)
     }
 
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::delete_controller`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn delete_controller(&self, _controller_id: &str) -> Result<bool, DeviceRepositoryError> {
         Ok(false)
     }
 
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::device_delete_target`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn device_delete_target(
         &self,
         _device_id: &str,
@@ -310,6 +356,8 @@ impl ControllerRepository for RegistrationRepository {
         Ok(None)
     }
 
+    /// PURPOSE: In-memory stand-in for `ControllerRepository::delete_device`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn delete_device(&self, _device_id: &str) -> Result<bool, DeviceRepositoryError> {
         Ok(false)
     }
@@ -317,6 +365,8 @@ impl ControllerRepository for RegistrationRepository {
 
 #[async_trait]
 impl UserDeviceRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `UserDeviceRepository::list_user_devices`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn list_user_devices(
         &self,
         query: &UserDeviceListQuery,
@@ -333,10 +383,14 @@ impl UserDeviceRepository for RegistrationRepository {
         })
     }
 
+    /// PURPOSE: In-memory stand-in for `UserDeviceRepository::active_devices`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn active_devices(&self) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
         Ok(Vec::new())
     }
 
+    /// PURPOSE: In-memory stand-in for `UserDeviceRepository::update_heartbeat_timeout`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn update_heartbeat_timeout(
         &self,
         device_id: &str,
@@ -352,6 +406,8 @@ impl UserDeviceRepository for RegistrationRepository {
 
 #[async_trait]
 impl DeviceArtifactRepository for RegistrationRepository {
+    /// PURPOSE: In-memory stand-in for `DeviceArtifactRepository::builds_for_device_type`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn builds_for_device_type(
         &self,
         _device_type: &str,
@@ -359,6 +415,8 @@ impl DeviceArtifactRepository for RegistrationRepository {
         Ok(Vec::new())
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceArtifactRepository::configure_artifacts`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn configure_artifacts(
         &self,
         entries: &[DeviceTypeFolder],
@@ -366,10 +424,14 @@ impl DeviceArtifactRepository for RegistrationRepository {
         Ok(entries.to_vec())
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceArtifactRepository::artifact_folders`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn artifact_folders(&self) -> Result<Vec<DeviceTypeFolder>, DeviceRepositoryError> {
         Ok(Vec::new())
     }
 
+    /// PURPOSE: In-memory stand-in for `DeviceArtifactRepository::artifact_folder_for_device`.
+    /// USE: device route tests exercising inventory persistence without a live database.
     async fn artifact_folder_for_device(
         &self,
         _device_id: &str,

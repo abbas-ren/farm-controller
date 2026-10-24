@@ -1,3 +1,8 @@
+//! Fake repository and provider implementations shared by device route tests.
+//!
+//! Each submodule stands in for a production `DeviceRepository` / catalog / identity trait
+//! surface so handlers can be exercised without Postgres or upstream HTTP services.
+
 use super::*;
 
 pub(super) mod alerts_repository;

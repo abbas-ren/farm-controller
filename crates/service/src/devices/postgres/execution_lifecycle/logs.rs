@@ -1,3 +1,7 @@
+//! Create and list execution log entries.
+//!
+//! Ports Node `LogService` persistence for test/device logs.
+
 use super::*;
 
 use crate::persistence::entity::log_entry;
@@ -8,6 +12,8 @@ use sea_orm::{
 };
 
 impl PostgresDeviceRepository {
+    /// PURPOSE: Create/persist `create log inner`.
+    /// USE: Create handlers after validation.
     pub(super) async fn create_log_inner(
         &self,
         request: &LogCreateRequest,
@@ -32,6 +38,8 @@ impl PostgresDeviceRepository {
         Ok(log_entry_json(&model))
     }
 
+    /// PURPOSE: List/filter `list logs inner` rows for the API.
+    /// USE: HTTP list handlers and repository trait methods.
     pub(super) async fn list_logs_inner(
         &self,
         query: &LogListQuery,
@@ -108,6 +116,8 @@ impl PostgresDeviceRepository {
     }
 }
 
+/// PURPOSE: Parse API/DB string into the `parse log type` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_log_type(value: &str) -> Result<log_entry::LogEntryType, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::logs", "parse_log_type");
     match value {
@@ -121,6 +131,8 @@ fn parse_log_type(value: &str) -> Result<log_entry::LogEntryType, DeviceReposito
     }
 }
 
+/// PURPOSE: Parse API/DB string into the `parse log level` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_log_level(value: &str) -> Result<log_entry::LogEntryLevel, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::logs", "parse_log_level");
     match value {
@@ -134,6 +146,8 @@ fn parse_log_level(value: &str) -> Result<log_entry::LogEntryLevel, DeviceReposi
     }
 }
 
+/// PURPOSE: Serialize `log entry json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn log_entry_json(model: &log_entry::Model) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::logs", "log_entry_json");
     serde_json::json!({

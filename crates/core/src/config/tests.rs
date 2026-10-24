@@ -1,7 +1,14 @@
+//! Configuration merge and validation regression tests.
+//!
+//! Exercises CLI enable/disable precedence, module dependency rules, database
+//! URL requirements, CORS origin shape, and external URL credential rejection.
+
 use clap::Parser;
 
 use super::*;
 
+/// PURPOSE: Prove `--disable` removes modules even if also listed in `--enable`.
+/// USE: regression for CLI module enable/disable merge in AppConfig::load.
 #[test]
 fn cli_disable_wins_over_enable() {
     let cli = Cli::try_parse_from([
@@ -18,6 +25,8 @@ fn cli_disable_wins_over_enable() {
     assert!(config.module_enabled(Module::Api));
 }
 
+/// PURPOSE: Device (and other domain modules) cannot run without the API module.
+/// USE: guards module dependency validation in AppConfig.
 #[test]
 fn domain_module_requires_api() {
     let cli =
@@ -27,6 +36,8 @@ fn domain_module_requires_api() {
     assert!(error.to_string().contains("requires the api module"));
 }
 
+/// PURPOSE: Enabling device without `database.url` must fail validation.
+/// USE: guards database_required checks for persistence-backed modules.
 #[test]
 fn persistence_module_requires_database_url() {
     let cli = Cli::try_parse_from(["farmcontroller", "--enable", "api,device"]).unwrap();
@@ -35,6 +46,8 @@ fn persistence_module_requires_database_url() {
     assert!(error.to_string().contains("database.url is required"));
 }
 
+/// PURPOSE: Events alone must not require a database URL.
+/// USE: ensures events-only deployments stay DB-optional.
 #[test]
 fn events_module_does_not_require_persistence() {
     let cli = Cli::try_parse_from(["farmcontroller", "--enable", "events"]).unwrap();
@@ -44,6 +57,8 @@ fn events_module_does_not_require_persistence() {
     assert!(!config.database_required());
 }
 
+/// PURPOSE: CORS entries must be bare HTTP(S) origins (no path/query).
+/// USE: regression for CORS allow-list shape validation.
 #[test]
 fn cors_allowlist_rejects_non_origin_urls() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -58,6 +73,8 @@ fn cors_allowlist_rejects_non_origin_urls() {
     );
 }
 
+/// PURPOSE: External base URLs must not embed userinfo credentials.
+/// USE: prevents credential leakage via configured external URLs.
 #[test]
 fn configured_external_urls_reject_embedded_credentials() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -72,6 +89,8 @@ fn configured_external_urls_reject_embedded_credentials() {
     );
 }
 
+/// PURPOSE: Rootfs extension defaults to `.tar.bz2` and rejects path-like values.
+/// USE: guards device.rootfs_archive_extension validation.
 #[test]
 fn rootfs_archive_extension_defaults_and_rejects_paths() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

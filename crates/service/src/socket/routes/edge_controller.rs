@@ -1,3 +1,5 @@
+//! Edge-controller WebSocket room: DC heartbeats, flash progress, mappings.
+
 use crate::{
     devices::ControllerHeartbeat,
     socket::{
@@ -12,6 +14,7 @@ use crate::{
 use axum::extract::ws::{Message, WebSocket};
 use std::sync::Arc;
 
+/// Controller session.
 pub(crate) async fn controller_session(
     state: Arc<AppState>,
     controller_id: String,
@@ -37,6 +40,7 @@ pub(crate) async fn controller_session(
     tracing::info!(controller_id, "device controller WebSocket disconnected");
 }
 
+/// Process heartbeat.
 pub(crate) async fn process_heartbeat(
     state: &AppState,
     controller_id: &str,

@@ -1,3 +1,7 @@
+//! `ExecutionReportRepository` impl: report records and case payloads.
+//!
+//! Ports Node `TestService` / report-service handoff persistence.
+
 use super::*;
 
 use crate::persistence::entity::{execution_report, test_case, test_execution};
@@ -7,6 +11,8 @@ use sea_orm::{
     sea_query::{Expr, LockType},
 };
 
+/// PURPOSE: Serialize `report json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn report_json(model: &execution_report::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -27,6 +33,8 @@ fn report_json(model: &execution_report::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Serialize `test case json` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn test_case_json(model: &test_case::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
@@ -57,6 +65,8 @@ fn test_case_json(model: &test_case::Model) -> serde_json::Value {
     })
 }
 
+/// PURPOSE: Parse API/DB string into the `parse report status` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_report_status(status: &str) -> Result<execution_report::ExecutionReportStatus, DeviceRepositoryError> {
     match status {
         "generating" => Ok(execution_report::ExecutionReportStatus::Generating),
@@ -72,6 +82,8 @@ fn parse_report_status(status: &str) -> Result<execution_report::ExecutionReport
 
 #[async_trait]
 impl ExecutionReportRepository for PostgresDeviceRepository {
+    /// PURPOSE: Resolve edge/controller targets for `report generation target`.
+    /// USE: Handlers/workers before outbound edge HTTP.
     async fn report_generation_target(
         &self,
         test_id: &str,
@@ -94,6 +106,8 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
             }))
     }
 
+    /// PURPOSE: Create/persist `create execution report record`.
+    /// USE: Create handlers after validation.
     async fn create_execution_report_record(
         &self,
         report_id: Uuid,
@@ -115,6 +129,7 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
                     execution_report::ExecutionReportStatus::Uploading,
                 ]),
             )
+            // Row lock: serialize concurrent updates on this controller/device/relay.
             .lock(LockType::Update)
             .one(&transaction)
             .await?;
@@ -154,6 +169,8 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
         Ok(report_json(&report))
     }
 
+    /// PURPOSE: Mutate persisted state for `update execution report status`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn update_execution_report_status(
         &self,
         report_id: Uuid,
@@ -181,6 +198,8 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
         Ok(())
     }
 
+    /// PURPOSE: Implement `execution_report` domain/persistence logic.
+    /// USE: Called as `execution_report` from handlers, repository impls, or sibling helpers.
     async fn execution_report(
         &self,
         test_id: &str,
@@ -197,6 +216,8 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
             .map(|model| report_json(&model)))
     }
 
+    /// PURPOSE: Resolve edge/controller targets for `execution report target`.
+    /// USE: Handlers/workers before outbound edge HTTP.
     async fn execution_report_target(
         &self,
         test_id: &str,
@@ -218,6 +239,8 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
             }))
     }
 
+    /// PURPOSE: Implement `test_case_log_path` domain/persistence logic.
+    /// USE: Called as `test_case_log_path` from handlers, repository impls, or sibling helpers.
     async fn test_case_log_path(
         &self,
         case_id: i64,
@@ -235,6 +258,8 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
             .and_then(|model| model.output_file_path))
     }
 
+    /// PURPOSE: Implement `execution_cases` domain/persistence logic.
+    /// USE: Called as `execution_cases` from handlers, repository impls, or sibling helpers.
     async fn execution_cases(
         &self,
         user_id: &str,
@@ -283,6 +308,8 @@ impl ExecutionReportRepository for PostgresDeviceRepository {
         ))
     }
 
+    /// PURPOSE: Implement `test_case` domain/persistence logic.
+    /// USE: Called as `test_case` from handlers, repository impls, or sibling helpers.
     async fn test_case(
         &self,
         case_id: i64,

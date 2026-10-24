@@ -1,3 +1,5 @@
+//! Shared TUS header, auth, and offset helpers for create/head/patch handlers.
+
 use std::collections::BTreeMap;
 
 use axum::{
@@ -10,16 +12,21 @@ use crate::{auth, state::AppState};
 
 pub(super) const TUS_VERSION: &str = "1.0.0";
 
+/// PURPOSE: Helper `authorize` supporting device HTTP handlers (authorize).
+/// USE: Authenticated frontend (bearer).
 pub(super) async fn authorize(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<HeaderMap, Box<axum::response::Response>> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::support", "authorize");
+    // Auth: require any authenticated bearer token.
     auth::authorize_request(state, headers, None)
         .await
         .map_err(|error| Box::new(error.into_response()))
 }
 
+/// PURPOSE: Helper `validate_version` supporting device HTTP handlers (validate version).
+/// USE: HTTP handler invoked via `devices::routes`.
 pub(super) fn validate_version(headers: &HeaderMap) -> Result<(), StatusCode> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::support", "validate_version");
     if headers
@@ -33,6 +40,8 @@ pub(super) fn validate_version(headers: &HeaderMap) -> Result<(), StatusCode> {
     }
 }
 
+/// PURPOSE: Helper `integer_header` supporting device HTTP handlers (integer header).
+/// USE: HTTP handler invoked via `devices::routes`.
 pub(super) fn integer_header(headers: &HeaderMap, name: &'static str) -> Result<u64, StatusCode> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::support", "integer_header");
     headers
@@ -42,6 +51,8 @@ pub(super) fn integer_header(headers: &HeaderMap, name: &'static str) -> Result<
         .ok_or(StatusCode::BAD_REQUEST)
 }
 
+/// PURPOSE: Helper `parse_metadata` supporting device HTTP handlers (parse metadata).
+/// USE: HTTP handler invoked via `devices::routes`.
 pub(super) fn parse_metadata(headers: &HeaderMap) -> Result<BTreeMap<String, String>, StatusCode> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::support", "parse_metadata");
     let Some(value) = headers.get("upload-metadata") else {
@@ -77,6 +88,8 @@ pub(super) fn parse_metadata(headers: &HeaderMap) -> Result<BTreeMap<String, Str
         .collect()
 }
 
+/// PURPOSE: Helper `protocol_headers` supporting device HTTP handlers (protocol headers).
+/// USE: HTTP handler invoked via `devices::routes`.
 pub(super) fn protocol_headers(mut headers: HeaderMap) -> HeaderMap {
     let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::support", "protocol_headers");
     headers.insert("tus-resumable", HeaderValue::from_static(TUS_VERSION));
@@ -85,6 +98,8 @@ pub(super) fn protocol_headers(mut headers: HeaderMap) -> HeaderMap {
     headers
 }
 
+/// PURPOSE: Helper `insert_integer` supporting device HTTP handlers (insert integer).
+/// USE: HTTP handler invoked via `devices::routes`.
 pub(super) fn insert_integer(headers: &mut HeaderMap, name: &'static str, value: u64) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::support", "insert_integer");
     if let Ok(value) = HeaderValue::from_str(&value.to_string()) {

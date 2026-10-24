@@ -1,3 +1,7 @@
+//! Shared auth and repository helpers for analytics handlers.
+//!
+//! Extracts the authenticated session and device repository used by every analytics GET.
+
 use super::*;
 
 pub(super) struct AnalyticsContext {
@@ -36,15 +40,19 @@ pub(crate) struct TestDailyQuery {
     pub(super) days: Option<i64>,
 }
 
+/// PURPOSE: Authorize the caller and resolve the analytics repository.
+/// USE: Every analytics GET handler.
 pub(super) async fn analytics_context(
     state: &Arc<AppState>,
     headers: &HeaderMap,
 ) -> Result<AnalyticsContext, Box<axum::response::Response>> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::context", "analytics_context");
+    // Auth: require any authenticated bearer token.
     let response_headers = auth::authorize_request(state, headers, None)
         .await
         .map_err(|error| Box::new(error.into_response()))?;
     let repository = state.device_repository.clone().ok_or_else(|| {
+        // Guard: device repository is not wired in this process.
         Box::new(error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -58,6 +66,8 @@ pub(super) async fn analytics_context(
     })
 }
 
+/// PURPOSE: Return HTTP 400 for malformed analytics date filters.
+/// USE: Analytics handlers after date parsing fails.
 pub(super) fn invalid_date_response() -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::context", "invalid_date_response");
     error_response(

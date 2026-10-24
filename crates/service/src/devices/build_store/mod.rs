@@ -1,3 +1,7 @@
+//! Build inventory queries, mutations, and upload finalization.
+//!
+//! Submodules implement `BuildRepository` behavior. Ports Node `BuildService`.
+
 mod mutations;
 mod queries;
 mod uploads;

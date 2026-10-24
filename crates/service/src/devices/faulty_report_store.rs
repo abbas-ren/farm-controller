@@ -1,3 +1,9 @@
+//! Persist faulty-build reports, alerts, and status transitions.
+//!
+//! Used by faulty-report HTTP handlers and `FaultyReportRepository`. Ports
+//! Node `FaultyReportService` create/finalize/list/status flows, including
+//! marking the related release `isFaulty` when a report is approved.
+
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
@@ -13,6 +19,8 @@ use super::{
     repository_types::{FaultyReportCreate, FaultyReportCreation, FaultyReportFinalization},
 };
 
+/// PURPOSE: Insert a pending faulty report, resolving last test execution when omitted.
+/// USE: Create-upload handler after validating the release exists; returns `None` if release missing.
 pub(crate) async fn create(
     orm: &DatabaseConnection,
     request: &FaultyReportCreate,
@@ -26,6 +34,7 @@ pub(crate) async fn create(
         return Ok(None);
     }
 
+    // Prefer explicit test id; else latest execution for the build/family; else device lastTestExecution.
     let last_test_execution_id = match request.test_execution_id.as_deref() {
         Some(test_id) => Some(test_id.to_owned()),
         None => {
@@ -80,6 +89,8 @@ pub(crate) async fn create(
     }))
 }
 
+/// PURPOSE: Attach uploaded file/log paths and create an admin alert for the report.
+/// USE: After multipart upload lands on disk; returns report + alert JSON for socket publish.
 pub(crate) async fn finalize(
     orm: &DatabaseConnection,
     report_id: Uuid,
@@ -151,6 +162,8 @@ pub(crate) async fn finalize(
     Ok(FaultyReportFinalization { report, alert })
 }
 
+/// PURPOSE: List all faulty reports newest-first as API JSON.
+/// USE: Faulty report list handler.
 pub(crate) async fn list(orm: &DatabaseConnection) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_store", "list");
     Ok(faulty_report::Entity::find()
@@ -162,6 +175,8 @@ pub(crate) async fn list(orm: &DatabaseConnection) -> Result<Vec<serde_json::Val
         .collect())
 }
 
+/// PURPOSE: Fetch one report plus its release version.
+/// USE: Detail / download handlers.
 pub(crate) async fn by_id(
     orm: &DatabaseConnection,
     report_id: Uuid,
@@ -182,6 +197,8 @@ pub(crate) async fn by_id(
     })))
 }
 
+/// PURPOSE: Update report status; when approved, mark the release as faulty.
+/// USE: Admin approve/reject actions.
 pub(crate) async fn update_status(
     orm: &DatabaseConnection,
     report_id: Uuid,
@@ -211,6 +228,7 @@ pub(crate) async fn update_status(
         transaction.commit().await?;
         return Ok(None);
     }
+    // Approving a report flags the build so inventory / flashing refuse it (legacy FaultyReportService).
     if status == "approved" {
         let report = faulty_report::Entity::find_by_id(report_id)
             .one(&transaction)
@@ -231,6 +249,8 @@ pub(crate) async fn update_status(
     Ok(report)
 }
 
+/// PURPOSE: Hard-delete a faulty report row.
+/// USE: Admin delete handler after optional file cleanup.
 pub(crate) async fn delete(orm: &DatabaseConnection, report_id: Uuid) -> Result<bool, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_store", "delete");
     let result = faulty_report::Entity::delete_by_id(report_id).exec(orm).await?;

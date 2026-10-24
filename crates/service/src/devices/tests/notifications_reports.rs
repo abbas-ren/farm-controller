@@ -1,4 +1,12 @@
+//! Notification, test analytics, and faulty-report route contract tests.
+//!
+//! Covers alert visibility/read contracts, type/plan/daily analytics shapes, and
+//! faulty-report create/admin/status flows from legacy notification/report routes.
+
 use super::*;
+
+/// PURPOSE: Assert test analytics preserve type plan and daily contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `notifications_reports`.
 #[tokio::test]
 async fn test_analytics_preserve_type_plan_and_daily_contracts() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -90,6 +98,8 @@ async fn test_analytics_preserve_type_plan_and_daily_contracts() {
     assert_eq!(body[0]["totalExecutionSeconds"], 60);
 }
 
+/// PURPOSE: Assert notification routes preserve visibility and read contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `notifications_reports`.
 #[tokio::test]
 async fn notification_routes_preserve_visibility_and_read_contracts() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -184,6 +194,8 @@ async fn notification_routes_preserve_visibility_and_read_contracts() {
     assert_eq!(all_read.status(), StatusCode::OK);
 }
 
+/// PURPOSE: Assert faulty report routes preserve create admin and status contracts.
+/// USE: regression guard for legacy/API wire contracts covered by `notifications_reports`.
 #[tokio::test]
 async fn faulty_report_routes_preserve_create_admin_and_status_contracts() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

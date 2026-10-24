@@ -1,3 +1,7 @@
+//! Parse and apply interface status updates from device heartbeats.
+//!
+//! Shared by device heartbeat recording when the payload includes interfaces.
+
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
 
 use crate::persistence::entity::device_interface;
@@ -5,6 +9,7 @@ use crate::persistence::entity::device_interface;
 use super::super::error::DeviceRepositoryError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Domain/DTO type `InterfaceStatus` used across device stores and handlers.
 pub(super) struct InterfaceStatus {
     pub(super) interface_type: String,
     pub(super) interface_id: Option<String>,
@@ -12,6 +17,7 @@ pub(super) struct InterfaceStatus {
 }
 
 #[derive(Clone, Debug)]
+/// Domain/DTO type `InterfaceChange` used across device stores and handlers.
 pub(super) struct InterfaceChange {
     pub(super) interface_type: String,
     pub(super) interface_id: String,
@@ -19,6 +25,8 @@ pub(super) struct InterfaceChange {
     pub(super) previous_status: Option<String>,
 }
 
+/// PURPOSE: Parse API/DB string into the `parse interface status` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 pub(super) fn parse_interface_status(
     status: &str,
 ) -> Result<device_interface::DeviceInterfaceStatus, DeviceRepositoryError> {
@@ -38,6 +46,8 @@ pub(super) fn parse_interface_status(
     }
 }
 
+/// PURPOSE: Serialize `interface status str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 pub(super) fn interface_status_str(
     status: Option<&device_interface::DeviceInterfaceStatus>,
 ) -> String {
@@ -56,6 +66,8 @@ pub(super) fn interface_status_str(
     .to_owned()
 }
 
+/// PURPOSE: Mutate persisted state for `update interface status`.
+/// USE: Update handlers and workers after side effects succeed.
 pub(super) async fn update_interface_status(
     transaction: &impl sea_orm::ConnectionTrait,
     row_id: i32,
@@ -76,6 +88,8 @@ pub(super) async fn update_interface_status(
     Ok(())
 }
 
+/// PURPOSE: Implement `interface_heartbeat_data` domain/persistence logic.
+/// USE: Called as `interface_heartbeat_data` from handlers, repository impls, or sibling helpers.
 pub(super) fn interface_heartbeat_data(heartbeat: &serde_json::Value) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter(
         "devices::heartbeat_store::interface",
@@ -90,6 +104,8 @@ pub(super) fn interface_heartbeat_data(heartbeat: &serde_json::Value) -> serde_j
     data
 }
 
+/// PURPOSE: Parse API/DB string into the `parse interface statuses` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 pub(super) fn parse_interface_statuses(data: &serde_json::Value) -> Vec<InterfaceStatus> {
     let _api_trace = crate::observability::ApiTrace::enter(
         "devices::heartbeat_store::interface",
@@ -126,6 +142,8 @@ pub(super) fn parse_interface_statuses(data: &serde_json::Value) -> Vec<Interfac
     result
 }
 
+/// PURPOSE: Resolve edge/controller targets for `resolve interface status`.
+/// USE: Handlers/workers before outbound edge HTTP.
 fn resolve_interface_status(data: &serde_json::Value) -> &'static str {
     let _api_trace = crate::observability::ApiTrace::enter(
         "devices::heartbeat_store::interface",
@@ -163,6 +181,8 @@ fn resolve_interface_status(data: &serde_json::Value) -> &'static str {
     }
 }
 
+/// PURPOSE: Implement `is_healthy_interface_status` domain/persistence logic.
+/// USE: Called as `is_healthy_interface_status` from handlers, repository impls, or sibling helpers.
 pub(super) fn is_healthy_interface_status(status: &str) -> bool {
     let _api_trace = crate::observability::ApiTrace::enter(
         "devices::heartbeat_store::interface",
@@ -171,6 +191,8 @@ pub(super) fn is_healthy_interface_status(status: &str) -> bool {
     matches!(status, "up" | "connected" | "available" | "plugged")
 }
 
+/// PURPOSE: Implement `interface_change_value` domain/persistence logic.
+/// USE: Called as `interface_change_value` from handlers, repository impls, or sibling helpers.
 pub(super) fn interface_change_value(change: InterfaceChange) -> serde_json::Value {
     let _api_trace = crate::observability::ApiTrace::enter(
         "devices::heartbeat_store::interface",
@@ -192,6 +214,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// PURPOSE: Implement `parses_legacy_device_interface_heartbeat_shapes` domain/persistence logic.
+    /// USE: Called as `parses_legacy_device_interface_heartbeat_shapes` from handlers, repository impls, or sibling helpers.
     fn parses_legacy_device_interface_heartbeat_shapes() {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::heartbeat_store::interface",
@@ -241,6 +265,8 @@ mod tests {
     }
 
     #[test]
+    /// PURPOSE: Implement `decodes_nested_stringified_interface_data` domain/persistence logic.
+    /// USE: Called as `decodes_nested_stringified_interface_data` from handlers, repository impls, or sibling helpers.
     fn decodes_nested_stringified_interface_data() {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::heartbeat_store::interface",

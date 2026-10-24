@@ -1,3 +1,8 @@
+//! Query and format a user's test executions as CSV.
+//!
+//! Used by the test-export HTTP handler. Ports Node `TestService` export that
+//! aggregates case pass/fail counts and renders duration / percentage columns.
+
 use chrono::{DateTime, Utc};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 
@@ -9,6 +14,8 @@ use super::{
     repository_types::TestExportRow,
 };
 
+/// PURPOSE: Load the caller's executions with pass/fail case totals.
+/// USE: Test export handler before `format_rows`.
 pub(crate) async fn rows(
     orm: &DatabaseConnection,
     user_id: &str,
@@ -53,6 +60,8 @@ pub(crate) async fn rows(
     Ok(rows)
 }
 
+/// PURPOSE: Render export rows as the legacy CSV schema (duration, percentage, sentence-case status).
+/// USE: Test export download response body.
 pub(crate) fn format_rows(
     rows: &[TestExportRow],
     now: DateTime<Utc>,
@@ -76,6 +85,7 @@ pub(crate) fn format_rows(
         ])
         .map_err(csv_error)?;
     for (index, row) in rows.iter().enumerate() {
+        // Legacy rule: completed but incomplete case totals surfaces as Failed.
         let status = if row.status == "completed" && row.total != row.passed + row.failed {
             "failed"
         } else {
@@ -113,6 +123,8 @@ pub(crate) fn format_rows(
     String::from_utf8(bytes).map_err(|error| DeviceRepositoryError::Internal(error.to_string()))
 }
 
+/// PURPOSE: Convert `snake_case` status tokens to sentence case for the CSV.
+/// USE: Status column in `format_rows`.
 fn sentence_case(value: &str) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "sentence_case");
     value
@@ -128,6 +140,8 @@ fn sentence_case(value: &str) -> String {
         .join(" ")
 }
 
+/// PURPOSE: Format elapsed seconds as `N Month … N Sec` matching Node export.
+/// USE: Duration column in `format_rows`.
 fn format_duration(mut seconds: i64) -> String {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::test_export", "format_duration");
@@ -154,6 +168,8 @@ fn format_duration(mut seconds: i64) -> String {
     }
 }
 
+/// PURPOSE: Format an optional timestamp as RFC3339 with millis.
+/// USE: Started/Ended CSV columns.
 fn iso(value: Option<DateTime<Utc>>) -> String {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "iso");
     value
@@ -161,6 +177,8 @@ fn iso(value: Option<DateTime<Utc>>) -> String {
         .unwrap_or_default()
 }
 
+/// PURPOSE: Wrap csv crate errors as internal failures.
+/// USE: Writer fallible calls in this module.
 fn csv_error(error: csv::Error) -> DeviceRepositoryError {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "csv_error");
     DeviceRepositoryError::Internal(format!("Failed to generate CSV: {error}"))
@@ -168,8 +186,12 @@ fn csv_error(error: csv::Error) -> DeviceRepositoryError {
 
 #[cfg(test)]
 mod tests {
+    //! Coverage for duration, percentage, and failed-status rewrite.
+
     use super::*;
 
+    /// PURPOSE: Guard duration, pass-rate, and failed-status CSV rewrite against regressions.
+    /// USE: Unit test for `format_rows` / `format_duration` helpers.
     #[test]
     fn formats_test_execution_csv_calculations() {
         let _api_trace = crate::observability::ApiTrace::enter(

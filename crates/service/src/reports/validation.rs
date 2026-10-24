@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use super::{ReportError, ReportRequest};
 
+/// Reject report requests missing required ids/paths.
 pub(crate) fn validate_request(request: &ReportRequest) -> Result<(), ReportError> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::validation", "validate_request");
     for (name, value) in [
@@ -26,6 +27,7 @@ pub(crate) fn validate_request(request: &ReportRequest) -> Result<(), ReportErro
     Ok(())
 }
 
+/// Resolve the on-disk root directory for a report job.
 pub(crate) fn report_root(base: &Path, request: &ReportRequest) -> Result<PathBuf, ReportError> {
     let _api_trace = crate::observability::ApiTrace::enter("reports::validation", "report_root");
     validate_request(request)?;

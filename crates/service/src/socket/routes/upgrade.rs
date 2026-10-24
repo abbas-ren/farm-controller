@@ -1,3 +1,5 @@
+//! HTTP→WebSocket upgrade endpoint and Socket.IO-compatible handshake.
+
 use std::sync::Arc;
 
 use crate::{
@@ -41,6 +43,7 @@ use reqwest::StatusCode;
         (status = 503, description = "Persistence required by the selected mode is unavailable")
     )
 )]
+/// Upgrade.
 pub(crate) async fn upgrade(
     State(state): State<Arc<AppState>>,
     Query(query): Query<NativeSocketQuery>,

@@ -1,4 +1,12 @@
+//! Test execution creation and log route contract tests.
+//!
+//! Covers create/update execution payloads, catalog expansion, auth on log routes,
+//! defaulting/validation, and pagination/filter shapes from Node execution/log APIs.
+
 use super::*;
+
+/// PURPOSE: Build shared fixture/helper `log_test_app` for sibling tests in this module.
+/// USE: test setup only; not used on production request paths.
 fn log_test_app() -> axum::Router {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
     api::router(Arc::new(
@@ -14,6 +22,8 @@ fn log_test_app() -> axum::Router {
     ))
 }
 
+/// PURPOSE: Build shared fixture/helper `execution_creation_test_app` for sibling tests in this module.
+/// USE: test setup only; not used on production request paths.
 fn execution_creation_test_app(with_catalog: bool) -> axum::Router {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
     let state = AppState::with_identity_provider(
@@ -33,6 +43,8 @@ fn execution_creation_test_app(with_catalog: bool) -> axum::Router {
     api::router(Arc::new(state))
 }
 
+/// PURPOSE: Assert execution creation preserves legacy payload and auth contract.
+/// USE: regression guard for legacy/API wire contracts covered by `execution_logs`.
 #[tokio::test]
 async fn execution_creation_preserves_legacy_payload_and_auth_contract() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -124,6 +136,8 @@ async fn execution_creation_preserves_legacy_payload_and_auth_contract() {
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 }
 
+/// PURPOSE: Assert execution creation expands selection through test catalog.
+/// USE: regression guard for legacy/API wire contracts covered by `execution_logs`.
 #[tokio::test]
 async fn execution_creation_expands_selection_through_test_catalog() {
     let response = execution_creation_test_app(true)
@@ -159,6 +173,8 @@ async fn execution_creation_expands_selection_through_test_catalog() {
     assert_eq!(body["selectionInput"]["mode"], "PARTIAL");
 }
 
+/// PURPOSE: Assert execution update preserves validation and legacy acknowledgement.
+/// USE: regression guard for legacy/API wire contracts covered by `execution_logs`.
 #[tokio::test]
 async fn execution_update_preserves_validation_and_legacy_acknowledgement() {
     let app = execution_creation_test_app(true);
@@ -223,6 +239,8 @@ async fn execution_update_preserves_validation_and_legacy_acknowledgement() {
     assert_eq!(unavailable.status(), StatusCode::CREATED);
 }
 
+/// PURPOSE: Assert log routes require authentication.
+/// USE: regression guard for legacy/API wire contracts covered by `execution_logs`.
 #[tokio::test]
 async fn log_routes_require_authentication() {
     let response = log_test_app()
@@ -236,6 +254,8 @@ async fn log_routes_require_authentication() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// PURPOSE: Assert create log applies defaults and validates payload.
+/// USE: regression guard for legacy/API wire contracts covered by `execution_logs`.
 #[tokio::test]
 async fn create_log_applies_defaults_and_validates_payload() {
     let app = log_test_app();
@@ -283,6 +303,8 @@ async fn create_log_applies_defaults_and_validates_payload() {
     }
 }
 
+/// PURPOSE: Assert list and search logs preserve pagination and filters.
+/// USE: regression guard for legacy/API wire contracts covered by `execution_logs`.
 #[tokio::test]
 async fn list_and_search_logs_preserve_pagination_and_filters() {
     let app = log_test_app();

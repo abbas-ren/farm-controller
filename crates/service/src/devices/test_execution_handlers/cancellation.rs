@@ -1,4 +1,6 @@
 //! Cancellation command, deferred completion, and cancellation event construction.
+//!
+//! Ports Node `PUT /api/v1/device/test/cancel/{id}` (`TestController.cancelExecution`).
 
 use super::*;
 use crate::{
@@ -21,6 +23,8 @@ use axum::{
 };
 use std::sync::Arc;
 
+/// PURPOSE: Request test execution cancellation
+/// USE: Authenticated frontend (bearer); publishes Socket.IO frontend events.
 #[utoipa::path(put, path = "/api/v1/device/test/cancel/{id}", tag = "Tests", summary = "Request test execution cancellation", description = "Persists an idempotent cancellation request before publishing owner and build-room events.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Cancellation requested", body = MessageResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 500, description = "Cancellation failed or execution not found", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn cancel(
     State(state): State<Arc<AppState>>,
@@ -28,12 +32,14 @@ pub async fn cancel(
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "cancel");
+    // Auth: require any authenticated bearer token.
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let user_id = auth::token_subject(&headers).unwrap_or_else(|| "system".to_owned());
     let Some(repository) = &state.device_repository else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -52,6 +58,7 @@ pub async fn cancel(
                     &result.phase,
                     &result.created_by,
                 ) {
+                    // Publish: notify connected frontend clients via Socket.IO.
                     if let Err(error) = state.event_publisher.publish(event) {
                         tracing::warn!(%error, test_id, "failed to publish test cancellation");
                     }
@@ -73,6 +80,7 @@ pub async fn cancel(
                         tracing::warn!(%error, run_id, test_id, "failed to delete cancelled TestRail run");
                     }
                 }
+                // Publish: notify connected frontend clients via Socket.IO.
                 if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
                     FrontendMessagePayload::TestExecutionUpdate {
                         build_id: None,
@@ -97,10 +105,13 @@ pub async fn cancel(
             "internal",
             "Could not cancel test execution",
         ),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Error while cancelling test execution"),
     }
 }
 
+/// PURPOSE: Ask EdgeController/EdgeAgent to abort the running test.
+/// USE: cancel handler after marking cancellation requested.
 async fn send_device_cancellation(device_ip: &str, test_id: &str) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "send_device_cancellation");
     let Ok(url) = reqwest::Url::parse(&format!("http://{device_ip}:{EDGE_CONTROLLER_PORT}/cancel"))
@@ -129,6 +140,8 @@ async fn send_device_cancellation(device_ip: &str, test_id: &str) {
     }
 }
 
+/// PURPOSE: Clear preparation state after a cancelled execution.
+/// USE: Cancellation completion paths.
 async fn cleanup_cancelled_preparation(state: &AppState, device_type: &str, test_id: &str) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "cleanup_cancelled_preparation");
     if !super::validation::safe_segment(device_type) || !super::validation::safe_segment(test_id) {
@@ -149,11 +162,14 @@ async fn cleanup_cancelled_preparation(state: &AppState, device_type: &str, test
     }
 }
 
+/// PURPOSE: Finish a cancellation that waited for device acknowledgement.
+/// USE: Workers/handlers when cancel ack arrives.
 pub(crate) async fn complete_deferred_cancellation(
     state: &AppState,
     cancellation: &super::super::repository_types::DeferredCancellation,
 ) {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "complete_deferred_cancellation");
+    // Publish: notify connected frontend clients via Socket.IO.
     if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
         FrontendMessagePayload::TestExecutionUpdate {
             build_id: Some(cancellation.build_id.clone()),
@@ -172,6 +188,8 @@ pub(crate) async fn complete_deferred_cancellation(
     }
 }
 
+/// PURPOSE: Build Socket.IO payloads for cancellation progress/completion.
+/// USE: cancel and deferred-completion paths.
 pub(crate) fn cancellation_events(
     test_id: &str,
     build_id: &str,

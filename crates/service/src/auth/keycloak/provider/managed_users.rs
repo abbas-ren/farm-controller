@@ -1,9 +1,12 @@
+//! Keycloak admin user listing, lookup, and deletion.
+
 use super::super::transport::{self, KeycloakRole, KeycloakUser};
 use super::KeycloakIdentityProvider;
 use super::mapping;
 use crate::auth::{IdentityError, ManagedUser};
 
 impl KeycloakIdentityProvider {
+    /// List users awaiting registration approval.
     pub(super) async fn pending_users_impl(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::managed_users", "pending_users_impl");
         Ok(self
@@ -19,6 +22,7 @@ impl KeycloakIdentityProvider {
             .collect())
     }
 
+    /// List all managed realm users for the admin UI.
     pub(super) async fn managed_users_impl(&self) -> Result<Vec<ManagedUser>, IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::managed_users", "managed_users_impl");
         let token = self.client_token().await?;
@@ -47,6 +51,7 @@ impl KeycloakIdentityProvider {
         Ok(managed)
     }
 
+    /// Fetch a single managed user by Keycloak id.
     pub(super) async fn user_by_id_impl(
         &self,
         user_id: &str,
@@ -62,6 +67,7 @@ impl KeycloakIdentityProvider {
         Ok(mapping::managed_user(user, Some(user_id), Vec::new()))
     }
 
+    /// Delete a Keycloak user by id.
     pub(super) async fn delete_user_impl(&self, user_id: &str) -> Result<(), IdentityError> {
         let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::managed_users", "delete_user_impl");
         let token = self.client_token().await?;

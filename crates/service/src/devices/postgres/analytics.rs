@@ -1,12 +1,20 @@
+//! `AnalyticsRepository` impl for `PostgresDeviceRepository`.
+//!
+//! Delegates to `analytics_store` modules.
+
 use super::*;
 
 #[async_trait]
 impl AnalyticsRepository for PostgresDeviceRepository {
+    /// PURPOSE: Implement `device_state_analytics` domain/persistence logic.
+    /// USE: Called as `device_state_analytics` from handlers, repository impls, or sibling helpers.
     async fn device_state_analytics(&self) -> Result<DeviceStateAnalytics, DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::analytics", "device_state_analytics");
         analytics_store::device_state_counts(self.orm()).await
     }
 
+    /// PURPOSE: Implement `detailed_device_state_analytics` domain/persistence logic.
+    /// USE: Called as `detailed_device_state_analytics` from handlers, repository impls, or sibling helpers.
     async fn detailed_device_state_analytics(
         &self,
     ) -> Result<DeviceStateDetailedAnalytics, DeviceRepositoryError> {
@@ -14,6 +22,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::device_state_details(self.orm()).await
     }
 
+    /// PURPOSE: Implement `recent_execution_analytics` domain/persistence logic.
+    /// USE: Called as `recent_execution_analytics` from handlers, repository impls, or sibling helpers.
     async fn recent_execution_analytics(
         &self,
         user_id: &str,
@@ -23,6 +33,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::recent_executions(self.orm(), user_id, count).await
     }
 
+    /// PURPOSE: Fetch a single record for `execution analytics by id`.
+    /// USE: Detail handlers and repository lookups.
     async fn execution_analytics_by_id(
         &self,
         test_id: &str,
@@ -31,6 +43,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::execution_by_id(self.orm(), test_id).await
     }
 
+    /// PURPOSE: Implement `daily_execution_analytics` domain/persistence logic.
+    /// USE: Called as `daily_execution_analytics` from handlers, repository impls, or sibling helpers.
     async fn daily_execution_analytics(
         &self,
         user_id: &str,
@@ -41,6 +55,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::execution_daily(self.orm(), user_id, from, to).await
     }
 
+    /// PURPOSE: Implement `build_comparison_analytics` domain/persistence logic.
+    /// USE: Called as `build_comparison_analytics` from handlers, repository impls, or sibling helpers.
     async fn build_comparison_analytics(
         &self,
         user_id: &str,
@@ -50,6 +66,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::build_comparisons(self.orm(), user_id, count).await
     }
 
+    /// PURPOSE: Fetch a single record for `build comparison analytics by id`.
+    /// USE: Detail handlers and repository lookups.
     async fn build_comparison_analytics_by_id(
         &self,
         user_id: &str,
@@ -59,6 +77,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::build_comparison_by_id(self.orm(), user_id, build_id).await
     }
 
+    /// PURPOSE: Implement `build_performance_analytics` domain/persistence logic.
+    /// USE: Called as `build_performance_analytics` from handlers, repository impls, or sibling helpers.
     async fn build_performance_analytics(
         &self,
         count: i64,
@@ -67,6 +87,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::build_performance(self.orm(), count).await
     }
 
+    /// PURPOSE: Fetch a single record for `build performance analytics by id`.
+    /// USE: Detail handlers and repository lookups.
     async fn build_performance_analytics_by_id(
         &self,
         build_id: &str,
@@ -75,6 +97,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::build_performance_by_id(self.orm(), build_id).await
     }
 
+    /// PURPOSE: Implement `device_usage_analytics` domain/persistence logic.
+    /// USE: Called as `device_usage_analytics` from handlers, repository impls, or sibling helpers.
     async fn device_usage_analytics(
         &self,
         start: chrono::DateTime<chrono::Utc>,
@@ -86,6 +110,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::device_usage(self.orm(), start, end, device_id, device_family).await
     }
 
+    /// PURPOSE: Implement `test_execution_analytics` domain/persistence logic.
+    /// USE: Called as `test_execution_analytics` from handlers, repository impls, or sibling helpers.
     async fn test_execution_analytics(
         &self,
         user_id: &str,
@@ -94,6 +120,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::test_execution_analytics(self.orm(), user_id).await
     }
 
+    /// PURPOSE: Implement `in_progress_test_analytics` domain/persistence logic.
+    /// USE: Called as `in_progress_test_analytics` from handlers, repository impls, or sibling helpers.
     async fn in_progress_test_analytics(
         &self,
         user_id: &str,
@@ -102,6 +130,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::in_progress_test_analytics(self.orm(), user_id).await
     }
 
+    /// PURPOSE: Implement `test_plan_analytics` domain/persistence logic.
+    /// USE: Called as `test_plan_analytics` from handlers, repository impls, or sibling helpers.
     async fn test_plan_analytics(
         &self,
         user_id: &str,
@@ -110,6 +140,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
         analytics_store::test_plan_summary(self.orm(), user_id).await
     }
 
+    /// PURPOSE: Implement `daily_test_analytics` domain/persistence logic.
+    /// USE: Called as `daily_test_analytics` from handlers, repository impls, or sibling helpers.
     async fn daily_test_analytics(
         &self,
         user_id: &str,
@@ -122,6 +154,8 @@ impl AnalyticsRepository for PostgresDeviceRepository {
 
 #[async_trait]
 impl AlertRepository for PostgresDeviceRepository {
+    /// PURPOSE: Implement `admin_alerts` domain/persistence logic.
+    /// USE: Called as `admin_alerts` from handlers, repository impls, or sibling helpers.
     async fn admin_alerts(
         &self,
         page: i64,
@@ -133,6 +167,8 @@ impl AlertRepository for PostgresDeviceRepository {
         alert_store::list_admin(self.orm(), page, limit, sort_by, descending).await
     }
 
+    /// PURPOSE: Implement `all_alerts` domain/persistence logic.
+    /// USE: Called as `all_alerts` from handlers, repository impls, or sibling helpers.
     async fn all_alerts(
         &self,
         page: i64,
@@ -144,11 +180,15 @@ impl AlertRepository for PostgresDeviceRepository {
         alert_store::list_all(self.orm(), page, limit, from, to).await
     }
 
+    /// PURPOSE: Mutate persisted state for `mark alert read`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn mark_alert_read(&self, alert_id: &str) -> Result<bool, DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::analytics", "mark_alert_read");
         alert_store::mark_read(self.orm(), alert_id).await
     }
 
+    /// PURPOSE: Mutate persisted state for `mark all alerts read`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn mark_all_alerts_read(&self) -> Result<(), DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::analytics", "mark_all_alerts_read");
         alert_store::mark_all_read(self.orm()).await

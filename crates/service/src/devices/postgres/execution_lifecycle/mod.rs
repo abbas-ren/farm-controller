@@ -1,3 +1,8 @@
+//! `ExecutionLifecycleRepository` impl: create, cancel, logs, status updates.
+//!
+//! Child modules own creation, cancellation, and log persistence. Ports Node
+//! `TestService` execution lifecycle.
+
 use super::*;
 
 use crate::persistence::entity::test_execution;
@@ -9,6 +14,8 @@ mod logs;
 
 #[async_trait]
 impl ExecutionLifecycleRepository for PostgresDeviceRepository {
+    /// PURPOSE: Create/persist `create test execution`.
+    /// USE: Create handlers after validation.
     async fn create_test_execution(
         &self,
         execution: &ExecutionCreation,
@@ -17,6 +24,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         self.create_test_execution_inner(execution).await
     }
 
+    /// PURPOSE: Implement `test_execution_build_version` domain/persistence logic.
+    /// USE: Called as `test_execution_build_version` from handlers, repository impls, or sibling helpers.
     async fn test_execution_build_version(
         &self,
         test_id: &str,
@@ -25,6 +34,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         self.test_execution_build_version_inner(test_id).await
     }
 
+    /// PURPOSE: Create/persist `create log`.
+    /// USE: Create handlers after validation.
     async fn create_log(
         &self,
         request: &LogCreateRequest,
@@ -33,6 +44,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         self.create_log_inner(request).await
     }
 
+    /// PURPOSE: List/filter `list logs` rows for the API.
+    /// USE: HTTP list handlers and repository trait methods.
     async fn list_logs(
         &self,
         query: &LogListQuery,
@@ -42,6 +55,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         self.list_logs_inner(query, search).await
     }
 
+    /// PURPOSE: Implement `executions_by_build` domain/persistence logic.
+    /// USE: Called as `executions_by_build` from handlers, repository impls, or sibling helpers.
     async fn executions_by_build(
         &self,
         build_id: &str,
@@ -53,6 +68,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
             .await
     }
 
+    /// PURPOSE: Implement `test_results` domain/persistence logic.
+    /// USE: Called as `test_results` from handlers, repository impls, or sibling helpers.
     async fn test_results(
         &self,
         test_id: &str,
@@ -61,6 +78,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         self.test_results_inner(test_id).await
     }
 
+    /// PURPOSE: Mutate persisted state for `update execution status`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn update_execution_status(
         &self,
         test_id: &str,
@@ -99,6 +118,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         Ok(result.rows_affected > 0)
     }
 
+    /// PURPOSE: Implement `request_test_cancellation` domain/persistence logic.
+    /// USE: Called as `request_test_cancellation` from handlers, repository impls, or sibling helpers.
     async fn request_test_cancellation(
         &self,
         test_id: &str,
@@ -111,6 +132,8 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
     }
 }
 
+/// PURPOSE: Parse API/DB string into the `parse test status` domain enum/value.
+/// USE: Store ingest paths converting wire strings to SeaORM enums.
 fn parse_test_status(status: &str) -> Result<test_execution::TestStatus, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "parse_test_status");
     match status {

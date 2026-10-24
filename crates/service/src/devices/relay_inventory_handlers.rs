@@ -1,3 +1,9 @@
+//! Relay inventory read helpers for frontend configuration screens.
+//!
+//! Ports Node `RelayController` getters: relays-by-controller, channels-by-relay, and
+//! available devices (`/api/v1/device/relay/controller/{id}`, `/channels/relay/{id}`,
+//! `/devices/available`) from `relayRouter.ts`.
+
 use std::sync::Arc;
 
 use super::*;
@@ -11,6 +17,8 @@ use axum::{
 };
 use uuid::Uuid;
 
+/// PURPOSE: List devices available for relay assignment
+/// USE: Frontend admin UI (bearer + admin role).
 #[utoipa::path(get, path = "/api/v1/device/relay/devices/available", tag = "Devices", summary = "List devices available for relay assignment", description = "Returns paginated devices not occupied by another active relay mapping, filtered to the target relay controller generation when known.", params(AvailableRelayDevicesQuery), security(("bearer_auth" = [])), responses((status = 200, description = "Paginated available devices", body = AvailableRelayDevicesResponse), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 500, description = "Available-device query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn available_relay_devices(
     State(state): State<Arc<AppState>>,
@@ -18,11 +26,13 @@ pub async fn available_relay_devices(
     Query(query): Query<AvailableRelayDevicesQuery>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_inventory_handlers", "available_relay_devices");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -31,10 +41,13 @@ pub async fn available_relay_devices(
     };
     match repository.available_relay_devices(&query).await {
         Ok(devices) => (response_headers, Json(devices)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to list available relay devices"),
     }
 }
 
+/// PURPOSE: List relays for a controller
+/// USE: Frontend admin UI (bearer + admin role).
 #[utoipa::path(get, path = "/api/v1/device/relay/controller/{id}", tag = "Devices", summary = "List relays for a controller", description = "Returns each non-deleted relay on the controller with ordered channel and attached-device projections.", params(("id" = String, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Controller relay inventory", body = Vec<RelayRecord>), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 500, description = "Relay query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn relays_for_controller(
     State(state): State<Arc<AppState>>,
@@ -42,11 +55,13 @@ pub async fn relays_for_controller(
     Path(controller_id): Path<String>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_inventory_handlers", "relays_for_controller");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -55,10 +70,13 @@ pub async fn relays_for_controller(
     };
     match repository.relays_for_controller(&controller_id).await {
         Ok(relays) => (response_headers, Json(relays)).into_response(),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to list controller relays"),
     }
 }
 
+/// PURPOSE: List channels for a relay
+/// USE: Frontend admin UI (bearer + admin role).
 #[utoipa::path(get, path = "/api/v1/device/relay/channels/relay/{id}", tag = "Devices", summary = "List channels for a relay", description = "Returns ordered non-deleted channel records for one relay, including attached-device summaries.", params(("id" = Uuid, Path)), security(("bearer_auth" = [])), responses((status = 200, description = "Relay channel inventory", body = Vec<RelayChannelRecord>), (status = 401, description = "Authentication required", body = ErrorResponse), (status = 403, description = "Administrator role required", body = ErrorResponse), (status = 404, description = "Relay not found", body = ErrorResponse), (status = 500, description = "Relay channel query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn channels_for_relay(
     State(state): State<Arc<AppState>>,
@@ -66,11 +84,13 @@ pub async fn channels_for_relay(
     Path(relay_id): Path<Uuid>,
 ) -> axum::response::Response {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_inventory_handlers", "channels_for_relay");
+    // Auth: require valid bearer token with administrator role.
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
     };
     let Some(repository) = state.device_repository.clone() else {
+        // Guard: device repository is not wired in this process.
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "device_unavailable",
@@ -80,6 +100,7 @@ pub async fn channels_for_relay(
     match repository.channels_for_relay(relay_id).await {
         Ok(Some(channels)) => (response_headers, Json(channels)).into_response(),
         Ok(None) => error_response(StatusCode::NOT_FOUND, "not_found", "Relay not found"),
+        // Map: translate repository failure into the legacy HTTP error envelope.
         Err(error) => repository_error(error, "Failed to list relay channels"),
     }
 }

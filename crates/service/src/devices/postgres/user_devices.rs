@@ -1,3 +1,5 @@
+//! `UserDeviceRepository` impl: user device lists and heartbeat timeout updates.
+
 use super::*;
 use super::json_models::{device_json, interface_json, test_case_json, test_execution_json};
 
@@ -7,6 +9,8 @@ use sea_orm::{
     sea_query::{Expr, extension::postgres::PgExpr},
 };
 
+/// PURPOSE: Build SeaORM filter/order clauses for `user device filters`.
+/// USE: Shared by count and page queries.
 fn user_device_filters(
     mut select: sea_orm::Select<device::Entity>,
     family: &str,
@@ -48,6 +52,8 @@ fn user_device_filters(
 
 #[async_trait]
 impl UserDeviceRepository for PostgresDeviceRepository {
+    /// PURPOSE: List/filter `list user devices` rows for the API.
+    /// USE: HTTP list handlers and repository trait methods.
     async fn list_user_devices(
         &self,
         query: &UserDeviceListQuery,
@@ -150,6 +156,8 @@ impl UserDeviceRepository for PostgresDeviceRepository {
         })
     }
 
+    /// PURPOSE: Implement `active_devices` domain/persistence logic.
+    /// USE: Called as `active_devices` from handlers, repository impls, or sibling helpers.
     async fn active_devices(&self) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
         let _api_trace = crate::observability::ApiTrace::enter(
             "devices::postgres::user_devices",
@@ -178,6 +186,8 @@ impl UserDeviceRepository for PostgresDeviceRepository {
         Ok(data)
     }
 
+    /// PURPOSE: Mutate persisted state for `update heartbeat timeout`.
+    /// USE: Update handlers and workers after side effects succeed.
     async fn update_heartbeat_timeout(
         &self,
         device_id: &str,

@@ -1,4 +1,12 @@
+//! Device CSV export and public EdgeController callback tests.
+//!
+//! Guards admin CSV attachment exports plus flashing / test-completion public callbacks
+//! (ID sanitization and error envelopes) from Node `deviceRoutes`.
+
 use super::*;
+
+/// PURPOSE: Assert device csv export requires admin and returns attachment.
+/// USE: regression guard for legacy/API wire contracts covered by `exports_callbacks`.
 #[tokio::test]
 async fn device_csv_export_requires_admin_and_returns_attachment() {
     let repository = Arc::new(RegistrationRepository {
@@ -63,6 +71,8 @@ async fn device_csv_export_requires_admin_and_returns_attachment() {
     assert!(body.contains("device-1,Bench 1,x5h"));
 }
 
+/// PURPOSE: Assert flashing callback is public and reports missing devices.
+/// USE: regression guard for legacy/API wire contracts covered by `exports_callbacks`.
 #[tokio::test]
 async fn flashing_callback_is_public_and_reports_missing_devices() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();
@@ -108,6 +118,8 @@ async fn flashing_callback_is_public_and_reports_missing_devices() {
     }
 }
 
+/// PURPOSE: Assert test completion callback sanitizes ids and reports errors.
+/// USE: regression guard for legacy/API wire contracts covered by `exports_callbacks`.
 #[tokio::test]
 async fn test_completion_callback_sanitizes_ids_and_reports_errors() {
     let cli = Cli::try_parse_from(["farmcontroller"]).unwrap();

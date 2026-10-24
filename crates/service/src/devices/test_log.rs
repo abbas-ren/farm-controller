@@ -1,4 +1,7 @@
 //! Persist test-execution progress lines and publish them to the frontend.
+//!
+//! Shared by HTTP handlers, workers, and runtime log ingestion. Replaces Node test-log
+//! append paths used during execution progress updates in `farm_controller_old`.
 
 use std::sync::OnceLock;
 
@@ -16,11 +19,15 @@ use crate::{
 
 static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+/// PURPOSE: Helper `log_file_lock` supporting device HTTP handlers (log file lock).
+/// USE: Helper used by sibling device HTTP handlers.
 fn log_file_lock() -> &'static Mutex<()> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_log", "log_file_lock");
     LOG_FILE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// PURPOSE: Append a progress line to `{test_logs_dir}/{testId}.json` and emit a `testExecution` / `log` event.
+/// USE: publishes Socket.IO frontend events; also used by workers / other handlers.
 /// Append a progress line to `{test_logs_dir}/{testId}.json` and emit a `testExecution` / `log` event.
 pub(crate) async fn append_test_log(
     state: &AppState,
@@ -39,6 +46,8 @@ pub(crate) async fn append_test_log(
     publish_test_log(&state.event_publisher, test_id, message, &timestamp)
 }
 
+/// PURPOSE: Helper `write_test_log_file` supporting device HTTP handlers (write test log file).
+/// USE: Helper used by sibling device HTTP handlers.
 pub(crate) async fn write_test_log_file(
     logs_dir: &str,
     test_id: &str,
@@ -64,6 +73,8 @@ pub(crate) async fn write_test_log_file(
         .map_err(|error| error.to_string())
 }
 
+/// PURPOSE: Helper `test_log_event` supporting device HTTP handlers (test log event).
+/// USE: publishes Socket.IO frontend events.
 pub(crate) fn test_log_event(test_id: &str, message: &str, timestamp: &str) -> ServerEvent {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_log", "test_log_event");
     ServerEvent::frontend(FrontendMessagePayload::TestExecution {
@@ -80,6 +91,8 @@ pub(crate) fn test_log_event(test_id: &str, message: &str, timestamp: &str) -> S
     })
 }
 
+/// PURPOSE: Helper `publish_test_log` supporting device HTTP handlers (publish test log).
+/// USE: Helper used by sibling device HTTP handlers.
 fn publish_test_log(
     publisher: &EventHub,
     test_id: &str,

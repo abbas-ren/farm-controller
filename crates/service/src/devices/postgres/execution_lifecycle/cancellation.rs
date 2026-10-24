@@ -1,3 +1,7 @@
+//! Request cancellation, terminalize executions, and free devices.
+//!
+//! Ports Node `TestService` cancel paths including NFS cleanup metadata.
+
 use super::*;
 
 use crate::persistence::entity::{
@@ -10,6 +14,8 @@ use sea_orm::{
 };
 
 impl PostgresDeviceRepository {
+    /// PURPOSE: Implement `request_test_cancellation_inner` domain/persistence logic.
+    /// USE: Called as `request_test_cancellation_inner` from handlers, repository impls, or sibling helpers.
     pub(super) async fn request_test_cancellation_inner(
         &self,
         test_id: &str,
@@ -21,6 +27,7 @@ impl PostgresDeviceRepository {
 
         let row = test_execution::Entity::find()
             .filter(test_execution::Column::TestId.eq(test_id))
+            // Row lock: serialize concurrent updates on this controller/device/relay.
             .lock(LockType::Update)
             .join(
                 JoinType::LeftJoin,
@@ -260,6 +267,8 @@ impl PostgresDeviceRepository {
     }
 }
 
+/// PURPOSE: Serialize `execution phase str` to the camelCase API JSON/string shape.
+/// USE: JSON assembly matching legacy Sequelize `to_jsonb` / enum text.
 fn execution_phase_str(phase: test_execution::ExecutionPhase) -> &'static str {
     let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::cancellation", "execution_phase_str");
     match phase {
