@@ -4,9 +4,10 @@
 //! Ports Node `DeviceService.registerDevice`, including interface rewrite,
 //! status/state parsing, and Gen3 controller mapping side effects.
 
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
-    sea_query::{Expr, LockType, OnConflict},
+    sea_query::{Expr, LockType},
 };
 use uuid::Uuid;
 
@@ -113,7 +114,7 @@ pub(crate) async fn register_device(
                 )
                 .col_expr(
                     device::Column::HeartbeatTimer,
-                    Expr::value(registration.timeout as i32),
+                    Expr::value(Some(registration.timeout as i32)),
                 )
                 .col_expr(
                     device::Column::SoftwareVersion,
@@ -158,7 +159,7 @@ pub(crate) async fn register_device(
                 )
                 .col_expr(
                     device::Column::HeartbeatTimer,
-                    Expr::value(registration.timeout as i32),
+                    Expr::value(Some(registration.timeout as i32)),
                 )
                 .col_expr(
                     device::Column::SoftwareVersion,
@@ -266,6 +267,8 @@ pub(crate) async fn register_device(
         registration.device_type.as_deref(),
         registration.device_family.as_deref(),
     ) {
+        // Existing folder rows are fine — SeaORM's Insert+DO NOTHING raises
+        // RecordNotInserted on conflict; TryInsert maps that to Conflicted/Ok.
         device_type_folder::Entity::insert(device_type_folder::ActiveModel {
             device_type: Set(device_type.to_owned()),
             folder_name: Set(format!("{device_family}_{device_type}")),
@@ -276,11 +279,7 @@ pub(crate) async fn register_device(
                 .unwrap_or("v1.0.0")
                 .to_owned()),
         })
-        .on_conflict(
-            OnConflict::column(device_type_folder::Column::DeviceType)
-                .do_nothing()
-                .to_owned(),
-        )
+        .on_conflict_do_nothing_on([device_type_folder::Column::DeviceType])
         .exec(&transaction)
         .await?;
     }
