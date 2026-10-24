@@ -119,7 +119,10 @@ pub(crate) async fn record_device(
     };
     let state_text = if has_active_work { "busy" } else { "free" };
     device::Entity::update_many()
-        .col_expr(device::Column::State, Expr::value(Some(state)))
+        .col_expr(
+            device::Column::State,
+            crate::persistence::pg_enum::pg_enum(&state),
+        )
         .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
         .col_expr(device::Column::LastConnectedOn, Expr::value(now))
         .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
@@ -208,7 +211,6 @@ pub(crate) async fn record_device(
                     device_interface::ActiveModel {
                         device_id: Set(device_id.to_owned()),
                         interface_id: Set(interface_id.to_owned()),
-                        interface_type: Set(interface_status.interface_type.clone()),
                         r#type: Set(Some(interface_status.interface_type.clone())),
                         status: Set(Some(status)),
                         created_at: Set(now),

@@ -91,7 +91,7 @@ pub(crate) fn interface_json(model: &device_interface::Model) -> serde_json::Val
     serde_json::json!({
         "id": model.id,
         "interfaceId": model.interface_id,
-        "interfaceType": model.interface_type,
+        "interfaceType": model.r#type,
         "deviceId": model.device_id,
         "name": model.name,
         "type": model.r#type,

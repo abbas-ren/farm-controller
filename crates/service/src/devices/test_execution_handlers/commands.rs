@@ -141,6 +141,28 @@ pub(crate) async fn create_for_user(
         if let Err(error) = state.event_publisher.publish(event) {
             tracing::warn!(%error, test_id, "failed to publish new test execution");
         }
+        // Mirror Node setImmediate: surface prep start and wake workers without waiting for poll.
+        let prep_message = "Test preparation started";
+        if let Err(error) =
+            crate::devices::test_log::append_test_log(state, test_id, prep_message).await
+        {
+            tracing::warn!(%error, test_id, "failed to append preparation-started log");
+        }
+        let _ = state
+            .event_publisher
+            .publish(ServerEvent::frontend(FrontendMessagePayload::TestExecution {
+                test_id: test_id.to_owned(),
+                r#type: crate::socket::types::frontend::TestExecutionUpdateType::Status,
+                data: crate::socket::types::frontend::TestExecutionUpdateData {
+                    status: Some(TestStatus::NotExecuted),
+                    message: Some(prep_message.to_owned()),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    cancel_requested: None,
+                    phase: Some("PREPARE_ARTIFACTS".to_owned()),
+                    rtos_log_path: None,
+                },
+            }));
+        state.wake_workers();
     }
     Ok(created)
 }

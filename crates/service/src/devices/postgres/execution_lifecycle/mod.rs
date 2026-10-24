@@ -91,7 +91,7 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         let mut update = test_execution::Entity::update_many()
             .col_expr(
                 test_execution::Column::Status,
-                Expr::value(Some(status_enum)),
+                crate::persistence::pg_enum::pg_enum(&status_enum),
             )
             .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
             .filter(test_execution::Column::TestId.eq(test_id));

@@ -146,13 +146,13 @@ device_action_watchdog_poll_seconds = 60
 # Possible: any integer greater than 0; stale actions processed per scan; example: 200.
 device_action_watchdog_batch_size = 100
 # Possible: any integer greater than 0, in seconds between test-preparation polls; example: 10.
-test_preparation_poll_seconds = 5
+test_preparation_poll_seconds = 1
 # Possible: any integer greater than 0, in seconds before a preparation lease can be reclaimed; example: 900.
 test_preparation_lease_seconds = 600
 # Possible: any integer greater than 0; tests prepared per cycle; example: 8.
 test_preparation_batch_size = 4
 # Possible: any integer greater than 0, in seconds between device-action polls; example: 10.
-device_action_poll_seconds = 5
+device_action_poll_seconds = 1
 # Possible: any integer greater than 0; device actions processed per cycle; example: 16.
 device_action_batch_size = 8
 # Possible: any integer greater than 0, in seconds between Gen5 mapping polls; example: 15.

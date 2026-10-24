@@ -39,7 +39,7 @@ impl PostgresDeviceRepository {
             .ok_or_else(|| {
                 DeviceRepositoryError::NotFound(format!("Release {} not found", execution.build_id))
             })?;
-        if release.is_faulty == Some(true) {
+        if release.is_faulty {
             return Err(DeviceRepositoryError::Validation(format!(
                 "Cannot create test execution: Release {} is marked as faulty",
                 execution.build_id

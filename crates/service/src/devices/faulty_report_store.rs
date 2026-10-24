@@ -219,7 +219,10 @@ pub(crate) async fn update_status(
     let transaction = orm.begin().await?;
     let now = chrono::Utc::now();
     let updated = faulty_report::Entity::update_many()
-        .col_expr(faulty_report::Column::Status, Expr::value(status_enum))
+        .col_expr(
+            faulty_report::Column::Status,
+            crate::persistence::pg_enum::pg_enum(&status_enum),
+        )
         .col_expr(faulty_report::Column::UpdatedAt, Expr::value(now))
         .filter(faulty_report::Column::Id.eq(report_id))
         .exec(&transaction)
@@ -235,7 +238,7 @@ pub(crate) async fn update_status(
             .await?
             .ok_or_else(|| DeviceRepositoryError::NotFound("Faulty report not found".to_owned()))?;
         release::Entity::update_many()
-            .col_expr(release::Column::IsFaulty, Expr::value(Some(true)))
+            .col_expr(release::Column::IsFaulty, Expr::value(true))
             .col_expr(release::Column::UpdatedAt, Expr::value(now))
             .filter(release::Column::Id.eq(report.release_id))
             .exec(&transaction)

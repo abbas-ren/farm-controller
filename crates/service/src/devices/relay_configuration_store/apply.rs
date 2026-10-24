@@ -166,7 +166,10 @@ async fn configure_channel(
         _ => device::DevicePower::Off,
     };
     device::Entity::update_many()
-        .col_expr(device::Column::Power, Expr::value(Some(power)))
+        .col_expr(
+            device::Column::Power,
+            crate::persistence::pg_enum::pg_enum(&power),
+        )
         .col_expr(device::Column::UpdatedAt, Expr::value(now))
         .filter(device::Column::DeviceId.eq(device_id))
         .filter(device::Column::DeletedAt.is_null())

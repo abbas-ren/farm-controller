@@ -57,8 +57,11 @@ pub(super) async fn device_satisfies(
             continue;
         }
 
+        let Some(interface_type) = interface.r#type.as_deref() else {
+            continue;
+        };
         *counts
-            .entry(interface.interface_type.trim().to_lowercase())
+            .entry(interface_type.trim().to_lowercase())
             .or_insert(0) += 1;
     }
 

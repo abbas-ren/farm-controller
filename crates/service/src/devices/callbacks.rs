@@ -468,6 +468,8 @@ async fn flash_confirmation_response(
                     tracing::warn!(%error, test_id, "failed to publish IPL confirmation");
                 }
             }
+            // Wake workers so post-confirm requeue / cancel side effects are claimed promptly.
+            state.wake_workers();
             let message = flashing_status.message.clone();
             Json(CallbackResponse {
                 success: true,

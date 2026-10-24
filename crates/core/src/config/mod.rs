@@ -644,10 +644,11 @@ impl Default for WorkersConfig {
             device_action_stale_timeout_minutes: 120,
             device_action_watchdog_poll_seconds: 60,
             device_action_watchdog_batch_size: 100,
-            test_preparation_poll_seconds: 5,
+            // Short poll is a safety net; create/enqueue also wakes workers via Notify.
+            test_preparation_poll_seconds: 1,
             test_preparation_lease_seconds: 600,
             test_preparation_batch_size: 4,
-            device_action_poll_seconds: 5,
+            device_action_poll_seconds: 1,
             device_action_batch_size: 8,
             gen5_mapping_poll_seconds: 10,
             gen5_mapping_batch_size: 10,

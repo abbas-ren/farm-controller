@@ -181,7 +181,7 @@ pub(crate) async fn apply_device_power(
         relay_channel::Entity::update_many()
             .col_expr(
                 relay_channel::Column::State,
-                Expr::value(Some(channel_state)),
+                crate::persistence::pg_enum::pg_enum(&channel_state),
             )
             .col_expr(relay_channel::Column::UpdatedAt, Expr::value(now))
             .filter(relay_channel::Column::Id.eq(channel_id))
@@ -190,7 +190,10 @@ pub(crate) async fn apply_device_power(
             .await?;
     }
     let updated = device::Entity::update_many()
-        .col_expr(device::Column::Power, Expr::value(Some(power)))
+        .col_expr(
+            device::Column::Power,
+            crate::persistence::pg_enum::pg_enum(&power),
+        )
         .col_expr(device::Column::UpdatedAt, Expr::value(now))
         .filter(device::Column::DeviceId.eq(device_id))
         .filter(device::Column::DeletedAt.is_null())
@@ -422,7 +425,7 @@ pub(crate) async fn update_state(
     relay_channel::Entity::update_many()
         .col_expr(
             relay_channel::Column::State,
-            Expr::value(Some(channel_state)),
+            crate::persistence::pg_enum::pg_enum(&channel_state),
         )
         .col_expr(relay_channel::Column::UpdatedAt, Expr::value(now))
         .filter(relay_channel::Column::Id.eq(channel_id))

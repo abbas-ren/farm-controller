@@ -57,7 +57,7 @@ pub struct Model {
     pub uploaded_by: String,
     pub tag: String,
     pub status: Option<ReleaseTestStatus>,
-    pub is_faulty: Option<bool>,
+    pub is_faulty: bool,
     pub device_family: String,
     pub device_type: String,
     pub created_at: DateTimeUtc,

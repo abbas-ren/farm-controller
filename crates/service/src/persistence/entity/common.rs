@@ -13,6 +13,7 @@ use serde_json::Value;
 /// Callers persist this when a user launches a run so workers can expand the
 /// chosen plan/suites into concrete cases without re-querying the UI state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectionInput {
     /// Selection strategy (`all`, suite-scoped, etc.).
     pub mode: String,
@@ -28,6 +29,7 @@ pub struct SelectionInput {
 
 /// Suites/cases to drop from an otherwise inclusive selection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectionExclude {
     /// Suite IDs omitted entirely.
     pub suites: Option<Vec<String>>,
@@ -37,6 +39,7 @@ pub struct SelectionExclude {
 
 /// One suite contribution inside [`SelectionInput`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectionSuite {
     /// External suite/section identifier.
     pub suite_id: String,

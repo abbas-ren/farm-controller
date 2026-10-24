@@ -45,10 +45,9 @@ pub struct Model {
     pub id: i32,
     /// Stable interface identifier from the controller agent.
     pub interface_id: String,
-    /// Coarse category (ethernet, usb, uart, …).
-    pub interface_type: String,
     pub device_id: String,
     pub name: Option<String>,
+    /// Coarse category (ethernet, usb, uart, …). Maps to Sequelize `type`.
     pub r#type: Option<String>,
     pub status: Option<DeviceInterfaceStatus>,
     pub created_at: DateTimeUtc,

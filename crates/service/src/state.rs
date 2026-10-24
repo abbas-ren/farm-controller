@@ -4,6 +4,8 @@
 
 use std::{sync::Arc, time::Instant};
 
+use tokio::sync::Notify;
+
 use crate::{
     auth::{IdentityProvider, KeycloakIdentityProvider},
     config::{AppConfig, Module},
@@ -28,6 +30,8 @@ pub struct AppState {
     pub(crate) device_repository: Option<Arc<dyn DeviceRepository>>,
     pub(crate) event_publisher: Arc<EventHub>,
     pub(crate) relay_sync: RelaySyncService,
+    /// Wakes test-preparation / device-action workers immediately (Node `setImmediate` parity).
+    pub(crate) worker_wake: Arc<Notify>,
     pub reports: Option<ReportService>,
     pub test_catalog: Option<Arc<dyn TestCatalog>>,
     pub qmetry_catalog: Option<Arc<dyn QmetryCatalog>>,
@@ -36,6 +40,12 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// PURPOSE: Nudge poll-based workers to run a claim cycle without waiting for the interval.
+    /// USE: After creating/enqueuing test executions so prep and dispatch start promptly.
+    pub(crate) fn wake_workers(&self) {
+        self.worker_wake.notify_waiters();
+    }
+
     /// Flush/shutdown the in-process EventHub on process stop.
     pub async fn shutdown_events(&self) {
         self.event_publisher.shutdown().await;
@@ -89,6 +99,7 @@ impl AppState {
             device_repository,
             event_publisher,
             relay_sync,
+            worker_wake: Arc::new(Notify::new()),
             reports,
             test_catalog,
             qmetry_catalog,
@@ -109,6 +120,7 @@ impl AppState {
             device_repository: None,
             event_publisher: Arc::new(EventHub::default()),
             relay_sync,
+            worker_wake: Arc::new(Notify::new()),
             reports: None,
             test_catalog: None,
             qmetry_catalog: None,
@@ -133,6 +145,7 @@ impl AppState {
             device_repository: None,
             event_publisher: Arc::new(EventHub::default()),
             relay_sync,
+            worker_wake: Arc::new(Notify::new()),
             reports: None,
             test_catalog: None,
             qmetry_catalog: None,

@@ -253,7 +253,7 @@ async fn fail_flash_action(
             release::Column::Status,
             crate::persistence::pg_enum::pg_enum(&release::ReleaseTestStatus::Failed),
         )
-        .col_expr(release::Column::IsFaulty, Expr::value(Some(true)))
+        .col_expr(release::Column::IsFaulty, Expr::value(true))
         .col_expr(release::Column::UpdatedAt, Expr::value(now))
         .filter(release::Column::Id.eq(release_id))
         .exec(transaction)

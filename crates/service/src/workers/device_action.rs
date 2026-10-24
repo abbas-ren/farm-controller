@@ -8,6 +8,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::{
     devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
@@ -41,6 +42,8 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => break,
+            // Wake immediately after prep enqueue / create (parity with Node setImmediate).
+            _ = state.worker_wake.notified() => run_cycle(&state).await,
             _ = interval.tick() => run_cycle(&state).await,
         }
     }
@@ -145,33 +148,31 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
         .column(device_action_queue::Column::Mode)
         .column(device_action_queue::Column::TargetDeviceId)
         .column(device_action_queue::Column::IplFlashConfirm)
+        .column(device_action_queue::Column::UpdatedAt)
         .column_as(test_execution::Column::BuildId, "build_id")
         .column_as(test_execution::Column::BuildVersion, "build_version")
         .column_as(test_execution::Column::CreatedBy, "created_by")
-        // Claim filter: only QUEUED rows.
+        // Claim filter: only QUEUED rows. Gen5/x5h and official-build gates are applied
+        // after assignment (Node DeviceActionQueueService parity) so jobs are never
+        // silently stuck in QUEUED without logs.
         .filter(device_action_queue::Column::Status.eq(device_action_queue::QueueJobStatus::Queued))
-        // Claim filter: skip raw x5h types unless this is a post-IPL confirm requeue.
-        .filter(
-            sea_orm::Condition::any()
-                .add(device_action_queue::Column::DeviceType.not_like("%x5h%"))
-                .add(device_action_queue::Column::IplFlashConfirm.eq(true)),
-        )
         .filter(
             sea_orm::Condition::any()
                 .add(device_action_queue::Column::Type.ne(device_action_queue::QueueJobType::Test))
                 .add(
                     sea_orm::Condition::all()
-                        // First assignment: fresh job still waiting in queue.
+                        // First assignment: fresh job still waiting in queue (NotExecuted or Queued).
                         // Post-IPL requeue: status is already in_progress and phase is
-                        // REQUEUE_AFTER_IPL_CONFIRMATION (legacy allowed these via
-                        // iplFlashConfirm alone).
+                        // REQUEUE_AFTER_IPL_CONFIRMATION.
                         .add(
                             sea_orm::Condition::any()
                                 .add(
                                     sea_orm::Condition::all()
                                         .add(
-                                            test_execution::Column::Status
-                                                .eq(test_execution::TestStatus::NotExecuted),
+                                            test_execution::Column::Status.is_in([
+                                                test_execution::TestStatus::NotExecuted,
+                                                test_execution::TestStatus::Queued,
+                                            ]),
                                         )
                                         .add(
                                             test_execution::Column::ExecutionPhase.eq(
@@ -199,18 +200,6 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
                             sea_orm::Condition::any()
                                 .add(test_execution::Column::CancelRequested.eq(false))
                                 .add(test_execution::Column::CancelRequested.is_null()),
-                        )
-                        .add(
-                            sea_orm::Condition::any()
-                                .add(release::Column::IsFaulty.eq(false))
-                                .add(release::Column::IsFaulty.is_null()),
-                        )
-                        .add(
-                            sea_orm::Condition::any()
-                                .add(release::Column::BuildType.ne(release::BuildType::Official))
-                                .add(
-                                    release::Column::Status.eq(release::ReleaseTestStatus::Passed),
-                                ),
                         ),
                 ),
         )
@@ -323,9 +312,49 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
     }
 
     let Some((device_id, ip_address)) = selected else {
-        transaction.rollback().await?;
+        // Keep the job queued but surface why we skipped this tick (Node logs wait reasons).
+        let now = chrono::Utc::now();
+        device_action_queue::Entity::update_many()
+            .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(device_action_queue::Column::Id.eq(action.id))
+            .exec(&transaction)
+            .await?;
+        transaction.commit().await?;
+        // Throttle UI logs to ~30s so a 1s poll does not spam waiting messages.
+        let should_log_wait = chrono::Utc::now()
+            .signed_duration_since(action.updated_at)
+            .num_seconds()
+            >= 30;
+        if should_log_wait
+            && let Some(test_id) = action.test_id.as_deref()
+        {
+            let message = format!(
+                "Waiting for a free {} device that satisfies test preconditions",
+                action.device_type
+            );
+            if let Err(error) =
+                crate::devices::test_log::append_test_log(state, test_id, &message).await
+            {
+                tracing::warn!(%error, %test_id, "failed to append device-wait log");
+            }
+        }
         return Ok(None);
     };
+
+    // Official / faulty release gates (Node DeviceActionQueueService post-assign checks).
+    if let Some(test_id) = action.test_id.as_deref()
+        && let Some(outcome) =
+            evaluate_release_gate(&transaction, &action, test_id).await?
+    {
+        apply_release_gate(&transaction, &action, test_id, &device_id, &outcome).await?;
+        transaction.commit().await?;
+        if let Err(error) =
+            crate::devices::test_log::append_test_log(state, test_id, &outcome.message).await
+        {
+            tracing::warn!(%error, %test_id, "failed to append release-gate log");
+        }
+        return Ok(None);
+    }
 
     // ---------------------------------------------------------------
     // 4. Mark queue action as running.
@@ -445,27 +474,41 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
 /// Send the assigned flash/test/IPL command to the edge controller.
 ///
 /// Side effects: HTTP to the controller, possible Gen4 IPL relay GPIO sequence,
-/// and queue/test status updates on success paths inside helpers.
+/// Gen5 IPL confirmation request, and queue/test status updates on success paths.
 async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), String> {
-    if assigned.action.ipl_flash_confirm.is_none()
-        && is_gen4_device(state, &assigned.device_id).await?
-    {
-        let target = resolve_gen4_ipl_target(state, &assigned.device_id)
-            .await?
-            .ok_or_else(|| {
-                format!(
-                    "Gen4 device, {}, requires a relay channel, controller mapping, and GPIO configuration",
+    if assigned.action.ipl_flash_confirm.is_none() {
+        if is_gen4_device(state, &assigned.device_id).await? {
+            if device_already_on_target_version(state, assigned).await? {
+                mark_ipl_confirm_true(state, assigned.action.id).await?;
+            } else {
+                let target = resolve_gen4_ipl_target(state, &assigned.device_id)
+                    .await?
+                    .ok_or_else(|| {
+                        format!(
+                            "Gen4 device, {}, requires a relay channel, controller mapping, and GPIO configuration",
+                            &assigned.device_id
+                        )
+                    })?;
+                tracing::info!(
+                    "Dispatching Gen4 IPL request for device {} with target {:?}",
+                    &assigned.device_id,
+                    &target
+                );
+                request_gen4_ipl(state, assigned, target).await?;
+                return Ok(());
+            }
+        } else if is_gen5_device_type(&assigned.action.device_type) {
+            if device_already_on_target_version(state, assigned).await? {
+                mark_ipl_confirm_true(state, assigned.action.id).await?;
+            } else {
+                tracing::info!(
+                    "Dispatching Gen5 IPL confirmation request for device {}",
                     &assigned.device_id
-                )
-                .to_owned()
-            })?;
-        tracing::info!(
-            "Dispatching Gen4 IPL request for device {} with target {:?}",
-            &assigned.device_id,
-            &target
-        );
-        request_gen4_ipl(state, assigned, target).await?;
-        return Ok(());
+                );
+                request_gen5_ipl(state, assigned).await?;
+                return Ok(());
+            }
+        }
     }
 
     let (path, payload) = if let Some(test_id) = assigned.action.test_id.as_deref() {
@@ -568,6 +611,330 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
         tokio::time::sleep(DEVICE_COMMAND_RETRY_DELAY).await;
     }
     Err(last_error)
+}
+
+#[derive(Debug)]
+struct ReleaseGateOutcome {
+    message: String,
+    /// When true, cancel the queue job and fail/cancel the execution; otherwise leave queued.
+    cancel: bool,
+}
+
+/// PURPOSE: Apply Node-parity official/faulty release gates after a device is chosen.
+/// USE: Before marking the action running so silent SQL excludes are replaced with logs.
+async fn evaluate_release_gate(
+    transaction: &impl sea_orm::ConnectionTrait,
+    action: &QueuedAction,
+    test_id: &str,
+) -> Result<Option<ReleaseGateOutcome>, sea_orm::DbErr> {
+    let Some(release_id) = action.release_id.or_else(|| {
+        action
+            .build_id
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+    }) else {
+        return Ok(None);
+    };
+    let Some(release) = release::Entity::find_by_id(release_id)
+        .one(transaction)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if release.is_faulty {
+        return Ok(Some(ReleaseGateOutcome {
+            message: "Test cancelled: Release is marked as faulty".to_owned(),
+            cancel: true,
+        }));
+    }
+    if release.build_type == release::BuildType::Official
+        && release.status != Some(release::ReleaseTestStatus::Passed)
+    {
+        let status = match release.status.as_ref() {
+            Some(release::ReleaseTestStatus::Untested) => "untested",
+            Some(release::ReleaseTestStatus::Testing) => "testing",
+            Some(release::ReleaseTestStatus::Failed) => "failed",
+            Some(release::ReleaseTestStatus::Passed) => "passed",
+            None => "unknown",
+        };
+        if matches!(status, "untested" | "testing") {
+            return Ok(Some(ReleaseGateOutcome {
+                message: format!(
+                    "Test re-queued: Official build status is '{status}', waiting for validation"
+                ),
+                cancel: false,
+            }));
+        }
+        return Ok(Some(ReleaseGateOutcome {
+            message: format!(
+                "Test cancelled: Official build has failed status '{status}'"
+            ),
+            cancel: true,
+        }));
+    }
+    let _ = test_id;
+    Ok(None)
+}
+
+async fn apply_release_gate(
+    transaction: &impl sea_orm::ConnectionTrait,
+    action: &QueuedAction,
+    test_id: &str,
+    _device_id: &str,
+    outcome: &ReleaseGateOutcome,
+) -> Result<(), sea_orm::DbErr> {
+    let now = chrono::Utc::now();
+    if outcome.cancel {
+        device_action_queue::Entity::update_many()
+            .col_expr(
+                device_action_queue::Column::Status,
+                crate::persistence::pg_enum::pg_enum(
+                    &device_action_queue::QueueJobStatus::Cancelled,
+                ),
+            )
+            .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(device_action_queue::Column::Id.eq(action.id))
+            .exec(transaction)
+            .await?;
+        test_execution::Entity::update_many()
+            .col_expr(
+                test_execution::Column::Status,
+                crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Cancelled),
+            )
+            .col_expr(
+                test_execution::Column::ExecutionPhase,
+                crate::persistence::pg_enum::pg_enum(
+                    &test_execution::ExecutionPhase::CompleteCancelled,
+                ),
+            )
+            .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
+            .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+            .filter(test_execution::Column::TestId.eq(test_id))
+            .exec(transaction)
+            .await?;
+    } else {
+        // Leave queued; bump updatedAt so watchdog/ordering stay honest while waiting.
+        device_action_queue::Entity::update_many()
+            .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(device_action_queue::Column::Id.eq(action.id))
+            .exec(transaction)
+            .await?;
+    }
+    Ok(())
+}
+
+fn is_gen5_device_type(device_type: &str) -> bool {
+    device_type.to_ascii_lowercase().contains("x5h")
+}
+
+async fn device_already_on_target_version(
+    state: &AppState,
+    assigned: &AssignedAction,
+) -> Result<bool, String> {
+    let database = state
+        .database
+        .as_ref()
+        .ok_or_else(|| "database is unavailable".to_owned())?;
+    let device = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(&assigned.device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .one(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(device) = device else {
+        return Ok(false);
+    };
+    let target = assigned
+        .action
+        .build_version
+        .as_deref()
+        .or(assigned.action.version.as_deref())
+        .unwrap_or("")
+        .trim();
+    if target.is_empty() {
+        return Ok(false);
+    }
+    Ok(device
+        .software_version
+        .as_deref()
+        .map(|value| value.trim() == target)
+        .unwrap_or(false))
+}
+
+async fn mark_ipl_confirm_true(state: &AppState, action_id: Uuid) -> Result<(), String> {
+    let database = state
+        .database
+        .as_ref()
+        .ok_or_else(|| "database is unavailable".to_owned())?;
+    let now = chrono::Utc::now();
+    device_action_queue::Entity::update_many()
+        .col_expr(device_action_queue::Column::IplFlashConfirm, Expr::value(Some(true)))
+        .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(device_action_queue::Column::Id.eq(action_id))
+        .exec(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// PURPOSE: Request Gen5 IPL flash confirmation from the EdgeController (Node askFlashConfirmation).
+/// USE: First dispatch of x5h jobs when the DUT is not already on the target version.
+async fn request_gen5_ipl(state: &AppState, assigned: &AssignedAction) -> Result<(), String> {
+    let database = state
+        .database
+        .as_ref()
+        .ok_or_else(|| "database is unavailable for Gen5 IPL".to_owned())?;
+    let orm = database.orm();
+    let device = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(&assigned.device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .one(orm)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("device {} not found for Gen5 IPL", assigned.device_id))?;
+    let device_mac = device
+        .mac_address
+        .clone()
+        .unwrap_or_else(|| device.device_id.clone());
+    let normalized_mac = normalize_mac(&device_mac);
+
+    let mut controller = if let Some(controller_id) = device.controller_id.as_deref() {
+        device_controller::Entity::find_by_id(controller_id.to_owned())
+            .filter(device_controller::Column::DeletedAt.is_null())
+            .one(orm)
+            .await
+            .map_err(|error| error.to_string())?
+    } else {
+        None
+    };
+    if controller
+        .as_ref()
+        .and_then(|row| mapping_entry_for_mac(&row.mappings, &normalized_mac))
+        .is_none()
+    {
+        let controllers = device_controller::Entity::find()
+            .filter(
+                device_controller::Column::Status
+                    .eq(device_controller::DeviceControllerStatus::Approved),
+            )
+            .filter(
+                device_controller::Column::State.eq(device_controller::DeviceControllerState::Active),
+            )
+            .filter(device_controller::Column::DeletedAt.is_null())
+            .all(orm)
+            .await
+            .map_err(|error| error.to_string())?;
+        controller = controllers.into_iter().find(|row| {
+            mapping_entry_for_mac(&row.mappings, &normalized_mac).is_some()
+        });
+    }
+    let controller = controller.ok_or_else(|| {
+        format!(
+            "No controller UART/power mapping found for Gen5 device {}",
+            assigned.device_id
+        )
+    })?;
+    let mapping = mapping_entry_for_mac(&controller.mappings, &normalized_mac).ok_or_else(|| {
+        format!(
+            "No controller UART/power mapping found for Gen5 device {}",
+            assigned.device_id
+        )
+    })?;
+    let uart = mapping
+        .get("uart")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let power = mapping
+        .get("power")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if uart.is_empty() || power.is_empty() {
+        return Err(format!(
+            "Incomplete UART/power mapping for Gen5 device {}",
+            assigned.device_id
+        ));
+    }
+    let version = assigned
+        .action
+        .build_version
+        .as_deref()
+        .or(assigned.action.version.as_deref())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Gen5 IPL build version is missing".to_owned())?;
+    let path = format!(
+        "{}/{}",
+        state
+            .config
+            .device
+            .gen5_ipl_remote_path
+            .trim_end_matches('/'),
+        version
+    );
+    let payload = serde_json::json!({
+        "gen": 5,
+        "uart": uart,
+        "power": power,
+        "sdk_ver": version,
+        "path": path,
+        "controller_ip": controller.ip_address,
+        "mac": device_mac,
+    });
+    let url = format!("http://{}:{EDGE_CONTROLLER_PORT}/ipl", controller.ip_address);
+    let client = crate::external_http::client(DEVICE_ACTION_HTTP_TIMEOUT)
+        .map_err(|error| error.to_string())?;
+    // Fire-and-forget parity with Node askFlashConfirmation (timeouts still return Ok).
+    let _ = client.post(&url).json(&payload).send().await;
+
+    let transaction = database
+        .orm()
+        .begin()
+        .await
+        .map_err(|error| error.to_string())?;
+    let now = chrono::Utc::now();
+    device_action_queue::Entity::update_many()
+        .col_expr(
+            device_action_queue::Column::Status,
+            crate::persistence::pg_enum::pg_enum(&device_action_queue::QueueJobStatus::Waiting),
+        )
+        .col_expr(
+            device_action_queue::Column::IplFlashRequestSent,
+            Expr::value(Some(true)),
+        )
+        .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(device_action_queue::Column::Id.eq(assigned.action.id))
+        .exec(&transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        test_execution::Entity::update_many()
+            .col_expr(
+                test_execution::Column::ExecutionPhase,
+                crate::persistence::pg_enum::pg_enum(
+                    &test_execution::ExecutionPhase::WaitForIplConfirmation,
+                ),
+            )
+            .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+            .filter(test_execution::Column::TestId.eq(test_id))
+            .exec(&transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        if let Err(error) = crate::devices::test_log::append_test_log(
+            state,
+            test_id,
+            "Waiting for IPL flash confirmation",
+        )
+        .await
+        {
+            tracing::warn!(%error, %test_id, "failed to append Gen5 IPL wait log");
+        }
+    }
+    Ok(())
 }
 
 /// Return whether the device family string indicates Gen4 (needs IPL GPIO path).
@@ -880,7 +1247,7 @@ async fn fail_dispatch(
                 release::Column::Status,
                 crate::persistence::pg_enum::pg_enum(&release::ReleaseTestStatus::Failed),
             )
-            .col_expr(release::Column::IsFaulty, Expr::value(Some(true)))
+            .col_expr(release::Column::IsFaulty, Expr::value(true))
             .col_expr(release::Column::UpdatedAt, Expr::value(now))
             .filter(release::Column::Id.eq(release_id))
             .exec(&transaction)
@@ -923,6 +1290,7 @@ mod tests {
                 build_id: Some("build-1".to_owned()),
                 build_version: Some("1.0.0".to_owned()),
                 created_by: Some("user-1".to_owned()),
+                updated_at: chrono::Utc::now(),
             },
             device_id: "device-1".to_owned(),
             ip_address: "192.0.2.1".to_owned(),

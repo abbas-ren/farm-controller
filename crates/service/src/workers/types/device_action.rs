@@ -23,6 +23,8 @@ pub struct QueuedAction {
     pub build_id: Option<String>,
     pub build_version: Option<String>,
     pub created_by: Option<String>,
+    /// Used to throttle "waiting for device" frontend logs.
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Queued action after a free device (and its controller IP) has been assigned.

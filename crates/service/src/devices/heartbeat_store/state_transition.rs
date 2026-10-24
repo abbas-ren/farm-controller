@@ -60,14 +60,15 @@ pub(super) async fn process_device_post_update(
         fallback_active.updated_at = Set(now);
         fallback_active.update(transaction).await?;
 
+        let execution_phase = if matched {
+            test_execution::ExecutionPhase::CompleteSuccess
+        } else {
+            test_execution::ExecutionPhase::CompleteFailed
+        };
         test_execution::Entity::update_many()
             .col_expr(
                 test_execution::Column::ExecutionPhase,
-                Expr::value(if matched {
-                    Some(test_execution::ExecutionPhase::CompleteSuccess)
-                } else {
-                    Some(test_execution::ExecutionPhase::CompleteFailed)
-                }),
+                crate::persistence::pg_enum::pg_enum(&execution_phase),
             )
             .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
             .filter(test_execution::Column::TestId.eq(&fallback.test_id))
@@ -112,7 +113,7 @@ pub(super) async fn process_device_post_update(
                 let mut release_active = release_row.clone().into_active_model();
                 // Status transition: fallback flash success marks the release passed.
                 release_active.status = Set(Some(release::ReleaseTestStatus::Passed));
-                release_active.is_faulty = Set(Some(false));
+                release_active.is_faulty = Set(false);
                 release_active.updated_at = Set(now);
                 release_active.update(transaction).await?;
                 events.push(ServerEvent::frontend(
@@ -169,9 +170,9 @@ pub(super) async fn process_device_post_update(
                 test_execution::Entity::update_many()
                     .col_expr(
                         test_execution::Column::ExecutionPhase,
-                        Expr::value(Some(
-                            test_execution::ExecutionPhase::RequeueAfterIplConfirmation,
-                        )),
+                        crate::persistence::pg_enum::pg_enum(
+                            &test_execution::ExecutionPhase::RequeueAfterIplConfirmation,
+                        ),
                     )
                     .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
                     .filter(test_execution::Column::TestId.eq(tid))

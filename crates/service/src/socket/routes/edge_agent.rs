@@ -64,8 +64,13 @@ pub(crate) async fn process_device_heartbeat(
         }
     }
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let should_wake = !result.post_update_events.is_empty();
     for event in device_heartbeat_events(device_id, result, &timestamp) {
         state.event_publisher.publish(event)?;
+    }
+    // Post-IPL requeue / completion side effects need immediate device_action claim.
+    if should_wake {
+        state.wake_workers();
     }
     Ok(())
 }

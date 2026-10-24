@@ -182,7 +182,10 @@ pub async fn process_case(
     };
     let now = Utc::now();
     let updated = test_case::Entity::update_many()
-        .col_expr(test_case::Column::Result, Expr::value(Some(result_enum)))
+        .col_expr(
+            test_case::Column::Result,
+            crate::persistence::pg_enum::pg_enum(&result_enum),
+        )
         .col_expr(test_case::Column::Comment, Expr::value(Some(comment.clone())))
         .col_expr(
             test_case::Column::Cmd,
@@ -489,7 +492,7 @@ async fn complete_execution(
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(phase)),
+            crate::persistence::pg_enum::pg_enum(&phase),
         )
         .filter(test_execution::Column::TestId.eq(test_id))
         .exec(transaction)

@@ -52,5 +52,5 @@ fn alert_cleanup_uses_legacy_snake_case_timestamp() {
 /// USE: Fails the build if migrations are accidentally removed from the tree.
 #[test]
 fn embedded_migrations_are_discovered() {
-    assert_eq!(MIGRATOR.iter().count(), 6);
+    assert_eq!(MIGRATOR.iter().count(), 7);
 }

@@ -252,7 +252,6 @@ pub(crate) async fn register_device(
         device_interface::ActiveModel {
             device_id: Set(device_id.clone()),
             interface_id: Set(interface.interface_id),
-            interface_type: Set(interface.interface_type.clone()),
             r#type: Set(Some(interface.interface_type)),
             status: Set(Some(device_interface::DeviceInterfaceStatus::Unknown)),
             created_at: Set(now),

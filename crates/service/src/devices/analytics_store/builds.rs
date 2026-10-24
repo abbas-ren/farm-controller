@@ -338,7 +338,7 @@ async fn build_performance_payload(
     Ok(Some(serde_json::json!({
         "buildId": build_id,
         "buildVersion": build_version,
-        "flagged": release.as_ref().and_then(|row| row.is_faulty).unwrap_or(false),
+        "flagged": release.as_ref().map(|row| row.is_faulty).unwrap_or(false),
         "deviceType": release.as_ref().map(|row| row.device_type.clone()),
         "status": status,
         "lastTestExecutionId": latest.map(|execution| execution.test_id.clone()),

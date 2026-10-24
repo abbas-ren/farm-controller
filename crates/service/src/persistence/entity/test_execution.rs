@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Case-selection payload persisted with the execution (UI → worker contract).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectionInput {
     pub mode: String,
     pub plan_id: String,
@@ -19,6 +20,7 @@ pub struct SelectionInput {
 
 /// Suites/cases excluded from an inclusive selection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectionExclude {
     pub suites: Option<Vec<String>>,
     pub cases_by_suite: Option<std::collections::HashMap<String, Vec<String>>>,
@@ -26,6 +28,7 @@ pub struct SelectionExclude {
 
 /// One suite contribution inside [`SelectionInput`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectionSuite {
     pub suite_id: String,
     pub select_all: bool,

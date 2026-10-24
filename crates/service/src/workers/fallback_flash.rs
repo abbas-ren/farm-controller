@@ -136,9 +136,9 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::
     test_execution::Entity::update_many()
         .col_expr(
             test_execution::Column::ExecutionPhase,
-            Expr::value(Some(
-                test_execution::ExecutionPhase::WaitForFallbackCompletion,
-            )),
+            crate::persistence::pg_enum::pg_enum(
+                &test_execution::ExecutionPhase::WaitForFallbackCompletion,
+            ),
         )
         .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
         .filter(test_execution::Column::TestId.eq(&fallback.test_id))

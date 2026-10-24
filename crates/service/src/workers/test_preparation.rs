@@ -42,6 +42,8 @@ pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => break,
+            // Wake immediately after create/enqueue (parity with Node setImmediate).
+            _ = state.worker_wake.notified() => run_cycle(&state).await,
             _ = interval.tick() => run_cycle(&state).await,
         }
     }
@@ -168,6 +170,33 @@ async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbE
         artifacts: release.artifacts,
     };
     transaction.commit().await?;
+    let claim_message = format!(
+        "Preparing artifacts and test scripts for device type {}",
+        preparation.device_type
+    );
+    if let Err(error) =
+        crate::devices::test_log::append_test_log(state, &preparation.test_id, &claim_message).await
+    {
+        tracing::warn!(
+            %error,
+            test_id = %preparation.test_id,
+            "failed to append preparation claim log"
+        );
+    }
+    let _ = state.event_publisher.publish(ServerEvent::frontend(
+        FrontendMessagePayload::TestExecution {
+            test_id: preparation.test_id.clone(),
+            r#type: TestExecutionUpdateType::Status,
+            data: TestExecutionUpdateData {
+                status: Some(TestStatus::NotExecuted),
+                message: Some(claim_message),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                cancel_requested: None,
+                phase: Some("PREPARE_TEST_SCRIPTS".to_owned()),
+                rtos_log_path: None,
+            },
+        },
+    ));
     Ok(Some(preparation))
 }
 
@@ -323,6 +352,11 @@ async fn prepare(
             test_execution::Column::ExecutionPhase,
             crate::persistence::pg_enum::pg_enum(&test_execution::ExecutionPhase::QueueTestExecution),
         )
+        // Parity with Node enqueue: surface QUEUED so UI/admin status stays consistent.
+        .col_expr(
+            test_execution::Column::Status,
+            crate::persistence::pg_enum::pg_enum(&test_execution::TestStatus::Queued),
+        )
         .col_expr(
             test_execution::Column::QueueId,
             Expr::value(Some(persisted_queue_id.to_string())),
@@ -343,7 +377,7 @@ async fn prepare(
         .await
         .map_err(|error| error.to_string())?;
     let message = format!(
-        "Test artifacts prepared and queued for device type {}",
+        "Test Execution is added to queue for device type {}",
         preparation.device_type
     );
     if let Err(error) =
@@ -355,6 +389,8 @@ async fn prepare(
             "failed to append preparation success log"
         );
     }
+    // Wake device_action immediately so dispatch does not wait for its poll interval.
+    state.wake_workers();
     Ok(prepared_event(
         &preparation.test_id,
         &preparation.created_by,
@@ -423,12 +459,12 @@ fn prepared_event(test_id: &str, _user_id: &str) -> ServerEvent {
         test_id: test_id.to_owned(),
         r#type: TestExecutionUpdateType::Queued,
         data: TestExecutionUpdateData {
-            status: Some(TestStatus::NotExecuted),
+            status: Some(TestStatus::Queued),
             timestamp: chrono::Utc::now().to_rfc3339(),
             cancel_requested: None,
-            phase: Some("queued".to_owned()),
+            phase: Some("QUEUE_TEST_EXECUTION".to_owned()),
             rtos_log_path: None,
-            message: None,
+            message: Some("Test Execution is added to queue".to_owned()),
         },
     })
 }

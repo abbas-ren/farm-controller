@@ -45,7 +45,7 @@ pub(crate) async fn update_build_status(
     let updated = release::ActiveModel {
         id: Set(existing.id),
         status: Set(Some(status_enum)),
-        is_faulty: Set(Some(is_faulty)),
+        is_faulty: Set(is_faulty),
         updated_at: Set(now),
         ..Default::default()
     }
@@ -112,7 +112,7 @@ pub(crate) async fn flag_build(
     };
     let updated = release::ActiveModel {
         id: Set(existing.id),
-        is_faulty: Set(Some(is_faulty)),
+        is_faulty: Set(is_faulty),
         status: Set(Some(status)),
         updated_at: Set(now),
         ..Default::default()

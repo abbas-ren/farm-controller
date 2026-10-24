@@ -162,7 +162,7 @@ pub(crate) async fn finalize_upload(
         device_family: Set(folder.1.clone()),
         device_type: Set(device_type.to_owned()),
         status: Set(Some(status)),
-        is_faulty: Set(Some(false)),
+        is_faulty: Set(false),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
