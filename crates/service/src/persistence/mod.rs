@@ -1,3 +1,5 @@
+pub mod entity;
+pub mod projection;
 #[cfg(test)]
 pub mod tests;
 
@@ -18,6 +20,8 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 #[derive(Clone)]
 pub struct Database {
+    // SeaORM view over the same PgPool.
+    orm: sea_orm::DatabaseConnection,
     pool: PgPool,
     metrics: Metrics,
 }
@@ -31,6 +35,7 @@ impl Database {
         let options = PgConnectOptions::from_str(url)
             .map_err(|error| AppError::Configuration(format!("invalid database URL: {error}")))?
             .application_name("farmcontroller");
+
         let started = Instant::now();
         let pool = PgPoolOptions::new()
             .min_connections(config.min_connections)
@@ -40,6 +45,9 @@ impl Database {
             .max_lifetime(Duration::from_secs(config.max_lifetime_seconds))
             .connect_with(options)
             .await?;
+        // Same PgPool — no second connection pool
+        let orm = sea_orm::SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone());
+
         metrics.record_database_operation("connect", "success", started.elapsed());
 
         if config.run_migrations {
@@ -55,7 +63,7 @@ impl Database {
             }
         }
 
-        Ok(Self { pool, metrics })
+        Ok(Self { orm, pool, metrics })
     }
 
     pub async fn ping(&self) -> Result<(), sqlx::Error> {
@@ -74,6 +82,10 @@ impl Database {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    pub fn orm(&self) -> &sea_orm::DatabaseConnection {
+        &self.orm
     }
 
     pub async fn enabled_retention_policies(&self) -> Result<Vec<RetentionPolicy>, sqlx::Error> {

@@ -1,4 +1,3 @@
-use serde::Serialize;
 use socketioxide::SocketIo;
 use std::sync::OnceLock;
 use tracing::info;

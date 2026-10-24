@@ -1,6 +1,8 @@
 use uuid::Uuid;
 
-#[derive(Debug, sqlx::FromRow)]
+use crate::persistence::entity::device_action_queue;
+
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct QueuedAction {
     pub id: Uuid,
     pub test_id: Option<String>,
@@ -8,7 +10,7 @@ pub struct QueuedAction {
     pub version: Option<String>,
     pub device_type: String,
     pub user_id: String,
-    pub mode: String,
+    pub mode: device_action_queue::QueueDispatchMode,
     pub target_device_id: Option<String>,
     pub ipl_flash_confirm: Option<bool>,
     pub build_id: Option<String>,

@@ -19,3 +19,18 @@ pub use relay::*;
 pub use sys_metrics::*;
 pub use test_prep::*;
 pub use worker_manager::*;
+
+pub fn err_seaorm_to_sqlx(err: sea_orm::DbErr) -> sqlx::Error {
+    use sea_orm::{DbErr, RuntimeErr};
+
+    match err {
+        DbErr::Query(RuntimeErr::SqlxError(err))
+        | DbErr::Exec(RuntimeErr::SqlxError(err))
+        | DbErr::Conn(RuntimeErr::SqlxError(err)) => match std::sync::Arc::try_unwrap(err) {
+            Ok(err) => err,
+            Err(err) => sqlx::Error::Protocol(err.to_string()),
+        },
+
+        other => sqlx::Error::Protocol(other.to_string()),
+    }
+}

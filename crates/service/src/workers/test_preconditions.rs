@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
 
+use sea_orm::{ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter};
+
+use crate::persistence::entity::{device_interface, test_case};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Operator {
     Greater,
@@ -17,37 +21,49 @@ struct Condition {
 }
 
 pub(super) async fn device_satisfies(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction: &DatabaseTransaction,
     device_id: &str,
     test_id: &str,
-) -> Result<bool, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (String, String)>(
-        r#"SELECT type, status::text FROM device_interfaces WHERE "deviceId" = $1"#,
-    )
-    .bind(device_id)
-    .fetch_all(&mut **transaction)
-    .await?;
+) -> Result<bool, sea_orm::DbErr> {
+    let interfaces = device_interface::Entity::find()
+        .filter(device_interface::Column::DeviceId.eq(device_id))
+        .all(transaction)
+        .await?;
+
     let mut counts = BTreeMap::new();
-    for (interface_type, status) in rows {
+
+    for interface in interfaces {
+        // Preserve the existing behavior:
+        //
+        // disconnected
+        // down
+        // unknown
+        // not_available
+        //
+        // do not contribute to the interface count.
         if matches!(
-            status.as_str(),
-            "disconnected" | "down" | "unknown" | "not_available"
+            interface.status.unwrap_or_default(),
+            device_interface::DeviceInterfaceStatus::Disconnected
+                | device_interface::DeviceInterfaceStatus::Down
+                | device_interface::DeviceInterfaceStatus::Unknown
+                | device_interface::DeviceInterfaceStatus::NotAvailable
         ) {
             continue;
         }
+
         *counts
-            .entry(interface_type.trim().to_lowercase())
+            .entry(interface.interface_type.trim().to_lowercase())
             .or_insert(0) += 1;
     }
-    let preconditions = sqlx::query_scalar::<_, Option<String>>(
-        r#"SELECT "preCondition" FROM testcase WHERE "executionId" = $1"#,
-    )
-    .bind(test_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    Ok(preconditions
+
+    let test_cases = test_case::Entity::find()
+        .filter(test_case::Column::ExecutionId.eq(test_id))
+        .all(transaction)
+        .await?;
+
+    Ok(test_cases
         .into_iter()
-        .flatten()
+        .filter_map(|test_case| test_case.pre_condition)
         .flat_map(|value| {
             value
                 .lines()
@@ -64,39 +80,52 @@ fn evaluate(expression: &str, counts: &BTreeMap<String, i64>) -> bool {
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
+
     if tokens.len() < 2 || tokens.len() % 3 == 0 {
         return false;
     }
+
     let Some(first) = condition(tokens[0], tokens[1]) else {
         return false;
     };
+
     let mut result = matches_condition(&first, counts);
     let mut index = 2;
+
     while index < tokens.len() {
         let connector = tokens[index].to_ascii_lowercase();
+
         if !matches!(connector.as_str(), "&" | "or") || index + 2 >= tokens.len() {
             return false;
         }
+
         let Some(next) = condition(tokens[index + 1], tokens[index + 2]) else {
             return false;
         };
+
         let current = matches_condition(&next, counts);
+
         result = if connector == "&" {
             result && current
         } else {
             result || current
         };
+
         index += 3;
     }
+
     result
 }
 
 fn condition(interface_type: &str, requirement: &str) -> Option<Condition> {
     let interface_type = interface_type.trim().to_lowercase();
+
     if interface_type.is_empty() {
         return None;
     }
+
     let requirement = requirement.trim();
+
     let (operator, number) = if let Some(value) = requirement.strip_prefix(">=") {
         (Operator::GreaterOrEqual, value)
     } else if let Some(value) = requirement.strip_prefix("<=") {
@@ -108,6 +137,7 @@ fn condition(interface_type: &str, requirement: &str) -> Option<Condition> {
     } else {
         (Operator::AtLeast, requirement)
     };
+
     Some(Condition {
         interface_type,
         operator,
@@ -120,6 +150,7 @@ fn matches_condition(condition: &Condition, counts: &BTreeMap<String, i64>) -> b
         .get(&condition.interface_type)
         .copied()
         .unwrap_or_default();
+
     match condition.operator {
         Operator::Greater => count > condition.value,
         Operator::Less => count < condition.value,
@@ -135,6 +166,7 @@ mod tests {
     #[test]
     fn evaluates_legacy_interface_count_rules() {
         let counts = BTreeMap::from([("uart".to_owned(), 2), ("usb".to_owned(), 1)]);
+
         assert!(evaluate("uart:2", &counts));
         assert!(evaluate("uart:>=2:&:usb:1", &counts));
         assert!(evaluate("i2c:1:or:usb:1", &counts));

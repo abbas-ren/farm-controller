@@ -48,6 +48,7 @@ utoipa = { version = "6.0.0", features = ["axum_extras", "uuid"] }
 utoipa-swagger-ui = { version = "10.0.1", features = ["axum", "vendored"] }
 uuid = { version = "1.26.1", features = ["serde", "v4"] }
 zip = "7.2.0"
+sea-orm = { version = "2.0.4", features = ["sqlx-postgres", "runtime-tokio-rustls", "with-chrono", "with-json", "with-uuid"] }
 socketioxide = "0.18.7"
 sysinfo = "0.39.6"
 russh = "0.63.3"

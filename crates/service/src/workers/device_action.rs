@@ -5,15 +5,24 @@ use tracing::{error, info};
 
 use crate::{
     devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
+    persistence::entity::{
+        device, device_action_queue, device_state_change, release, test_execution,
+    },
     socket::{
         helpers::{assignment_events, dispatch_failure_events},
         types::farm::ServerEvent,
     },
     state::AppState,
-    workers::types::{AssignedAction, Gen4IplTarget, QueuedAction},
+    workers::types::{AssignedAction, Gen4IplTarget, QueuedAction, err_seaorm_to_sqlx},
 };
 
 use super::test_preconditions;
+
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, ExprTrait, JoinType, QueryFilter, QueryOrder,
+    QuerySelect, RelationTrait, Set, TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
+};
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     info!(worker = "device_action", "worker started");
@@ -40,7 +49,11 @@ async fn run_cycle(state: &AppState) {
             }
             Err(err) => {
                 error!(%err, worker = "device_action", "failed to assign queued action");
-                record_failure(state, &err, "failed to assign queued action");
+                record_failure(
+                    state,
+                    &err_seaorm_to_sqlx(err),
+                    "failed to assign queued action",
+                );
                 break;
             }
         };
@@ -66,136 +79,286 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
-async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sqlx::Error> {
+async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
-    let mut transaction = database.pool().begin().await?;
-    let action = sqlx::query_as::<_, QueuedAction>(
-        r#"SELECT action.id, action."testId" AS test_id,
-                  action."releaseId" AS release_id, action.version,
-                  action."deviceType" AS device_type, action."userId" AS user_id,
-                  action.mode::text AS mode, action."targetDeviceId" AS target_device_id,
-                  action."iplFlashConfirm" AS ipl_flash_confirm,
-                  test."buildId"::text AS build_id, test."buildVersion" AS build_version,
-                  test."createdBy" AS created_by
-           FROM device_action_queue action
-           LEFT JOIN test_executions test ON test."testId" = action."testId"
-                     LEFT JOIN releases release
-                         ON release.id::text = COALESCE(action."releaseId"::text, test."buildId"::text)
-           WHERE action.status::text = 'queued'
-             AND (lower(action."deviceType") NOT LIKE '%x5h%'
-                  OR action."iplFlashConfirm" = true)
-             AND (action.type::text <> 'test'
-                  OR (test.status::text = 'not_executed'
-                      AND COALESCE(test."cancelRequested", false) = false
-                      AND test."executionPhase" = 'QUEUE_TEST_EXECUTION'
-                      AND COALESCE(release."isFaulty", false) = false
-                      AND (release."buildType"::text <> 'official'
-                           OR release.status::text = 'passed')))
-           ORDER BY CASE WHEN action.mode::text = 'deviceSpecific' THEN 0 ELSE 1 END,
-                    action."createdAt" ASC
-           LIMIT 1 FOR UPDATE OF action SKIP LOCKED"#,
-    )
-    .fetch_optional(&mut *transaction)
-    .await?;
+
+    let transaction = database.orm().begin().await?;
+
+    // ---------------------------------------------------------------
+    // 1. Find and lock the next queued action.
+    // ---------------------------------------------------------------
+
+    let action = device_action_queue::Entity::find()
+        .join(
+            JoinType::LeftJoin,
+            device_action_queue::Relation::TestExecution.def(),
+        )
+        .join(
+            JoinType::LeftJoin,
+            device_action_queue::Relation::Release.def(),
+        )
+        .select_only()
+        .column(device_action_queue::Column::Id)
+        .column(device_action_queue::Column::TestId)
+        .column(device_action_queue::Column::ReleaseId)
+        .column(device_action_queue::Column::Version)
+        .column(device_action_queue::Column::DeviceType)
+        .column(device_action_queue::Column::UserId)
+        .column(device_action_queue::Column::Mode)
+        .column(device_action_queue::Column::TargetDeviceId)
+        .column(device_action_queue::Column::IplFlashConfirm)
+        .column_as(test_execution::Column::BuildId, "build_id")
+        .column_as(test_execution::Column::BuildVersion, "build_version")
+        .column_as(test_execution::Column::CreatedBy, "created_by")
+        .filter(device_action_queue::Column::Status.eq(device_action_queue::QueueJobStatus::Queued))
+        .filter(
+            sea_orm::Condition::any()
+                .add(device_action_queue::Column::DeviceType.not_like("%x5h%"))
+                .add(device_action_queue::Column::IplFlashConfirm.eq(true)),
+        )
+        .filter(
+            sea_orm::Condition::any()
+                .add(device_action_queue::Column::Type.ne(device_action_queue::QueueJobType::Test))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(
+                            test_execution::Column::Status
+                                .eq(test_execution::TestStatus::NotExecuted),
+                        )
+                        .add(
+                            sea_orm::Condition::any()
+                                .add(test_execution::Column::CancelRequested.eq(false))
+                                .add(test_execution::Column::CancelRequested.is_null()),
+                        )
+                        .add(
+                            test_execution::Column::ExecutionPhase
+                                .eq(test_execution::ExecutionPhase::QueueTestExecution),
+                        )
+                        .add(
+                            sea_orm::Condition::any()
+                                .add(release::Column::IsFaulty.eq(false))
+                                .add(release::Column::IsFaulty.is_null()),
+                        )
+                        .add(
+                            sea_orm::Condition::any()
+                                .add(release::Column::BuildType.ne(release::BuildType::Official))
+                                .add(
+                                    release::Column::Status.eq(release::ReleaseTestStatus::Passed),
+                                ),
+                        ),
+                ),
+        )
+        .order_by_asc::<Expr>(
+            Expr::case(
+                Expr::col(device_action_queue::Column::Mode)
+                    .eq(device_action_queue::QueueDispatchMode::DeviceSpecific),
+                0,
+            )
+            .finally(1)
+            .into(),
+        )
+        .order_by_asc(device_action_queue::Column::CreatedAt)
+        .limit(1)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .into_model::<QueuedAction>()
+        .one(&transaction)
+        .await?;
+
     tracing::info!("Fetched action from queue");
+
     let Some(action) = action else {
         transaction.rollback().await?;
         return Ok(None);
     };
+
     let confirmed = action.ipl_flash_confirm == Some(true);
-    let devices = if action.mode == "deviceSpecific" || confirmed {
-        sqlx::query_as::<_, (String, String)>(
-            r#"SELECT "deviceId", "ipAddress" FROM devices
-               WHERE "deviceId" = $1 AND "deviceType" = $2
-                 AND status::text = 'approved' AND "deletedAt" IS NULL
-                                 AND "ipAddress" IS NOT NULL
-                 AND (state::text = 'free' OR $3)
-               FOR UPDATE SKIP LOCKED"#,
-        )
-        .bind(action.target_device_id.as_deref())
-        .bind(&action.device_type)
-        .bind(confirmed)
-        .fetch_all(&mut *transaction)
-        .await?
+
+    // ---------------------------------------------------------------
+    // 2. Find an eligible device.
+    // ---------------------------------------------------------------
+
+    let devices = if matches!(
+        action.mode,
+        device_action_queue::QueueDispatchMode::DeviceSpecific
+    ) || confirmed
+    {
+        let Some(target_device_id) = action.target_device_id.as_deref() else {
+            transaction.rollback().await?;
+            return Ok(None);
+        };
+
+        let mut query = device::Entity::find()
+            .filter(device::Column::DeviceId.eq(target_device_id))
+            .filter(device::Column::DeviceType.eq(&action.device_type))
+            .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+            .filter(device::Column::DeletedAt.is_null())
+            .filter(device::Column::IpAddress.is_not_null());
+
+        if !confirmed {
+            query = query.filter(device::Column::State.eq(device::DeviceState::Free));
+        }
+
+        query
+            .select_only()
+            .column(device::Column::DeviceId)
+            .column(device::Column::IpAddress)
+            .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+            .into_tuple::<(String, Option<String>)>()
+            .all(&transaction)
+            .await?
     } else {
-        sqlx::query_as::<_, (String, String)>(
-            r#"SELECT "deviceId", "ipAddress" FROM devices
-               WHERE "deviceType" = $1 AND status::text = 'approved'
-                                 AND state::text = 'free' AND "deletedAt" IS NULL
-                                 AND "ipAddress" IS NOT NULL
-               ORDER BY "lastConnectedOn" DESC, "createdAt" ASC
-               FOR UPDATE SKIP LOCKED"#,
-        )
-        .bind(&action.device_type)
-        .fetch_all(&mut *transaction)
-        .await?
+        device::Entity::find()
+            .filter(device::Column::DeviceType.eq(&action.device_type))
+            .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+            .filter(device::Column::State.eq(device::DeviceState::Free))
+            .filter(device::Column::DeletedAt.is_null())
+            .filter(device::Column::IpAddress.is_not_null())
+            .order_by_desc(device::Column::LastConnectedOn)
+            .order_by_asc(device::Column::CreatedAt)
+            .select_only()
+            .column(device::Column::DeviceId)
+            .column(device::Column::IpAddress)
+            .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+            .into_tuple::<(String, Option<String>)>()
+            .all(&transaction)
+            .await?
     };
+
+    // ---------------------------------------------------------------
+    // 3. Apply test-specific preconditions.
+    // ---------------------------------------------------------------
+
     let mut selected = None;
+
     for (device_id, ip_address) in devices {
+        let Some(ip_address) = ip_address else {
+            continue;
+        };
+
         if let Some(test_id) = action.test_id.as_deref()
             && !confirmed
-            && !test_preconditions::device_satisfies(&mut transaction, &device_id, test_id).await?
+            && !test_preconditions::device_satisfies(&transaction, &device_id, test_id).await?
         {
             continue;
         }
+
         selected = Some((device_id, ip_address));
         break;
     }
+
     let Some((device_id, ip_address)) = selected else {
         transaction.rollback().await?;
         return Ok(None);
     };
-    sqlx::query(
-        r#"UPDATE device_action_queue
-           SET status = 'running', "targetDeviceId" = $2, "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(action.id)
-    .bind(&device_id)
-    .execute(&mut *transaction)
+
+    // ---------------------------------------------------------------
+    // 4. Mark queue action as running.
+    // ---------------------------------------------------------------
+
+    let action_model = device_action_queue::ActiveModel {
+        id: Set(action.id),
+        status: Set(device_action_queue::QueueJobStatus::Running),
+        target_device_id: Set(Some(device_id.clone())),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+
+    action_model.update(&transaction).await?;
+
+    // ---------------------------------------------------------------
+    // 5. Mark device as busy.
+    // ---------------------------------------------------------------
+
+    let device_model = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(&device_id))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| sea_orm::DbErr::RecordNotFound(format!("device {device_id} disappeared")))?;
+
+    let last_execution_status = if action.test_id.is_some() {
+        Some(device::TestStatus::InProgress)
+    } else {
+        device_model.last_execution_status.clone()
+    };
+
+    let device_update = device::ActiveModel {
+        id: Set(device_model.id),
+        state: Set(Some(device::DeviceState::Busy)),
+        last_test_execution: Set(action.test_id.clone()),
+        last_execution_status: Set(last_execution_status),
+        state_updated_at: Set(Some(chrono::Utc::now())),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+
+    device_update.update(&transaction).await?;
+
+    // ---------------------------------------------------------------
+    // 6. Insert device state change.
+    // ---------------------------------------------------------------
+
+    let now = chrono::Utc::now();
+
+    device_state_change::ActiveModel {
+        device_id: Set(device_id.clone()),
+        state: Set(device_state_change::DeviceStateChangeState::Busy),
+        changed_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&transaction)
     .await?;
-    sqlx::query(
-        r#"UPDATE devices SET state = 'busy', "lastTestExecution" = $2,
-                            "lastExecutionStatus" = CASE WHEN $2::text IS NULL
-                                THEN "lastExecutionStatus" ELSE 'in_progress' END,
-                            "stateUpdatedAt" = now(), "updatedAt" = now()
-           WHERE "deviceId" = $1"#,
-    )
-    .bind(&device_id)
-    .bind(action.test_id.as_deref())
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"INSERT INTO device_state_change
-              ("deviceId", state, "changedAt", "createdAt", "updatedAt")
-           VALUES ($1, 'busy', now(), now(), now())"#,
-    )
-    .bind(&device_id)
-    .execute(&mut *transaction)
-    .await?;
+
+    // ---------------------------------------------------------------
+    // 7. Update test execution or release.
+    // ---------------------------------------------------------------
+
     if let Some(test_id) = action.test_id.as_deref() {
-        sqlx::query(
-            r#"UPDATE test_executions SET status = 'in_progress',
-                       "executionPhase" = 'DEVICE_ASSIGNED', "deviceId" = $2,
-                       "startedAt" = COALESCE("startedAt", now()), "updatedAt" = now()
-               WHERE "testId" = $1"#,
-        )
-        .bind(test_id)
-        .bind(&device_id)
-        .execute(&mut *transaction)
+        let test = test_execution::Entity::find()
+            .filter(test_execution::Column::TestId.eq(test_id))
+            .one(&transaction)
+            .await?
+            .ok_or_else(|| {
+                sea_orm::DbErr::RecordNotFound(format!("test execution {test_id} disappeared"))
+            })?;
+
+        test_execution::ActiveModel {
+            id: Set(test.id),
+            status: Set(Some(test_execution::TestStatus::InProgress)),
+            execution_phase: Set(Some(test_execution::ExecutionPhase::DeviceAssigned)),
+            device_id: Set(Some(device_id.clone())),
+            started_at: Set(test.started_at.or(Some(now))),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .update(&transaction)
         .await?;
     } else if let Some(release_id) = action.release_id {
-        sqlx::query(
-            r#"UPDATE releases SET status = 'testing', "testedDeviceId" = $2,
-                                  "updatedAt" = now()
-               WHERE id = $1"#,
-        )
-        .bind(release_id)
-        .bind(&device_id)
-        .execute(&mut *transaction)
+        let release = release::Entity::find_by_id(release_id)
+            .one(&transaction)
+            .await?
+            .ok_or_else(|| {
+                sea_orm::DbErr::RecordNotFound(format!("release {release_id} disappeared"))
+            })?;
+
+        release::ActiveModel {
+            id: Set(release.id),
+            status: Set(Some(release::ReleaseTestStatus::Testing)),
+            tested_device_id: Set(Some(device_id.clone())),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .update(&transaction)
         .await?;
     }
+
+    // ---------------------------------------------------------------
+    // 8. Commit.
+    // ---------------------------------------------------------------
+
     transaction.commit().await?;
+
     Ok(Some(AssignedAction {
         action,
         device_id,
@@ -524,7 +687,10 @@ fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{socket::helpers::assignment_events, workers::types::DeviceState};
+    use crate::{
+        persistence::entity::device_action_queue::QueueDispatchMode,
+        socket::helpers::assignment_events, workers::types::DeviceState,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -538,7 +704,7 @@ mod tests {
                 version: None,
                 device_type: "x4h".to_owned(),
                 user_id: "user-1".to_owned(),
-                mode: "deviceType".to_owned(),
+                mode: QueueDispatchMode::DeviceSpecific,
                 target_device_id: None,
                 ipl_flash_confirm: None,
                 build_id: Some("build-1".to_owned()),
