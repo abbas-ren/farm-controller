@@ -1,12 +1,12 @@
 use sea_orm::{
-    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
-    Statement, TransactionTrait, sea_query::Expr,
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait, sea_query::Expr,
 };
 
 use crate::persistence::entity::{device_controller, relay, relay_channel};
 
 use super::{
-    ControllerEditRequest, error::DeviceRepositoryError, repository_types::ControllerDeleteTarget,
+    ControllerEditRequest, error::DeviceRepositoryError, postgres::json_models::controller_json,
+    repository_types::ControllerDeleteTarget,
 };
 
 pub(crate) async fn edit(
@@ -73,21 +73,11 @@ pub(crate) async fn edit(
     }
     update.exec(&transaction).await?;
 
-    // RETURNING to_jsonb kept for API response shape.
-    #[derive(Debug, FromQueryResult)]
-    struct ControllerJson {
-        value: serde_json::Value,
-    }
-    let controller = ControllerJson::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(device_controllers) AS value
-           FROM device_controllers
-           WHERE "deviceControllerId" = $1 AND "deletedAt" IS NULL"#,
-        [controller_id.into()],
-    ))
-    .one(&transaction)
-    .await?
-    .map(|row| row.value);
+    let controller = device_controller::Entity::find_by_id(controller_id.to_owned())
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .one(&transaction)
+        .await?
+        .map(|model| controller_json(&model));
     transaction.commit().await?;
     Ok(controller)
 }

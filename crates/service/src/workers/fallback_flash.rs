@@ -1,19 +1,21 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::{
     devices::{DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
-    persistence::entity::{fallback_update, log_entry, test_execution},
+    persistence::entity::{device, fallback_update, log_entry, release, test_execution},
     state::AppState,
 };
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter,
-    Set, Statement, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
 };
 
-#[derive(Debug, FromQueryResult)]
+#[derive(Debug)]
 struct FallbackFlash {
     id: i32,
     device_id: String,
@@ -66,28 +68,52 @@ async fn run_cycle(state: &AppState) {
 async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
     let transaction = database.orm().begin().await?;
-    // Join + FOR UPDATE SKIP LOCKED across fallback/devices/releases — keep as raw SQL.
-    let fallback = FallbackFlash::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT fallback.id, fallback."deviceId" AS device_id,
-                  fallback."testId" AS test_id, fallback."fallbackPath" AS fallback_path,
-                  device."ipAddress" AS ip_address, device."deviceType" AS device_type,
-                  release.version
-           FROM fallback_updates fallback
-           JOIN devices device ON device."deviceId" = fallback."deviceId"
-           JOIN releases release ON release.id::text = fallback."releaseId"::text
-           WHERE fallback.status::text = 'pending'
-             AND device.status::text = 'approved' AND device."deletedAt" IS NULL
-                         AND device."ipAddress" IS NOT NULL AND device."deviceType" IS NOT NULL
-           ORDER BY fallback."createdAt" ASC
-           LIMIT 1 FOR UPDATE OF fallback SKIP LOCKED"#,
-        [],
-    ))
-    .one(&transaction)
-    .await?;
-    let Some(fallback) = fallback else {
+    let pending = fallback_update::Entity::find()
+        .filter(fallback_update::Column::Status.eq(fallback_update::FallbackStatus::Pending))
+        .filter(Expr::cust(
+            r#"EXISTS (
+                 SELECT 1 FROM devices device
+                 WHERE device."deviceId" = "fallback_updates"."deviceId"
+                   AND device.status::text = 'approved'
+                   AND device."deletedAt" IS NULL
+                   AND device."ipAddress" IS NOT NULL
+                   AND device."deviceType" IS NOT NULL
+               )"#,
+        ))
+        .filter(Expr::cust(
+            r#"EXISTS (
+                 SELECT 1 FROM releases release
+                 WHERE release.id::text = "fallback_updates"."releaseId"::text
+               )"#,
+        ))
+        .order_by_asc(fallback_update::Column::CreatedAt)
+        .limit(1)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .one(&transaction)
+        .await?;
+    let Some(pending) = pending else {
         transaction.rollback().await?;
         return Ok(None);
+    };
+    let device = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(&pending.device_id))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| sea_orm::DbErr::RecordNotFound("fallback device".into()))?;
+    let release_id = Uuid::parse_str(&pending.release_id)
+        .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+    let release = release::Entity::find_by_id(release_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| sea_orm::DbErr::RecordNotFound("fallback release".into()))?;
+    let fallback = FallbackFlash {
+        id: pending.id,
+        device_id: pending.device_id.clone(),
+        test_id: pending.test_id.clone(),
+        fallback_path: pending.fallback_path.clone(),
+        ip_address: device.ip_address.unwrap_or_default(),
+        device_type: device.device_type.unwrap_or_default(),
+        version: release.version,
     };
     let now = chrono::Utc::now();
     fallback_update::Entity::update_many()

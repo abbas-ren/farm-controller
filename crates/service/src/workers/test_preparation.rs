@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    persistence::entity::{device_action_queue, test_case, test_execution},
+    persistence::entity::{device_action_queue, release, test_case, test_execution},
     socket::types::{
         farm::ServerEvent,
         frontend::{
@@ -24,9 +24,9 @@ use crate::{
 use super::artifact_preparation::{artifact_paths, prepare_artifacts, safe_segment};
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
-    sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
 };
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
@@ -81,42 +81,84 @@ async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbE
     let database = state.database.as_ref().expect("worker requires database");
     let lease_seconds =
         i64::try_from(state.config.workers.test_preparation_lease_seconds).unwrap_or(i64::MAX);
-    // CTE claim with lease reclaim + release join — keep as raw SQL.
-    TestPreparation::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"WITH candidate AS (
-               SELECT execution."testId"
-               FROM test_executions execution
-               WHERE execution.status::text = 'not_executed'
-                 AND (execution."executionPhase" = 'PREPARE_ARTIFACTS'
-                      OR (execution."executionPhase" = 'PREPARE_TEST_SCRIPTS'
-                          AND execution."updatedAt" < now() - ($1 * interval '1 second')))
-                 AND COALESCE(execution."cancelRequested", false) = false
-               ORDER BY execution."createdAt" ASC
-               LIMIT 1
-               FOR UPDATE SKIP LOCKED
-           ), claimed AS (
-               UPDATE test_executions execution
-               SET "executionPhase" = 'PREPARE_TEST_SCRIPTS', "updatedAt" = now()
-               FROM candidate
-               WHERE execution."testId" = candidate."testId"
-               RETURNING execution.*
-           )
-           SELECT claimed."testId" AS test_id, claimed."deviceType" AS device_type,
-                claimed."buildId"::text AS build_id,
-                COALESCE(claimed."buildVersion", release.version) AS build_version,
-                  claimed."testPlanId"::bigint AS test_plan_id,
-                COALESCE(claimed."testPlanName", '') AS test_plan_name,
-                COALESCE(claimed.name, claimed."testId") AS name,
-                COALESCE(claimed."isAllSelected", false) AS is_all_selected,
-                COALESCE(claimed."createdBy", 'system') AS created_by,
-                  claimed."testCycleId" AS test_cycle_id, release.artifacts
-           FROM claimed
-           JOIN releases release ON release.id::text = claimed."buildId"::text"#,
-        [lease_seconds.into()],
-    ))
-    .one(database.orm())
-    .await
+    let transaction = database.orm().begin().await?;
+    let candidate = test_execution::Entity::find()
+        .filter(test_execution::Column::Status.eq(test_execution::TestStatus::NotExecuted))
+        .filter(
+            sea_orm::Condition::any()
+                .add(
+                    test_execution::Column::ExecutionPhase
+                        .eq(test_execution::ExecutionPhase::PrepareArtifacts),
+                )
+                .add(
+                    sea_orm::Condition::all()
+                        .add(
+                            test_execution::Column::ExecutionPhase
+                                .eq(test_execution::ExecutionPhase::PrepareTestScripts),
+                        )
+                        .add(Expr::cust_with_values(
+                            r#""updatedAt" < now() - ($1 * interval '1 second')"#,
+                            [lease_seconds],
+                        )),
+                ),
+        )
+        .filter(
+            sea_orm::Condition::any()
+                .add(test_execution::Column::CancelRequested.eq(false))
+                .add(test_execution::Column::CancelRequested.is_null()),
+        )
+        .filter(Expr::cust(
+            r#"EXISTS (
+                 SELECT 1 FROM releases release
+                 WHERE release.id::text = "test_executions"."buildId"::text
+               )"#,
+        ))
+        .order_by_asc(test_execution::Column::CreatedAt)
+        .limit(1)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .one(&transaction)
+        .await?;
+    let Some(candidate) = candidate else {
+        transaction.rollback().await?;
+        return Ok(None);
+    };
+    let release_id = Uuid::parse_str(&candidate.build_id)
+        .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+    let release = release::Entity::find_by_id(release_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| sea_orm::DbErr::RecordNotFound("test preparation release".into()))?;
+    let now = chrono::Utc::now();
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            Expr::value(Some(test_execution::ExecutionPhase::PrepareTestScripts)),
+        )
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(&candidate.test_id))
+        .exec(&transaction)
+        .await?;
+    let preparation = TestPreparation {
+        test_id: candidate.test_id.clone(),
+        device_type: candidate.device_type,
+        build_id: candidate.build_id,
+        build_version: candidate
+            .build_version
+            .unwrap_or_else(|| release.version.clone()),
+        test_plan_id: candidate.test_plan_id,
+        test_plan_name: candidate.test_plan_name.unwrap_or_default(),
+        name: candidate
+            .name
+            .unwrap_or_else(|| candidate.test_id.clone()),
+        is_all_selected: candidate.is_all_selected.unwrap_or(false),
+        created_by: candidate
+            .created_by
+            .unwrap_or_else(|| "system".to_owned()),
+        test_cycle_id: candidate.test_cycle_id,
+        artifacts: release.artifacts,
+    };
+    transaction.commit().await?;
+    Ok(Some(preparation))
 }
 
 async fn prepare(

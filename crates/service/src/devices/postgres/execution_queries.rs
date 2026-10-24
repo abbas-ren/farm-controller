@@ -3,15 +3,152 @@ use super::json_models::{
     device_json, duration_seconds, test_case_json, test_execution_json, test_status_str,
 };
 
-use crate::persistence::{
-    entity::{device, test_case, test_execution},
-    orm_util,
-};
+use crate::persistence::entity::{device, test_case, test_execution};
+use chrono::{Datelike, Duration, Utc};
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     RelationTrait,
     sea_query::{Expr, extension::postgres::PgExpr},
 };
+
+fn pg_week_start(now: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
+    // PostgreSQL date_trunc('week') uses ISO weeks starting Monday 00:00.
+    let days_from_monday = now.weekday().num_days_from_monday() as i64;
+    (now - Duration::days(days_from_monday))
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+}
+
+fn pg_month_start(now: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
+    now.date_naive()
+        .with_day(1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+}
+
+async fn execution_analytics(
+    orm: &sea_orm::DatabaseConnection,
+    user_id: &str,
+) -> Result<serde_json::Value, DeviceRepositoryError> {
+    let now = Utc::now();
+    let week_start = pg_week_start(now);
+    let week_end = week_start + Duration::days(7);
+    let month_start = pg_month_start(now);
+    let month_end = if month_start.month() == 12 {
+        month_start
+            .with_year(month_start.year() + 1)
+            .and_then(|d| d.with_month(1))
+            .unwrap_or(month_start)
+    } else {
+        month_start
+            .with_month(month_start.month() + 1)
+            .unwrap_or(month_start)
+    };
+
+    let executions = test_execution::Entity::find()
+        .filter(test_execution::Column::CreatedBy.eq(user_id))
+        .filter(
+            test_execution::Column::Status.is_not_in([
+                test_execution::TestStatus::Cancelled,
+                test_execution::TestStatus::Queued,
+                test_execution::TestStatus::NotExecuted,
+                test_execution::TestStatus::Failed,
+            ]),
+        )
+        .all(orm)
+        .await?;
+
+    let mut all_total = 0i64;
+    let mut all_passed = 0i64;
+    let mut all_failed = 0i64;
+    let mut all_in_progress = 0i64;
+    let mut week_total = 0i64;
+    let mut week_passed = 0i64;
+    let mut week_failed = 0i64;
+    let mut week_in_progress = 0i64;
+    let mut month_total = 0i64;
+    let mut month_passed = 0i64;
+    let mut month_failed = 0i64;
+    let mut month_in_progress = 0i64;
+
+    for execution in executions {
+        let cases = test_case::Entity::find()
+            .filter(test_case::Column::ExecutionId.eq(&execution.test_id))
+            .all(orm)
+            .await?;
+        let in_week = execution.created_at >= week_start && execution.created_at < week_end;
+        let in_month = execution.created_at >= month_start && execution.created_at < month_end;
+        for case in cases {
+            let (is_pass, is_fail, is_progress) = match case.result {
+                Some(test_case::TestResult::Pass) => (true, false, false),
+                Some(test_case::TestResult::Fail) => (false, true, false),
+                None => (false, false, true),
+            };
+            all_total += 1;
+            if is_pass {
+                all_passed += 1;
+            } else if is_fail {
+                all_failed += 1;
+            } else if is_progress {
+                all_in_progress += 1;
+            }
+            if in_week {
+                week_total += 1;
+                if is_pass {
+                    week_passed += 1;
+                } else if is_fail {
+                    week_failed += 1;
+                } else if is_progress {
+                    week_in_progress += 1;
+                }
+            }
+            if in_month {
+                month_total += 1;
+                if is_pass {
+                    month_passed += 1;
+                } else if is_fail {
+                    month_failed += 1;
+                } else if is_progress {
+                    month_in_progress += 1;
+                }
+            }
+        }
+    }
+
+    let week_label = format!(
+        "{} - {}",
+        week_start.format("%d %b"),
+        (week_start + Duration::days(6)).format("%d %b")
+    );
+    let month_label = month_start.format("%b %Y").to_string();
+
+    Ok(serde_json::json!({
+        "allTime": {
+            "total": all_total,
+            "passed": all_passed,
+            "failed": all_failed,
+            "inProgress": all_in_progress,
+        },
+        "currentWeek": {
+            "week": week_label,
+            "total": week_total,
+            "passed": week_passed,
+            "failed": week_failed,
+            "inProgress": week_in_progress,
+        },
+        "currentMonth": {
+            "month": month_label,
+            "total": month_total,
+            "passed": month_passed,
+            "failed": month_failed,
+            "inProgress": month_in_progress,
+        },
+    }))
+}
 
 fn execution_list_base(
     user_id: &str,
@@ -326,43 +463,7 @@ impl ExecutionQueryRepository for PostgresDeviceRepository {
             "rtosLogPath": execution.rtos_log_path,
         });
 
-        #[derive(Debug, sea_orm::FromQueryResult)]
-        struct AnalyticsRow {
-            value: serde_json::Value,
-        }
-        let analytics = orm_util::query_one::<_, AnalyticsRow>(
-            self.orm(),
-            r#"WITH eligible AS (
-                     SELECT te."createdAt", tc.result::text AS result
-                     FROM test_executions te
-                     JOIN testcase tc ON tc."executionId" = te."testId"
-                     WHERE te."createdBy" = $1
-                         AND te.status::text NOT IN ('cancelled', 'queued', 'not_executed', 'failed')
-                 )
-                 SELECT jsonb_build_object(
-                     'allTime', jsonb_build_object(
-                         'total', count(*), 'passed', count(*) FILTER (WHERE result = 'PASS'),
-                         'failed', count(*) FILTER (WHERE result = 'FAIL'),
-                         'inProgress', count(*) FILTER (WHERE result IS NULL OR result NOT IN ('PASS', 'FAIL'))),
-                     'currentWeek', jsonb_build_object(
-                         'week', to_char(date_trunc('week', now()), 'DD Mon') || ' - ' || to_char(date_trunc('week', now()) + interval '6 days', 'DD Mon'),
-                         'total', count(*) FILTER (WHERE "createdAt" >= date_trunc('week', now()) AND "createdAt" < date_trunc('week', now()) + interval '1 week'),
-                         'passed', count(*) FILTER (WHERE result = 'PASS' AND "createdAt" >= date_trunc('week', now()) AND "createdAt" < date_trunc('week', now()) + interval '1 week'),
-                         'failed', count(*) FILTER (WHERE result = 'FAIL' AND "createdAt" >= date_trunc('week', now()) AND "createdAt" < date_trunc('week', now()) + interval '1 week'),
-                         'inProgress', count(*) FILTER (WHERE (result IS NULL OR result NOT IN ('PASS', 'FAIL')) AND "createdAt" >= date_trunc('week', now()) AND "createdAt" < date_trunc('week', now()) + interval '1 week')),
-                     'currentMonth', jsonb_build_object(
-                         'month', to_char(date_trunc('month', now()), 'Mon YYYY'),
-                         'total', count(*) FILTER (WHERE "createdAt" >= date_trunc('month', now()) AND "createdAt" < date_trunc('month', now()) + interval '1 month'),
-                         'passed', count(*) FILTER (WHERE result = 'PASS' AND "createdAt" >= date_trunc('month', now()) AND "createdAt" < date_trunc('month', now()) + interval '1 month'),
-                         'failed', count(*) FILTER (WHERE result = 'FAIL' AND "createdAt" >= date_trunc('month', now()) AND "createdAt" < date_trunc('month', now()) + interval '1 month'),
-                         'inProgress', count(*) FILTER (WHERE (result IS NULL OR result NOT IN ('PASS', 'FAIL')) AND "createdAt" >= date_trunc('month', now()) AND "createdAt" < date_trunc('month', now()) + interval '1 month'))) AS value
-                 FROM eligible"#,
-            vec![user_id.into()],
-        )
-        .await?
-        .map(|row| row.value)
-        .unwrap_or_else(|| serde_json::json!({}));
-        summary["analytics"] = analytics;
+        summary["analytics"] = execution_analytics(self.orm(), user_id).await?;
         Ok(Some(summary))
     }
 

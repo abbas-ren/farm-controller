@@ -1,14 +1,12 @@
 use super::*;
 use super::json_models::{
-    controller_json, device_json, relay_channel_json, relay_json,
+    controller_json, device_json, mappings_without_normalized_key, normalize_mapping_lookup_key,
+    relay_channel_json, relay_json,
 };
 
-use crate::persistence::{
-    entity::{
-        device, device_controller, device_interface, device_state_change, log_entry, relay,
-        relay_channel,
-    },
-    orm_util,
+use crate::persistence::entity::{
+    device, device_controller, device_interface, device_state_change, log_entry, relay,
+    relay_channel,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter,
@@ -383,38 +381,69 @@ impl ControllerRepository for PostgresDeviceRepository {
             "devices::postgres::controllers",
             "device_delete_target",
         );
-        #[derive(Debug, sea_orm::FromQueryResult)]
-        struct DeleteTargetRow {
-            ip_address: String,
-            device_family: Option<String>,
-            controller_id: Option<String>,
-            controller_ip: Option<String>,
-            relay_serial: Option<String>,
-            relay_channel: Option<i32>,
+        let Some(device_row) = device::Entity::find()
+            .filter(device::Column::DeviceId.eq(device_id))
+            .filter(device::Column::DeletedAt.is_null())
+            .one(self.orm())
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let mut best: Option<(
+            chrono::DateTime<chrono::Utc>,
+            String,
+            String,
+            i32,
+        )> = None;
+        let channels = relay_channel::Entity::find()
+            .filter(relay_channel::Column::DeviceId.eq(device_id))
+            .filter(relay_channel::Column::DeletedAt.is_null())
+            .find_also_related(relay::Entity)
+            .all(self.orm())
+            .await?;
+        for (channel, relay_opt) in channels {
+            let Some(relay_row) = relay_opt.filter(|r| r.deleted_at.is_none()) else {
+                continue;
+            };
+            let candidate = (
+                relay_row.updated_at,
+                relay_row.device_controller_id.clone(),
+                relay_row.serial_number.clone(),
+                channel.channel_number,
+            );
+            if best
+                .as_ref()
+                .map_or(true, |current| candidate.0 > current.0)
+            {
+                best = Some(candidate);
+            }
         }
-        Ok(orm_util::query_one::<_, DeleteTargetRow>(
-            self.orm(),
-            r#"SELECT COALESCE(d."ipAddress", '') AS ip_address,
-                 d."deviceFamily" AS device_family,
-                 COALESCE(r."deviceControllerId", d."controllerId") AS controller_id,
-                 dc."ipAddress" AS controller_ip, r."serialNumber" AS relay_serial,
-                 rc."channelNumber" AS relay_channel
-               FROM devices d
-               LEFT JOIN relay_channels rc ON rc."deviceId" = d."deviceId" AND rc."deletedAt" IS NULL
-               LEFT JOIN relays r ON r.id = rc."relayId" AND r."deletedAt" IS NULL
-               LEFT JOIN device_controllers dc ON dc."deviceControllerId" = COALESCE(r."deviceControllerId", d."controllerId")
-               WHERE d."deviceId" = $1 AND d."deletedAt" IS NULL
-               ORDER BY r."updatedAt" DESC NULLS LAST LIMIT 1"#,
-            vec![device_id.into()],
-        )
-        .await?
-        .map(|row| DeviceDeleteTarget {
-            ip_address: row.ip_address,
-            device_family: row.device_family,
-            controller_id: row.controller_id,
-            controller_ip: row.controller_ip,
-            relay_serial: row.relay_serial,
-            relay_channel: row.relay_channel,
+
+        let (relay_controller_id, relay_serial, relay_channel) = match best {
+            Some((_, controller_id, serial, channel_number)) => {
+                (Some(controller_id), Some(serial), Some(channel_number))
+            }
+            None => (None, None, None),
+        };
+        let controller_id = relay_controller_id.or(device_row.controller_id.clone());
+        let controller_ip = if let Some(ref id) = controller_id {
+            device_controller::Entity::find()
+                .filter(device_controller::Column::DeviceControllerId.eq(id))
+                .one(self.orm())
+                .await?
+                .map(|c| c.ip_address)
+        } else {
+            None
+        };
+
+        Ok(Some(DeviceDeleteTarget {
+            ip_address: device_row.ip_address.unwrap_or_default(),
+            device_family: device_row.device_family,
+            controller_id,
+            controller_ip,
+            relay_serial,
+            relay_channel,
         }))
     }
 
@@ -424,23 +453,30 @@ impl ControllerRepository for PostgresDeviceRepository {
             "delete_device",
         );
         let transaction = self.orm().begin().await?;
-        orm_util::execute(
-            &transaction,
-            r#"UPDATE device_controllers controller
-               SET mappings = COALESCE((
-                       SELECT jsonb_object_agg(entry.key, entry.value)
-                       FROM jsonb_each(COALESCE(controller.mappings, '{}'::jsonb)) entry
-                       WHERE regexp_replace(lower(entry.key), '[:-]', '', 'g') <> $1
-                   ), '{}'::jsonb),
-                   "updatedAt" = now()
-               WHERE EXISTS (
-                   SELECT 1
-                   FROM jsonb_each(COALESCE(controller.mappings, '{}'::jsonb)) entry
-                   WHERE regexp_replace(lower(entry.key), '[:-]', '', 'g') = $1
-               )"#,
-            vec![device_id.into()],
-        )
-        .await?;
+        // Old SQL: normalize(entry.key) = $1 where $1 is the raw device_id (not re-normalized).
+        let controllers = device_controller::Entity::find().all(&transaction).await?;
+        let now = chrono::Utc::now();
+        for controller in controllers {
+            let Some(object) = controller.mappings.as_object() else {
+                continue;
+            };
+            let has_match = object
+                .keys()
+                .any(|key| normalize_mapping_lookup_key(key) == device_id);
+            if !has_match {
+                continue;
+            }
+            let mappings = mappings_without_normalized_key(&controller.mappings, device_id);
+            device_controller::Entity::update_many()
+                .col_expr(device_controller::Column::Mappings, Expr::value(mappings))
+                .col_expr(device_controller::Column::UpdatedAt, Expr::value(now))
+                .filter(
+                    device_controller::Column::DeviceControllerId
+                        .eq(&controller.device_controller_id),
+                )
+                .exec(&transaction)
+                .await?;
+        }
         device_interface::Entity::delete_many()
             .filter(device_interface::Column::DeviceId.eq(device_id))
             .exec(&transaction)

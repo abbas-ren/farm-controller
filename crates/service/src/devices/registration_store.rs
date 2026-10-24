@@ -1,11 +1,11 @@
-use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
-    EntityTrait, FromQueryResult, QueryFilter, Set, Statement, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    sea_query::{Expr, LockType, NullOrdering, OnConflict, Order},
 };
 use uuid::Uuid;
 
-use crate::persistence::entity::{alert, relay};
+use crate::persistence::entity::{alert, device_controller, relay, relay_channel};
 
 use super::{
     ControllerRegistration, DeviceController, Relay, RelayRegistration,
@@ -13,31 +13,6 @@ use super::{
     repository_types::RegistrationResult,
     validation::{normalized_controller_id, relay_channels, validate_registration},
 };
-
-#[derive(Debug, FromQueryResult)]
-struct ControllerRow {
-    device_controller_id: String,
-    mac_address: String,
-    ip_address: String,
-    name: Option<String>,
-    device_family: Option<String>,
-    status: String,
-    state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    created: bool,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct RelayOwner {
-    id: Uuid,
-    device_controller_id: String,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct CountRow {
-    count: i64,
-}
 
 pub(crate) async fn register_controller(
     orm: &DatabaseConnection,
@@ -48,54 +23,53 @@ pub(crate) async fn register_controller(
     validate_registration(registration)?;
     let controller_id = normalized_controller_id(&registration.mac_address)?;
     let transaction = orm.begin().await?;
-    // INSERT ... ON CONFLICT RETURNING (xmax = 0) kept as raw SQL.
-    let row = ControllerRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"
-        INSERT INTO device_controllers (
-            "deviceControllerId", "macAddress", "ipAddress", "deviceFamily",
-            "createdAt", "updatedAt"
-        ) VALUES ($1, $2, $3, $4, now(), now())
-        ON CONFLICT ("deviceControllerId") DO UPDATE SET
-            "macAddress" = EXCLUDED."macAddress",
-            "ipAddress" = EXCLUDED."ipAddress",
-            "deviceFamily" = EXCLUDED."deviceFamily",
-            state = 'active',
-            "updatedAt" = now()
-        RETURNING
-            "deviceControllerId" AS device_controller_id,
-            "macAddress" AS mac_address,
-            "ipAddress" AS ip_address,
-            name,
-            "deviceFamily" AS device_family,
-            status::text,
-            state::text,
-            "createdAt" AS created_at,
-            "updatedAt" AS updated_at,
-            (xmax = 0) AS created
-        "#,
-        [
-            controller_id.clone().into(),
-            registration.mac_address.trim().into(),
-            registration.ip_address.trim().into(),
-            registration.device_family.clone().into(),
-        ],
-    ))
-    .one(&transaction)
-    .await?
-    .ok_or_else(|| {
-        DeviceRepositoryError::Internal("controller upsert returned no row".to_owned())
-    })?;
+    let now = chrono::Utc::now();
+    let existing = device_controller::Entity::find_by_id(controller_id.clone())
+        .one(&transaction)
+        .await?;
+    let (row, created) = match existing {
+        Some(existing) => {
+            let updated = device_controller::ActiveModel {
+                device_controller_id: Set(existing.device_controller_id),
+                mac_address: Set(registration.mac_address.trim().to_owned()),
+                ip_address: Set(registration.ip_address.trim().to_owned()),
+                device_family: Set(registration.device_family.clone()),
+                state: Set(device_controller::DeviceControllerState::Active),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .update(&transaction)
+            .await?;
+            (updated, false)
+        }
+        None => {
+            let inserted = device_controller::ActiveModel {
+                device_controller_id: Set(controller_id.clone()),
+                mac_address: Set(registration.mac_address.trim().to_owned()),
+                ip_address: Set(registration.ip_address.trim().to_owned()),
+                name: Set(None),
+                device_family: Set(registration.device_family.clone()),
+                mappings: Set(serde_json::json!({})),
+                status: Set(device_controller::DeviceControllerStatus::Approved),
+                state: Set(device_controller::DeviceControllerState::Active),
+                created_at: Set(now),
+                updated_at: Set(now),
+                deleted_at: Set(None),
+            }
+            .insert(&transaction)
+            .await?;
+            (inserted, true)
+        }
+    };
 
     sync_relay_inventory(
         &transaction,
         &controller_id,
         &registration.relays,
-        row.created,
+        created,
     )
     .await?;
-    if row.created {
-        let now = chrono::Utc::now();
+    if created {
         alert::ActiveModel {
             id: Set(Uuid::new_v4()),
             user_id: Set("ADMIN".to_owned()),
@@ -117,15 +91,23 @@ pub(crate) async fn register_controller(
     transaction.commit().await?;
 
     Ok(RegistrationResult {
-        created: row.created,
+        created,
         controller: DeviceController {
             device_controller_id: row.device_controller_id,
             mac_address: row.mac_address,
             ip_address: row.ip_address,
             name: row.name,
             device_family: row.device_family,
-            status: row.status,
-            state: row.state,
+            status: match row.status {
+                device_controller::DeviceControllerStatus::Approved => "approved".to_owned(),
+                device_controller::DeviceControllerStatus::Requested => "requested".to_owned(),
+            },
+            state: match row.state {
+                device_controller::DeviceControllerState::NotReachable => {
+                    "not-reachable".to_owned()
+                }
+                device_controller::DeviceControllerState::Active => "active".to_owned(),
+            },
             created_at: row.created_at,
             updated_at: row.updated_at,
             relays,
@@ -147,18 +129,15 @@ async fn sync_relay_inventory(
         for relay_reg in relays {
             let serial_number = relay_reg.serial_number.trim();
             validate_relay_serial(serial_number)?;
-            let existing_ids = RelayOwner::find_by_statement(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"SELECT id, "deviceControllerId" AS device_controller_id FROM relays
-                   WHERE "serialNumber" = $1 AND "deletedAt" IS NULL
-                   FOR UPDATE"#,
-                [serial_number.into()],
-            ))
-            .all(transaction)
-            .await?
-            .into_iter()
-            .map(|row| row.id)
-            .collect::<Vec<_>>();
+            let existing_ids = relay::Entity::find()
+                .filter(relay::Column::SerialNumber.eq(serial_number))
+                .filter(relay::Column::DeletedAt.is_null())
+                .lock(LockType::Update)
+                .all(transaction)
+                .await?
+                .into_iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>();
             soft_delete_relays(transaction, &existing_ids).await?;
             let relay_id = create_relay(transaction, controller_id, serial_number).await?;
             upsert_reported_channels(transaction, relay_id, relay_reg).await?;
@@ -170,19 +149,15 @@ async fn sync_relay_inventory(
         .iter()
         .map(|relay_reg| relay_reg.serial_number.trim().to_owned())
         .collect::<Vec<_>>();
-    let extra_ids = IdRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT id FROM relays
-           WHERE "deviceControllerId" = $1
-             AND NOT ("serialNumber" = ANY($2::text[]))
-           FOR UPDATE"#,
-        [controller_id.into(), reported_serials.into()],
-    ))
-    .all(transaction)
-    .await?
-    .into_iter()
-    .map(|row| row.id)
-    .collect::<Vec<_>>();
+    let extra_ids = relay::Entity::find()
+        .filter(relay::Column::DeviceControllerId.eq(controller_id))
+        .filter(relay::Column::SerialNumber.is_not_in(reported_serials))
+        .lock(LockType::Update)
+        .all(transaction)
+        .await?
+        .into_iter()
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
     for relay_id in extra_ids {
         retire_relay(transaction, relay_id).await?;
     }
@@ -190,16 +165,14 @@ async fn sync_relay_inventory(
     for relay_reg in relays {
         let serial_number = relay_reg.serial_number.trim();
         validate_relay_serial(serial_number)?;
-        let existing = RelayOwner::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT id, "deviceControllerId" AS device_controller_id FROM relays
-               WHERE "serialNumber" = $1
-               ORDER BY "deletedAt" NULLS FIRST, "updatedAt" DESC
-               LIMIT 1 FOR UPDATE"#,
-            [serial_number.into()],
-        ))
-        .one(transaction)
-        .await?;
+        let existing = relay::Entity::find()
+            .filter(relay::Column::SerialNumber.eq(serial_number))
+            .order_by_with_nulls(relay::Column::DeletedAt, Order::Asc, NullOrdering::First)
+            .order_by_desc(relay::Column::UpdatedAt)
+            .limit(1)
+            .lock(LockType::Update)
+            .one(transaction)
+            .await?;
         let relay_id = match existing {
             None => create_relay(transaction, controller_id, serial_number).await?,
             Some(row) if row.device_controller_id == controller_id => {
@@ -220,11 +193,6 @@ async fn sync_relay_inventory(
         upsert_reported_channels(transaction, relay_id, relay_reg).await?;
     }
     Ok(())
-}
-
-#[derive(Debug, FromQueryResult)]
-struct IdRow {
-    id: Uuid,
 }
 
 fn validate_relay_serial(serial_number: &str) -> Result<(), DeviceRepositoryError> {
@@ -270,15 +238,10 @@ async fn retire_relay(
 ) -> Result<(), DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::registration_store", "retire_relay");
-    let channel_count = CountRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT count(*) AS count FROM relay_channels WHERE "relayId" = $1"#,
-        [relay_id.into()],
-    ))
-    .one(transaction)
-    .await?
-    .map(|row| row.count)
-    .unwrap_or(0);
+    let channel_count = relay_channel::Entity::find()
+        .filter(relay_channel::Column::RelayId.eq(relay_id))
+        .count(transaction)
+        .await?;
     if channel_count == 0 {
         relay::Entity::delete_by_id(relay_id).exec(transaction).await?;
     } else {
@@ -296,24 +259,24 @@ async fn soft_delete_relays(
     if relay_ids.is_empty() {
         return Ok(());
     }
-    // COALESCE("deletedAt", now()) semantics via raw SQL.
-    transaction
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"UPDATE relay_channels
-               SET "deletedAt" = COALESCE("deletedAt", now()), "updatedAt" = now()
-               WHERE "relayId" = ANY($1::uuid[])"#,
-            [relay_ids.to_vec().into()],
-        ))
+    let now = chrono::Utc::now();
+    relay_channel::Entity::update_many()
+        .col_expr(
+            relay_channel::Column::DeletedAt,
+            Expr::cust(r#"COALESCE("deletedAt", NOW())"#),
+        )
+        .col_expr(relay_channel::Column::UpdatedAt, Expr::value(now))
+        .filter(relay_channel::Column::RelayId.is_in(relay_ids.to_vec()))
+        .exec(transaction)
         .await?;
-    transaction
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"UPDATE relays
-               SET "deletedAt" = COALESCE("deletedAt", now()), "updatedAt" = now()
-               WHERE id = ANY($1::uuid[])"#,
-            [relay_ids.to_vec().into()],
-        ))
+    relay::Entity::update_many()
+        .col_expr(
+            relay::Column::DeletedAt,
+            Expr::cust(r#"COALESCE("deletedAt", NOW())"#),
+        )
+        .col_expr(relay::Column::UpdatedAt, Expr::value(now))
+        .filter(relay::Column::Id.is_in(relay_ids.to_vec()))
+        .exec(transaction)
         .await?;
     Ok(())
 }
@@ -327,26 +290,32 @@ async fn upsert_reported_channels(
         "devices::registration_store",
         "upsert_reported_channels",
     );
+    let now = chrono::Utc::now();
     for channel in relay_channels(relay_reg)? {
-        // ON CONFLICT upsert kept as raw SQL.
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"INSERT INTO relay_channels
-                      (id, "relayId", "channelNumber", "deviceId", state,
-                       "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, 'off', now(), now())
-                   ON CONFLICT ("relayId", "channelNumber") DO UPDATE SET
-                       "deviceId" = EXCLUDED."deviceId", "deletedAt" = NULL,
-                       "updatedAt" = now()"#,
-                [
-                    channel.relay_channel_id.unwrap_or_else(Uuid::new_v4).into(),
-                    relay_id.into(),
-                    channel.channel_number.into(),
-                    channel.device_id.clone().into(),
-                ],
-            ))
-            .await?;
+        relay_channel::Entity::insert(relay_channel::ActiveModel {
+            id: Set(channel.relay_channel_id.unwrap_or_else(Uuid::new_v4)),
+            relay_id: Set(relay_id),
+            channel_number: Set(channel.channel_number),
+            device_id: Set(channel.device_id.clone()),
+            state: Set(Some(relay_channel::ChannelState::Off)),
+            created_at: Set(now),
+            updated_at: Set(now),
+            deleted_at: Set(None),
+        })
+        .on_conflict(
+            OnConflict::columns([
+                relay_channel::Column::RelayId,
+                relay_channel::Column::ChannelNumber,
+            ])
+            .update_columns([
+                relay_channel::Column::DeviceId,
+                relay_channel::Column::DeletedAt,
+                relay_channel::Column::UpdatedAt,
+            ])
+            .to_owned(),
+        )
+        .exec(transaction)
+        .await?;
     }
     Ok(())
 }
@@ -357,19 +326,25 @@ async fn load_relays(
 ) -> Result<Vec<Relay>, DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::registration_store", "load_relays");
-    Ok(Relay::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"
-        SELECT id, "serialNumber" AS serial_number, "vendorId" AS vendor_id,
-               "productId" AS product_id,
-               "deviceControllerId" AS device_controller_id,
-               state::text, "createdAt" AS created_at, "updatedAt" AS updated_at
-        FROM relays
-        WHERE "deviceControllerId" = $1 AND "deletedAt" IS NULL
-        ORDER BY "serialNumber"
-        "#,
-        [controller_id.into()],
-    ))
-    .all(transaction)
-    .await?)
+    Ok(relay::Entity::find()
+        .filter(relay::Column::DeviceControllerId.eq(controller_id))
+        .filter(relay::Column::DeletedAt.is_null())
+        .order_by_asc(relay::Column::SerialNumber)
+        .all(transaction)
+        .await?
+        .into_iter()
+        .map(|row| Relay {
+            id: row.id,
+            serial_number: row.serial_number,
+            vendor_id: row.vendor_id,
+            product_id: row.product_id,
+            device_controller_id: row.device_controller_id,
+            state: match row.state {
+                relay::RelayState::Connected => "connected".to_owned(),
+                relay::RelayState::Disconnected => "disconnected".to_owned(),
+            },
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+        .collect())
 }

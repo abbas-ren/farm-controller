@@ -1,7 +1,8 @@
 //! Assemble API JSON from SeaORM entity models (replacing to_jsonb / jsonb_agg in SQL).
 
 use crate::persistence::entity::{
-    device, device_controller, device_interface, relay, relay_channel, test_case, test_execution,
+    alert, device, device_controller, device_interface, faulty_report, relay, relay_channel,
+    release, test_case, test_execution,
 };
 
 pub(crate) fn device_status_str(status: Option<&device::DeviceStatus>) -> Option<&'static str> {
@@ -98,7 +99,122 @@ pub(crate) fn interface_json(model: &device_interface::Model) -> serde_json::Val
     })
 }
 
-pub(super) fn controller_json(model: &device_controller::Model) -> serde_json::Value {
+pub(crate) fn alert_json(model: &alert::Model) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.id,
+        "userId": model.user_id,
+        "title": model.title,
+        "message": model.message,
+        "data": model.data,
+        "type": match model.r#type {
+            alert::AlertType::Info => "info",
+            alert::AlertType::Success => "success",
+            alert::AlertType::Warning => "warning",
+            alert::AlertType::Error => "error",
+        },
+        "status": match model.status {
+            alert::AlertStatus::Unread => "unread",
+            alert::AlertStatus::Read => "read",
+        },
+        "isRead": model.is_read,
+        "readAt": model.read_at,
+        "createdAt": model.created_at,
+        "updatedAt": model.updated_at,
+        "buildId": model.build_id,
+        "faultyReportId": model.faulty_report_id,
+        "deviceId": model.device_id,
+        "deviceControllerId": model.device_controller_id,
+    })
+}
+
+pub(crate) fn faulty_report_alert_json(
+    model: &alert::Model,
+    build_version: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.id,
+        "userId": model.user_id,
+        "title": model.title,
+        "message": model.message,
+        "type": match model.r#type {
+            alert::AlertType::Info => "info",
+            alert::AlertType::Success => "success",
+            alert::AlertType::Warning => "warning",
+            alert::AlertType::Error => "error",
+        },
+        "status": match model.status {
+            alert::AlertStatus::Unread => "unread",
+            alert::AlertStatus::Read => "read",
+        },
+        "isRead": model.is_read,
+        "faultyReportId": model.faulty_report_id,
+        "buildId": model.build_id,
+        "buildVersion": build_version
+            .map(str::to_owned)
+            .or_else(|| {
+                model
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("buildVersion"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            }),
+        "data": model.data,
+        "createdAt": model.created_at,
+    })
+}
+
+pub(crate) fn faulty_report_json(model: &faulty_report::Model) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.id,
+        "releaseId": model.release_id,
+        "deviceType": model.device_type,
+        "deviceFamily": model.device_family,
+        "lastTestExecutionId": model.last_test_execution_id,
+        "description": model.description,
+        "filePath": model.file_path,
+        "logsPath": model.logs_path,
+        "status": match model.status {
+            faulty_report::FaultyStatus::Pending => "pending",
+            faulty_report::FaultyStatus::Approved => "approved",
+            faulty_report::FaultyStatus::Rejected => "rejected",
+        },
+        "createdBy": model.created_by,
+        "createdAt": model.created_at,
+        "updatedAt": model.updated_at,
+    })
+}
+
+pub(crate) fn release_json(model: &release::Model) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.id,
+        "folderName": model.folder_name,
+        "version": model.version,
+        "artifacts": model.artifacts,
+        "lastScannedAt": model.last_scanned_at,
+        "testedDeviceId": model.tested_device_id,
+        "buildType": match model.build_type {
+            release::BuildType::Custom => "custom",
+            release::BuildType::Official => "official",
+        },
+        "allDevicesFlashed": model.all_devices_flashed,
+        "uploadedBy": model.uploaded_by,
+        "tag": model.tag,
+        "status": model.status.as_ref().map(|s| match s {
+            release::ReleaseTestStatus::Untested => "untested",
+            release::ReleaseTestStatus::Testing => "testing",
+            release::ReleaseTestStatus::Passed => "passed",
+            release::ReleaseTestStatus::Failed => "failed",
+        }),
+        "isFaulty": model.is_faulty,
+        "deviceFamily": model.device_family,
+        "deviceType": model.device_type,
+        "createdAt": model.created_at,
+        "updatedAt": model.updated_at,
+    })
+}
+
+pub(crate) fn controller_json(model: &device_controller::Model) -> serde_json::Value {
     serde_json::json!({
         "deviceControllerId": model.device_controller_id,
         "macAddress": model.mac_address,
@@ -120,7 +236,7 @@ pub(super) fn controller_json(model: &device_controller::Model) -> serde_json::V
     })
 }
 
-pub(super) fn relay_json(model: &relay::Model) -> serde_json::Value {
+pub(crate) fn relay_json(model: &relay::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
         "serialNumber": model.serial_number,
@@ -137,7 +253,7 @@ pub(super) fn relay_json(model: &relay::Model) -> serde_json::Value {
     })
 }
 
-pub(super) fn relay_channel_json(model: &relay_channel::Model) -> serde_json::Value {
+pub(crate) fn relay_channel_json(model: &relay_channel::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
         "relayId": model.relay_id,
@@ -153,7 +269,101 @@ pub(super) fn relay_channel_json(model: &relay_channel::Model) -> serde_json::Va
     })
 }
 
-pub(super) fn test_status_str(status: Option<&test_execution::TestStatus>) -> Option<&'static str> {
+/// Nested device summary attached to relay channel list responses.
+pub(crate) fn relay_channel_device_summary(model: &device::Model) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": model.device_id,
+        "macAddress": model.mac_address,
+        "deviceName": model.device_name,
+        "ipAddress": model.ip_address,
+        "deviceType": model.device_type,
+    })
+}
+
+pub(crate) fn relay_channel_with_device_json(
+    channel: &relay_channel::Model,
+    device: Option<&device::Model>,
+) -> serde_json::Value {
+    let mut value = relay_channel_json(channel);
+    value["device"] = device
+        .map(relay_channel_device_summary)
+        .unwrap_or(serde_json::Value::Null);
+    value
+}
+
+/// Compact device row for available-relay-device listing.
+pub(crate) fn available_relay_device_json(model: &device::Model) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": model.device_id,
+        "macAddress": model.mac_address,
+        "deviceName": model.device_name,
+        "ipAddress": model.ip_address,
+        "deviceType": model.device_type,
+        "deviceFamily": model.device_family,
+    })
+}
+
+/// Strip `:` / `-` and lowercase — matches SQL `regexp_replace(lower(...), '[:-]', '', 'g')`.
+pub(crate) fn normalize_mapping_lookup_key(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|c| *c != ':' && *c != '-')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Find a mappings entry by normalized MAC key (exact key, then fuzzy like jsonb_each).
+pub(crate) fn mapping_entry_for_mac<'a>(
+    mappings: &'a serde_json::Value,
+    mac: &str,
+) -> Option<&'a serde_json::Value> {
+    let object = mappings.as_object()?;
+    let normalized = normalize_mapping_lookup_key(mac);
+    if normalized.is_empty() {
+        return None;
+    }
+    if let Some(entry) = object.get(&normalized) {
+        return Some(entry);
+    }
+    object.iter().find_map(|(key, value)| {
+        (normalize_mapping_lookup_key(key) == normalized).then_some(value)
+    })
+}
+
+pub(crate) fn mapping_power_port(mappings: &serde_json::Value, mac: &str) -> Option<String> {
+    mapping_entry_for_mac(mappings, mac)?
+        .get("power")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+pub(crate) fn mapping_uart_port(mappings: &serde_json::Value, mac: &str) -> Option<String> {
+    mapping_entry_for_mac(mappings, mac)?
+        .get("uart")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// Remove mapping keys whose normalized form equals `normalized_key` (delete-device cleanup).
+pub(crate) fn mappings_without_normalized_key(
+    mappings: &serde_json::Value,
+    normalized_key: &str,
+) -> serde_json::Value {
+    let Some(object) = mappings.as_object() else {
+        return serde_json::json!({});
+    };
+    let filtered: serde_json::Map<String, serde_json::Value> = object
+        .iter()
+        .filter(|(key, _)| normalize_mapping_lookup_key(key) != normalized_key)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    serde_json::Value::Object(filtered)
+}
+
+pub(crate) fn test_status_str(status: Option<&test_execution::TestStatus>) -> Option<&'static str> {
     status.map(|s| match s {
         test_execution::TestStatus::NotExecuted => "not_executed",
         test_execution::TestStatus::InProgress => "in_progress",
@@ -164,7 +374,7 @@ pub(super) fn test_status_str(status: Option<&test_execution::TestStatus>) -> Op
     })
 }
 
-pub(super) fn execution_phase_str(
+pub(crate) fn execution_phase_str(
     phase: Option<&test_execution::ExecutionPhase>,
 ) -> Option<&'static str> {
     phase.map(|p| match p {
@@ -190,7 +400,7 @@ pub(super) fn execution_phase_str(
     })
 }
 
-pub(super) fn test_execution_json(model: &test_execution::Model) -> serde_json::Value {
+pub(crate) fn test_execution_json(model: &test_execution::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
         "testId": model.test_id,
@@ -226,7 +436,7 @@ pub(super) fn test_execution_json(model: &test_execution::Model) -> serde_json::
     })
 }
 
-pub(super) fn test_case_json(model: &test_case::Model) -> serde_json::Value {
+pub(crate) fn test_case_json(model: &test_case::Model) -> serde_json::Value {
     serde_json::json!({
         "id": model.id,
         "testCaseId": model.test_case_id,
@@ -256,7 +466,7 @@ pub(super) fn test_case_json(model: &test_case::Model) -> serde_json::Value {
     })
 }
 
-pub(super) fn duration_seconds(
+pub(crate) fn duration_seconds(
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> i64 {
@@ -264,4 +474,26 @@ pub(super) fn duration_seconds(
     let start = started_at.unwrap_or(now);
     let end = ended_at.unwrap_or(now);
     (end - start).num_seconds().max(0)
+}
+
+/// Matches `to_jsonb(te) || jsonb_build_object('Device', …, 'testCases', …, 'logs', …)`.
+pub(crate) fn created_execution_json(
+    execution: &test_execution::Model,
+    cases: &[test_case::Model],
+) -> serde_json::Value {
+    let mut value = test_execution_json(execution);
+    value["Device"] = serde_json::Value::Null;
+    value["testCases"] = serde_json::Value::Array(cases.iter().map(test_case_json).collect());
+    value["logs"] = serde_json::json!([]);
+    value
+}
+
+/// Matches `to_jsonb(te) || jsonb_build_object('testCases', …)`.
+pub(crate) fn execution_with_cases_json(
+    execution: &test_execution::Model,
+    cases: &[test_case::Model],
+) -> serde_json::Value {
+    let mut value = test_execution_json(execution);
+    value["testCases"] = serde_json::Value::Array(cases.iter().map(test_case_json).collect());
+    value
 }

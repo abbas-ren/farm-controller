@@ -1,59 +1,56 @@
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseBackend, DatabaseConnection, FromQueryResult, Statement};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 
-use super::{error::DeviceRepositoryError, repository_types::TestExportRow};
+use crate::persistence::entity::{device, test_case, test_execution};
 
-#[derive(Debug, FromQueryResult)]
-struct TestExportRowOrm {
-    test_plan_name: String,
-    status: String,
-    device_type: Option<String>,
-    started_at: Option<DateTime<Utc>>,
-    ended_at: Option<DateTime<Utc>>,
-    test_cycle_id: Option<String>,
-    total: i64,
-    passed: i64,
-    failed: i64,
-}
+use super::{
+    error::DeviceRepositoryError,
+    postgres::json_models::test_status_str,
+    repository_types::TestExportRow,
+};
 
 pub(crate) async fn rows(
     orm: &DatabaseConnection,
     user_id: &str,
 ) -> Result<Vec<TestExportRow>, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "rows");
-    // Aggregated export join kept as Statement for FILTER counts.
-    Ok(TestExportRowOrm::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT COALESCE(te."testPlanName", '') AS test_plan_name,
-             COALESCE(te.status::text, 'not_executed') AS status,
-             d."deviceType" AS device_type, te."startedAt" AS started_at,
-             te."endedAt" AS ended_at, te."testCycleId" AS test_cycle_id,
-             count(tc.id) AS total,
-             count(tc.id) FILTER (WHERE tc.result::text = 'PASS') AS passed,
-             count(tc.id) FILTER (WHERE tc.result::text = 'FAIL') AS failed
-           FROM test_executions te
-           LEFT JOIN devices d ON d."deviceId" = te."deviceId"
-           LEFT JOIN testcase tc ON tc."executionId" = te."testId"
-           WHERE te."createdBy" = $1
-           GROUP BY te.id, d."deviceType"
-           ORDER BY te.id"#,
-        [user_id.into()],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| TestExportRow {
-        test_plan_name: row.test_plan_name,
-        status: row.status,
-        device_type: row.device_type,
-        started_at: row.started_at,
-        ended_at: row.ended_at,
-        test_cycle_id: row.test_cycle_id,
-        total: row.total,
-        passed: row.passed,
-        failed: row.failed,
-    })
-    .collect())
+    let executions = test_execution::Entity::find()
+        .filter(test_execution::Column::CreatedBy.eq(user_id))
+        .find_also_related(device::Entity)
+        .order_by_asc(test_execution::Column::Id)
+        .all(orm)
+        .await?;
+
+    let mut rows = Vec::with_capacity(executions.len());
+    for (execution, device_model) in executions {
+        let cases = test_case::Entity::find()
+            .filter(test_case::Column::ExecutionId.eq(&execution.test_id))
+            .all(orm)
+            .await?;
+        let total = cases.len() as i64;
+        let passed = cases
+            .iter()
+            .filter(|c| matches!(c.result, Some(test_case::TestResult::Pass)))
+            .count() as i64;
+        let failed = cases
+            .iter()
+            .filter(|c| matches!(c.result, Some(test_case::TestResult::Fail)))
+            .count() as i64;
+        rows.push(TestExportRow {
+            test_plan_name: execution.test_plan_name.clone().unwrap_or_default(),
+            status: test_status_str(execution.status.as_ref())
+                .unwrap_or("not_executed")
+                .to_owned(),
+            device_type: device_model.and_then(|d| d.device_type),
+            started_at: execution.started_at,
+            ended_at: execution.ended_at,
+            test_cycle_id: execution.test_cycle_id,
+            total,
+            passed,
+            failed,
+        });
+    }
+    Ok(rows)
 }
 
 pub(crate) fn format_rows(

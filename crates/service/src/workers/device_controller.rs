@@ -6,9 +6,9 @@ use crate::{
 };
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter, Set,
-    Statement, TransactionTrait,
-    sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
 };
 use std::sync::Arc;
 use tokio::time::Duration;
@@ -48,31 +48,27 @@ async fn run_controller_heartbeat_timeout_cycle(state: &AppState) {
     };
     let timeout_seconds = i64::try_from(state.config.workers.controller_heartbeat_timeout_seconds)
         .unwrap_or(i64::MAX);
-    let batch_size = i64::from(state.config.workers.controller_heartbeat_batch_size);
-    #[derive(Debug, FromQueryResult)]
-    struct StaleController {
-        device_controller_id: String,
-    }
-    // Subquery last-seen + FOR UPDATE SKIP LOCKED — irreducible.
-    let controllers = match StaleController::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT controller."deviceControllerId" AS device_controller_id
-           FROM device_controllers controller
-           WHERE controller."deletedAt" IS NULL
-             AND controller.state::text = 'active'
-             AND COALESCE(
-                   (SELECT max(heartbeat.timestamp)
-                    FROM device_controller_heartbeats heartbeat
-                    WHERE heartbeat."controllerId" = controller."deviceControllerId"),
-                   controller."updatedAt", controller."createdAt"
-                 ) < now() - ($1 * interval '1 second')
-           ORDER BY controller."updatedAt" ASC
-           LIMIT $2
-           FOR UPDATE OF controller SKIP LOCKED"#,
-        [timeout_seconds.into(), batch_size.into()],
-    ))
-    .all(&transaction)
-    .await
+    let batch_size = u64::from(state.config.workers.controller_heartbeat_batch_size);
+    let controllers = match device_controller::Entity::find()
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .filter(
+            device_controller::Column::State.eq(device_controller::DeviceControllerState::Active),
+        )
+        .filter(Expr::cust_with_values(
+            r#"COALESCE(
+                 (SELECT max(heartbeat.timestamp)
+                  FROM device_controller_heartbeats heartbeat
+                  WHERE heartbeat."controllerId" = "device_controllers"."deviceControllerId"),
+                 "device_controllers"."updatedAt",
+                 "device_controllers"."createdAt"
+               ) < now() - ($1 * interval '1 second')"#,
+            [timeout_seconds],
+        ))
+        .order_by_asc(device_controller::Column::UpdatedAt)
+        .limit(batch_size)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .all(&transaction)
+        .await
     {
         Ok(controllers) => controllers,
         Err(error) => {

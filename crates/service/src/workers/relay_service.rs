@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     devices::{EDGE_CONTROLLER_PORT, RELAY_CONTROLLER_TIMEOUT, RelayControllerAction},
-    persistence::entity::pending_relay_config,
+    persistence::entity::{pending_relay_config, relay, relay_channel},
     socket::{
         helpers::relay_timeout_event,
         types::{
@@ -22,9 +22,8 @@ use crate::{
 };
 
 use sea_orm::{
-    ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter, Statement,
-    TransactionTrait,
-    sea_query::Expr,
+    ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
 };
 
 impl RelaySyncService {
@@ -258,28 +257,23 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
     };
     let timeout_seconds =
         i64::try_from(state.config.workers.relay_config_timeout_seconds).unwrap_or(i64::MAX);
-    let batch_size = i64::from(state.config.workers.relay_config_batch_size);
-    // Join pending configs with relay channel/relay + FOR UPDATE SKIP LOCKED.
-    let expired = match ExpiredRelayConfiguration::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT pending.id, pending."deviceMac" AS device_mac,
-                  pending."channelNo" AS channel_number,
-                  relay.id AS relay_id,
-                  relay."deviceControllerId" AS controller_id
-           FROM pending_relay_configs pending
-           LEFT JOIN relay_channels channel ON channel.id = pending."relayChannelId"
-           LEFT JOIN relays relay ON relay.id = channel."relayId"
-           WHERE pending.status = 'pending'
-             AND pending."createdAt" < now() - ($1 * interval '1 second')
-           ORDER BY pending."createdAt" ASC
-           LIMIT $2
-           FOR UPDATE OF pending SKIP LOCKED"#,
-        [timeout_seconds.into(), batch_size.into()],
-    ))
-    .all(&transaction)
-    .await
+    let batch_size = u64::from(state.config.workers.relay_config_batch_size);
+    let pending_rows = match pending_relay_config::Entity::find()
+        .filter(
+            pending_relay_config::Column::Status
+                .eq(pending_relay_config::PendingRelayConfigStatus::Pending),
+        )
+        .filter(Expr::cust_with_values(
+            r#""createdAt" < now() - ($1 * interval '1 second')"#,
+            [timeout_seconds],
+        ))
+        .order_by_asc(pending_relay_config::Column::CreatedAt)
+        .limit(batch_size)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .all(&transaction)
+        .await
     {
-        Ok(expired) => expired,
+        Ok(pending) => pending,
         Err(error) => {
             let _ = transaction.rollback().await;
             state
@@ -289,6 +283,47 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
             return;
         }
     };
+    let mut expired = Vec::with_capacity(pending_rows.len());
+    for pending in pending_rows {
+        let channel = match relay_channel::Entity::find_by_id(pending.relay_channel_id)
+            .one(&transaction)
+            .await
+        {
+            Ok(channel) => channel,
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                state
+                    .metrics
+                    .record_worker_run("relay_config_timeout", "failure");
+                tracing::error!(%error, worker = "relay_config_timeout", "failed to load relay channel");
+                return;
+            }
+        };
+        let relay_row = match channel.as_ref() {
+            Some(channel) => match relay::Entity::find_by_id(channel.relay_id)
+                .one(&transaction)
+                .await
+            {
+                Ok(relay) => relay,
+                Err(error) => {
+                    let _ = transaction.rollback().await;
+                    state
+                        .metrics
+                        .record_worker_run("relay_config_timeout", "failure");
+                    tracing::error!(%error, worker = "relay_config_timeout", "failed to load relay");
+                    return;
+                }
+            },
+            None => None,
+        };
+        expired.push(ExpiredRelayConfiguration {
+            id: pending.id,
+            device_mac: pending.device_mac,
+            channel_number: pending.channel_no,
+            relay_id: relay_row.as_ref().map(|relay| relay.id),
+            controller_id: relay_row.map(|relay| relay.device_controller_id),
+        });
+    }
     if expired.is_empty() {
         let _ = transaction.commit().await;
         state

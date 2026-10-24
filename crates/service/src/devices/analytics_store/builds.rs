@@ -1,11 +1,12 @@
-use sea_orm::{DatabaseBackend, DatabaseConnection, FromQueryResult, Statement};
+use std::collections::{HashMap, HashSet};
+
+use chrono::{DateTime, Utc};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use uuid::Uuid;
+
+use crate::persistence::entity::{device_action_queue, release, test_case, test_execution};
 
 use super::super::error::DeviceRepositoryError;
-
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: serde_json::Value,
-}
 
 pub(crate) async fn build_comparisons(
     orm: &DatabaseConnection,
@@ -16,50 +17,95 @@ pub(crate) async fn build_comparisons(
         "devices::analytics_store::builds",
         "build_comparisons",
     );
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"WITH builds AS (
-                 SELECT te."buildId" AS build_id, max(te."createdAt") AS last_used
-                 FROM test_executions te JOIN releases r ON r.id::text = te."buildId"
-                 WHERE te."createdBy" = $1 AND te.status::text = 'completed'
-                     AND te."buildId" IS NOT NULL
-                 GROUP BY te."buildId"
-             ), metrics AS (
-                 SELECT b.build_id, b.last_used,
-                     (SELECT count(*) FROM test_executions te
-                         WHERE te."buildId" = b.build_id AND te.status::text = 'completed') AS executions,
-                     (SELECT COALESCE(sum(GREATEST(0, extract(epoch FROM (
-                             COALESCE(te."endedAt", now()) - COALESCE(te."startedAt", te."createdAt")
-                         )) * 1000)), 0) FROM test_executions te
-                         WHERE te."buildId" = b.build_id AND te.status::text = 'completed') AS duration_ms,
-                     (SELECT count(*) FROM testcase tc JOIN test_executions te
-                         ON te."testId" = tc."executionId"
-                         WHERE te."buildId" = b.build_id AND te.status::text = 'completed') AS total_cases,
-                     (SELECT count(*) FROM testcase tc JOIN test_executions te
-                         ON te."testId" = tc."executionId"
-                         WHERE te."buildId" = b.build_id AND te.status::text = 'completed'
-                             AND tc.result::text = 'PASS') AS passed_cases
-                 FROM builds b
-             )
-             SELECT jsonb_build_object(
-                 'buildId', m.build_id, 'buildVersion', r.version,
-                 'deviceType', r."deviceType",
-                 'averageDuration', CASE WHEN m.executions > 0
-                     THEN round((m.duration_ms / m.executions)::numeric, 2) ELSE 0 END,
-                 'totalTestCases', m.total_cases,
-                 'passedPercentage', CASE WHEN m.total_cases > 0
-                     THEN round((m.passed_cases::numeric / m.total_cases) * 100, 2) ELSE 0 END) AS value
-             FROM metrics m JOIN releases r ON r.id::text = m.build_id
-             ORDER BY CASE WHEN m.total_cases > 0
-                 THEN m.passed_cases::numeric / m.total_cases ELSE 0 END DESC,
-                 m.last_used DESC LIMIT $2"#,
-        [user_id.into(), count.into()],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect())
+    let executions = test_execution::Entity::find()
+        .filter(test_execution::Column::CreatedBy.eq(user_id))
+        .filter(test_execution::Column::Status.eq(test_execution::TestStatus::Completed))
+        .filter(test_execution::Column::BuildId.is_not_null())
+        .all(orm)
+        .await?;
+    let build_ids: HashSet<String> = executions
+        .iter()
+        .map(|execution| execution.build_id.clone())
+        .collect();
+    if build_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let releases = load_releases(orm, &build_ids).await?;
+    let all_completed = test_execution::Entity::find()
+        .filter(test_execution::Column::BuildId.is_in(build_ids.iter().cloned().collect::<Vec<_>>()))
+        .filter(test_execution::Column::Status.eq(test_execution::TestStatus::Completed))
+        .all(orm)
+        .await?;
+    let cases = load_cases(orm, &execution_ids(&all_completed)).await?;
+    let now = Utc::now();
+    let mut metrics: HashMap<String, BuildMetrics> = HashMap::new();
+    for execution in &executions {
+        let entry = metrics.entry(execution.build_id.clone()).or_default();
+        entry.last_used = Some(
+            entry
+                .last_used
+                .map_or(execution.created_at, |previous| previous.max(execution.created_at)),
+        );
+    }
+    for execution in &all_completed {
+        let entry = metrics.entry(execution.build_id.clone()).or_default();
+        entry.executions += 1;
+        let start = execution.started_at.unwrap_or(execution.created_at);
+        let end = execution.ended_at.unwrap_or(now);
+        entry.duration_ms += ((end - start).num_milliseconds().max(0)) as f64;
+        if let Some(case_list) = cases.get(&execution.test_id) {
+            for result in case_list {
+                entry.total_cases += 1;
+                if result == "PASS" {
+                    entry.passed_cases += 1;
+                }
+            }
+        }
+    }
+    let mut rows: Vec<_> = metrics
+        .into_iter()
+        .filter_map(|(build_id, metric)| {
+            let release = releases.get(&build_id)?;
+            let average_duration = if metric.executions > 0 {
+                round2(metric.duration_ms / metric.executions as f64)
+            } else {
+                0.0
+            };
+            let passed_percentage = if metric.total_cases > 0 {
+                round2((metric.passed_cases as f64 / metric.total_cases as f64) * 100.0)
+            } else {
+                0.0
+            };
+            let pass_ratio = if metric.total_cases > 0 {
+                metric.passed_cases as f64 / metric.total_cases as f64
+            } else {
+                0.0
+            };
+            Some((
+                pass_ratio,
+                metric.last_used.unwrap_or_else(Utc::now),
+                serde_json::json!({
+                    "buildId": build_id,
+                    "buildVersion": release.version,
+                    "deviceType": release.device_type,
+                    "averageDuration": average_duration,
+                    "totalTestCases": metric.total_cases,
+                    "passedPercentage": passed_percentage,
+                }),
+            ))
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.1.cmp(&a.1))
+    });
+
+    Ok(rows
+        .into_iter()
+        .take(count.max(0) as usize)
+        .map(|(_, _, value)| value)
+        .collect())
 }
 
 pub(crate) async fn build_comparison_by_id(
@@ -71,33 +117,16 @@ pub(crate) async fn build_comparison_by_id(
         "devices::analytics_store::builds",
         "build_comparison_by_id",
     );
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT jsonb_build_object(
-                 'buildId', $2::text,
-                 'buildVersion', COALESCE((SELECT version FROM releases WHERE id::text = $2),
-                     (SELECT "buildVersion" FROM test_executions WHERE "buildId" = $2
-                         AND status::text = 'completed' ORDER BY "createdAt" DESC LIMIT 1)),
-                 'deviceType', (SELECT "deviceType" FROM releases WHERE id::text = $2),
-                 'averageDuration', COALESCE((SELECT round(avg(GREATEST(0,
-                     extract(epoch FROM (COALESCE("endedAt", now()) -
-                         COALESCE("startedAt", "createdAt"))) * 1000))::numeric, 2)
-                     FROM test_executions WHERE "buildId" = $2 AND status::text = 'completed'), 0),
-                 'totalTestCases', (SELECT count(*) FROM testcase tc JOIN test_executions te
-                     ON te."testId" = tc."executionId"
-                     WHERE te."buildId" = $2 AND te.status::text = 'completed'),
-                 'passedPercentage', COALESCE((SELECT round(
-                     count(*) FILTER (WHERE tc.result::text = 'PASS')::numeric /
-                         NULLIF(count(*), 0) * 100, 2)
-                     FROM testcase tc JOIN test_executions te ON te."testId" = tc."executionId"
-                     WHERE te."buildId" = $2 AND te.status::text = 'completed'), 0)) AS value
-             WHERE EXISTS(SELECT 1 FROM test_executions
-                 WHERE "createdBy" = $1 AND "buildId" = $2 AND status::text = 'completed')"#,
-        [user_id.into(), build_id.into()],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.value))
+    let owned = test_execution::Entity::find()
+        .filter(test_execution::Column::CreatedBy.eq(user_id))
+        .filter(test_execution::Column::BuildId.eq(build_id))
+        .filter(test_execution::Column::Status.eq(test_execution::TestStatus::Completed))
+        .one(orm)
+        .await?;
+    if owned.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(build_comparison_payload(orm, build_id).await?))
 }
 
 pub(crate) async fn build_performance(
@@ -108,52 +137,34 @@ pub(crate) async fn build_performance(
         "devices::analytics_store::builds",
         "build_performance",
     );
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"WITH builds AS (
-                 SELECT te."buildId" AS build_id, max(te."createdAt") AS last_used
-                 FROM test_executions te JOIN releases r ON r.id::text = te."buildId"
-                 WHERE te."buildId" IS NOT NULL GROUP BY te."buildId"
-                 ORDER BY max(te."createdAt") DESC LIMIT $1
-             )
-             SELECT jsonb_build_object(
-                 'buildId', b.build_id, 'buildVersion', COALESCE(r.version,
-                     (SELECT "buildVersion" FROM test_executions WHERE "buildId" = b.build_id
-                         ORDER BY "createdAt" DESC LIMIT 1)),
-                 'flagged', COALESCE(r."isFaulty", false), 'deviceType', r."deviceType",
-                 'status', COALESCE(r.status::text, (SELECT status::text FROM test_executions
-                     WHERE "buildId" = b.build_id ORDER BY "createdAt" DESC LIMIT 1)),
-                 'lastTestExecutionId', (SELECT "testId" FROM test_executions
-                     WHERE "buildId" = b.build_id ORDER BY "createdAt" DESC LIMIT 1),
-                 'passedTestCaseCount', (SELECT count(*) FROM testcase tc JOIN test_executions te
-                     ON te."testId" = tc."executionId" WHERE te."buildId" = b.build_id
-                         AND tc.result::text = 'PASS'),
-                 'failedTestCaseCount', (SELECT count(*) FROM testcase tc JOIN test_executions te
-                     ON te."testId" = tc."executionId" WHERE te."buildId" = b.build_id
-                         AND tc.result::text = 'FAIL'),
-                 'passedTestCasePercentage', COALESCE((SELECT round(
-                     count(*) FILTER (WHERE tc.result::text = 'PASS')::numeric /
-                         NULLIF(count(*) FILTER (WHERE tc.result::text IN ('PASS', 'FAIL')), 0) * 100, 2)
-                     FROM testcase tc JOIN test_executions te ON te."testId" = tc."executionId"
-                     WHERE te."buildId" = b.build_id), 0),
-                 'averageExecutionTime', COALESCE((SELECT round(avg(GREATEST(0,
-                     extract(epoch FROM (COALESCE("endedAt", now()) -
-                         COALESCE("startedAt", "createdAt"))) * 1000))::numeric, 2)
-                     FROM test_executions WHERE "buildId" = b.build_id), 0),
-                 'uniqueDeviceCount', (SELECT count(DISTINCT "targetDeviceId")
-                     FROM device_action_queue WHERE "releaseId"::text = b.build_id
-                         AND "targetDeviceId" IS NOT NULL),
-                 'executionCount', (SELECT count(*) FROM test_executions
-                     WHERE "buildId" = b.build_id)) AS value
-             FROM builds b JOIN releases r ON r.id::text = b.build_id
-             ORDER BY b.last_used DESC"#,
-        [count.into()],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect())
+    let executions = test_execution::Entity::find()
+        .filter(test_execution::Column::BuildId.is_not_null())
+        .all(orm)
+        .await?;
+    let mut last_used: HashMap<String, DateTime<Utc>> = HashMap::new();
+    for execution in &executions {
+        last_used
+            .entry(execution.build_id.clone())
+            .and_modify(|current| {
+                if execution.created_at > *current {
+                    *current = execution.created_at;
+                }
+            })
+            .or_insert(execution.created_at);
+    }
+    let mut builds: Vec<_> = last_used.into_iter().collect();
+    builds.sort_by(|a, b| b.1.cmp(&a.1));
+    builds.truncate(count.max(0) as usize);
+    let mut result = Vec::with_capacity(builds.len());
+    for (build_id, _) in builds {
+        if find_release(orm, &build_id).await?.is_none() {
+            continue;
+        }
+        if let Some(payload) = build_performance_payload(orm, &build_id).await? {
+            result.push(payload);
+        }
+    }
+    Ok(result)
 }
 
 pub(crate) async fn build_performance_by_id(
@@ -164,41 +175,250 @@ pub(crate) async fn build_performance_by_id(
         "devices::analytics_store::builds",
         "build_performance_by_id",
     );
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT jsonb_build_object(
-                 'buildId', $1::text, 'buildVersion', COALESCE(r.version,
-                     (SELECT "buildVersion" FROM test_executions WHERE "buildId" = $1
-                         ORDER BY "createdAt" DESC LIMIT 1)),
-                 'flagged', COALESCE(r."isFaulty", false), 'deviceType', r."deviceType",
-                 'status', COALESCE(r.status::text, (SELECT status::text FROM test_executions
-                     WHERE "buildId" = $1 ORDER BY "createdAt" DESC LIMIT 1)),
-                 'lastTestExecutionId', (SELECT "testId" FROM test_executions
-                     WHERE "buildId" = $1 ORDER BY "createdAt" DESC LIMIT 1),
-                 'passedTestCaseCount', (SELECT count(*) FROM testcase tc JOIN test_executions te
-                     ON te."testId" = tc."executionId" WHERE te."buildId" = $1
-                         AND tc.result::text = 'PASS'),
-                 'failedTestCaseCount', (SELECT count(*) FROM testcase tc JOIN test_executions te
-                     ON te."testId" = tc."executionId" WHERE te."buildId" = $1
-                         AND tc.result::text = 'FAIL'),
-                 'passedTestCasePercentage', COALESCE((SELECT round(
-                     count(*) FILTER (WHERE tc.result::text = 'PASS')::numeric /
-                         NULLIF(count(*) FILTER (WHERE tc.result::text IN ('PASS', 'FAIL')), 0) * 100, 2)
-                     FROM testcase tc JOIN test_executions te ON te."testId" = tc."executionId"
-                     WHERE te."buildId" = $1), 0),
-                 'averageExecutionTime', COALESCE((SELECT round(avg(GREATEST(0,
-                     extract(epoch FROM (COALESCE("endedAt", now()) -
-                         COALESCE("startedAt", "createdAt"))) * 1000))::numeric, 2)
-                     FROM test_executions WHERE "buildId" = $1), 0),
-                 'uniqueDeviceCount', (SELECT count(DISTINCT "targetDeviceId")
-                     FROM device_action_queue WHERE "releaseId"::text = $1
-                         AND "targetDeviceId" IS NOT NULL),
-                 'executionCount', (SELECT count(*) FROM test_executions WHERE "buildId" = $1)) AS value
-             FROM (SELECT 1) seed LEFT JOIN releases r ON r.id::text = $1"#,
-        [build_id.into()],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.value)
-    .unwrap_or_else(|| serde_json::json!({})))
+    Ok(build_performance_payload(orm, build_id)
+        .await?
+        .unwrap_or_else(|| serde_json::json!({})))
+}
+
+async fn build_comparison_payload(
+    orm: &DatabaseConnection,
+    build_id: &str,
+) -> Result<serde_json::Value, DeviceRepositoryError> {
+    let release = find_release(orm, build_id).await?;
+    let executions = test_execution::Entity::find()
+        .filter(test_execution::Column::BuildId.eq(build_id))
+        .filter(test_execution::Column::Status.eq(test_execution::TestStatus::Completed))
+        .all(orm)
+        .await?;
+    let cases = load_cases(orm, &execution_ids(&executions)).await?;
+    let now = Utc::now();
+    let mut duration_sum = 0.0_f64;
+    let mut total_cases = 0_i64;
+    let mut passed_cases = 0_i64;
+    for execution in &executions {
+        let start = execution.started_at.unwrap_or(execution.created_at);
+        let end = execution.ended_at.unwrap_or(now);
+        duration_sum += (end - start).num_milliseconds().max(0) as f64;
+        if let Some(case_list) = cases.get(&execution.test_id) {
+            for result in case_list {
+                total_cases += 1;
+                if result == "PASS" {
+                    passed_cases += 1;
+                }
+            }
+        }
+    }
+    let average_duration = if executions.is_empty() {
+        0.0
+    } else {
+        round2(duration_sum / executions.len() as f64)
+    };
+    let passed_percentage = if total_cases > 0 {
+        round2((passed_cases as f64 / total_cases as f64) * 100.0)
+    } else {
+        0.0
+    };
+    let build_version = release
+        .as_ref()
+        .map(|row| row.version.clone())
+        .or_else(|| {
+            executions
+                .iter()
+                .max_by_key(|execution| execution.created_at)
+                .and_then(|execution| execution.build_version.clone())
+        });
+    Ok(serde_json::json!({
+        "buildId": build_id,
+        "buildVersion": build_version,
+        "deviceType": release.as_ref().map(|row| row.device_type.clone()),
+        "averageDuration": average_duration,
+        "totalTestCases": total_cases,
+        "passedPercentage": passed_percentage,
+    }))
+}
+
+async fn build_performance_payload(
+    orm: &DatabaseConnection,
+    build_id: &str,
+) -> Result<Option<serde_json::Value>, DeviceRepositoryError> {
+    let release = find_release(orm, build_id).await?;
+    let executions = test_execution::Entity::find()
+        .filter(test_execution::Column::BuildId.eq(build_id))
+        .all(orm)
+        .await?;
+    if release.is_none() && executions.is_empty() {
+        return Ok(Some(serde_json::json!({
+            "buildId": build_id,
+            "buildVersion": serde_json::Value::Null,
+            "flagged": false,
+            "deviceType": serde_json::Value::Null,
+            "status": serde_json::Value::Null,
+            "lastTestExecutionId": serde_json::Value::Null,
+            "passedTestCaseCount": 0,
+            "failedTestCaseCount": 0,
+            "passedTestCasePercentage": 0.0,
+            "averageExecutionTime": 0.0,
+            "uniqueDeviceCount": 0,
+            "executionCount": 0,
+        })));
+    }
+    let cases = load_cases(orm, &execution_ids(&executions)).await?;
+    let now = Utc::now();
+    let mut duration_sum = 0.0_f64;
+    let mut passed = 0_i64;
+    let mut failed = 0_i64;
+    for execution in &executions {
+        let start = execution.started_at.unwrap_or(execution.created_at);
+        let end = execution.ended_at.unwrap_or(now);
+        duration_sum += (end - start).num_milliseconds().max(0) as f64;
+        if let Some(case_list) = cases.get(&execution.test_id) {
+            for result in case_list {
+                match result.as_str() {
+                    "PASS" => passed += 1,
+                    "FAIL" => failed += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let decided = passed + failed;
+    let passed_percentage = if decided > 0 {
+        round2((passed as f64 / decided as f64) * 100.0)
+    } else {
+        0.0
+    };
+    let average_execution_time = if executions.is_empty() {
+        0.0
+    } else {
+        round2(duration_sum / executions.len() as f64)
+    };
+    let latest = executions
+        .iter()
+        .max_by_key(|execution| execution.created_at);
+    let release_id = Uuid::parse_str(build_id).ok();
+    let unique_device_count = if let Some(release_id) = release_id {
+        let devices = device_action_queue::Entity::find()
+            .filter(device_action_queue::Column::ReleaseId.eq(release_id))
+            .filter(device_action_queue::Column::TargetDeviceId.is_not_null())
+            .all(orm)
+            .await?;
+        devices
+            .into_iter()
+            .filter_map(|row| row.target_device_id)
+            .collect::<HashSet<_>>()
+            .len() as i64
+    } else {
+        0
+    };
+    let build_version = release
+        .as_ref()
+        .map(|row| row.version.clone())
+        .or_else(|| latest.and_then(|execution| execution.build_version.clone()));
+    let status = release
+        .as_ref()
+        .and_then(|row| row.status.as_ref().map(release_status_str))
+        .or_else(|| latest.and_then(|execution| execution.status.as_ref().map(test_status_str)));
+    Ok(Some(serde_json::json!({
+        "buildId": build_id,
+        "buildVersion": build_version,
+        "flagged": release.as_ref().and_then(|row| row.is_faulty).unwrap_or(false),
+        "deviceType": release.as_ref().map(|row| row.device_type.clone()),
+        "status": status,
+        "lastTestExecutionId": latest.map(|execution| execution.test_id.clone()),
+        "passedTestCaseCount": passed,
+        "failedTestCaseCount": failed,
+        "passedTestCasePercentage": passed_percentage,
+        "averageExecutionTime": average_execution_time,
+        "uniqueDeviceCount": unique_device_count,
+        "executionCount": executions.len() as i64,
+    })))
+}
+
+#[derive(Default)]
+struct BuildMetrics {
+    last_used: Option<DateTime<Utc>>,
+    executions: i64,
+    duration_ms: f64,
+    total_cases: i64,
+    passed_cases: i64,
+}
+
+fn execution_ids(executions: &[test_execution::Model]) -> Vec<String> {
+    executions
+        .iter()
+        .map(|execution| execution.test_id.clone())
+        .collect()
+}
+
+async fn load_releases(
+    orm: &DatabaseConnection,
+    build_ids: &HashSet<String>,
+) -> Result<HashMap<String, release::Model>, DeviceRepositoryError> {
+    let mut map = HashMap::new();
+    for build_id in build_ids {
+        if let Some(release) = find_release(orm, build_id).await? {
+            map.insert(build_id.clone(), release);
+        }
+    }
+    Ok(map)
+}
+
+async fn find_release(
+    orm: &DatabaseConnection,
+    build_id: &str,
+) -> Result<Option<release::Model>, DeviceRepositoryError> {
+    let Ok(id) = Uuid::parse_str(build_id) else {
+        return Ok(None);
+    };
+    Ok(release::Entity::find_by_id(id).one(orm).await?)
+}
+
+async fn load_cases(
+    orm: &DatabaseConnection,
+    ids: &[String],
+) -> Result<HashMap<String, Vec<String>>, DeviceRepositoryError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let cases = test_case::Entity::find()
+        .filter(test_case::Column::ExecutionId.is_in(ids.to_vec()))
+        .all(orm)
+        .await?;
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for case in cases {
+        let Some(execution_id) = case.execution_id else {
+            continue;
+        };
+        let result = match case.result {
+            Some(test_case::TestResult::Pass) => "PASS".to_owned(),
+            Some(test_case::TestResult::Fail) => "FAIL".to_owned(),
+            None => continue,
+        };
+        map.entry(execution_id).or_default().push(result);
+    }
+    Ok(map)
+}
+
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn release_status_str(status: &release::ReleaseTestStatus) -> &'static str {
+    match status {
+        release::ReleaseTestStatus::Untested => "untested",
+        release::ReleaseTestStatus::Testing => "testing",
+        release::ReleaseTestStatus::Passed => "passed",
+        release::ReleaseTestStatus::Failed => "failed",
+    }
+}
+
+fn test_status_str(status: &test_execution::TestStatus) -> &'static str {
+    match status {
+        test_execution::TestStatus::NotExecuted => "not_executed",
+        test_execution::TestStatus::InProgress => "in_progress",
+        test_execution::TestStatus::Completed => "completed",
+        test_execution::TestStatus::Queued => "queued",
+        test_execution::TestStatus::Cancelled => "cancelled",
+        test_execution::TestStatus::Failed => "failed",
+    }
 }

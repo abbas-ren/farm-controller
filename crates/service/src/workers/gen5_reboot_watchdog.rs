@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
@@ -6,8 +6,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     devices::EDGE_CONTROLLER_PORT,
     persistence::entity::{
-        device, device_action_queue, device_state_change, fallback_update, gen5_reboot_attempt,
-        log_entry, test_execution,
+        device, device_action_queue, device_controller, device_state_change, fallback_update,
+        gen5_reboot_attempt, log_entry, test_execution,
     },
     socket::{
         helpers::{device_state_event, test_failure_events},
@@ -18,9 +18,9 @@ use crate::{
 };
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, FromQueryResult,
-    QueryFilter, Set, Statement, TransactionTrait,
-    sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
 };
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
@@ -47,43 +47,10 @@ async fn run_cycle(state: &AppState) {
     }
     let timeout_seconds =
         i64::try_from(state.config.workers.gen5_reboot_timeout_seconds).unwrap_or(i64::MAX);
-    #[derive(Debug, FromQueryResult)]
-    struct StuckDeviceId {
-        device_id: String,
-    }
-    // Complex Gen5 stuck-device filter with EXISTS — keep as raw SQL.
-    let device_ids = match StuckDeviceId::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT device."deviceId" AS device_id
-           FROM devices device
-           WHERE device.status::text = 'approved'
-             AND replace(lower(device."deviceFamily"), ' ', '') LIKE '%gen5%'
-             AND (device.upgrading = true OR device.flashing = true)
-             AND device."updatedAt" < now() - ($1 * interval '1 second')
-             AND device."deletedAt" IS NULL
-             AND (EXISTS (
-                    SELECT 1 FROM device_action_queue action
-                    WHERE action."targetDeviceId" = device."deviceId"
-                      AND action.status::text IN ('running', 'waiting')
-                  ) OR EXISTS (
-                    SELECT 1 FROM fallback_updates fallback
-                    WHERE fallback."deviceId" = device."deviceId"
-                      AND fallback.status::text IN ('pending', 'flashing')
-                  ))
-           ORDER BY device."updatedAt" ASC
-           LIMIT $2"#,
-        [
-            timeout_seconds.into(),
-            i64::from(state.config.workers.gen5_reboot_batch_size).into(),
-        ],
-    ))
-    .all(database.orm())
-    .await
+    let batch_size = u64::from(state.config.workers.gen5_reboot_batch_size);
+    let device_ids = match find_stuck_device_ids(database.orm(), timeout_seconds, batch_size).await
     {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|row| row.device_id)
-            .collect::<Vec<_>>(),
+        Ok(ids) => ids,
         Err(error) => {
             record_failure(
                 state,
@@ -119,18 +86,56 @@ async fn run_cycle(state: &AppState) {
         .record_worker_run("gen5_reboot_watchdog", "success");
 }
 
+async fn find_stuck_device_ids(
+    orm: &sea_orm::DatabaseConnection,
+    timeout_seconds: i64,
+    batch_size: u64,
+) -> Result<Vec<String>, sea_orm::DbErr> {
+    let rows = device::Entity::find()
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(Expr::cust(
+            r#"replace(lower("deviceFamily"), ' ', '') LIKE '%gen5%'"#,
+        ))
+        .filter(
+            sea_orm::Condition::any()
+                .add(device::Column::Upgrading.eq(true))
+                .add(device::Column::Flashing.eq(true)),
+        )
+        .filter(Expr::cust_with_values(
+            r#""updatedAt" < now() - ($1 * interval '1 second')"#,
+            [timeout_seconds],
+        ))
+        .filter(Expr::cust(
+            r#"(EXISTS (
+                  SELECT 1 FROM device_action_queue action
+                  WHERE action."targetDeviceId" = "devices"."deviceId"
+                    AND action.status::text IN ('running', 'waiting')
+                ) OR EXISTS (
+                  SELECT 1 FROM fallback_updates fallback
+                  WHERE fallback."deviceId" = "devices"."deviceId"
+                    AND fallback.status::text IN ('pending', 'flashing')
+                ))"#,
+        ))
+        .order_by_asc(device::Column::UpdatedAt)
+        .limit(batch_size)
+        .select_only()
+        .column(device::Column::DeviceId)
+        .into_tuple::<String>()
+        .all(orm)
+        .await?;
+    Ok(rows)
+}
+
 async fn cleanup_recovered(state: &AppState) -> Result<(), String> {
     let database = state.database.as_ref().expect("worker requires database");
     let timeout_seconds =
         i64::try_from(state.config.workers.gen5_reboot_timeout_seconds).unwrap_or(i64::MAX);
-    database
-        .orm()
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"DELETE FROM farmcontroller.gen5_reboot_attempts attempt
-               WHERE NOT EXISTS (
+    gen5_reboot_attempt::Entity::delete_many()
+        .filter(Expr::cust_with_values(
+            r#"NOT EXISTS (
                  SELECT 1 FROM devices device
-                 WHERE device."deviceId" = attempt.device_id
+                 WHERE device."deviceId" = device_id
                    AND device.status::text = 'approved'
                    AND replace(lower(device."deviceFamily"), ' ', '') LIKE '%gen5%'
                    AND (device.upgrading = true OR device.flashing = true)
@@ -146,8 +151,9 @@ async fn cleanup_recovered(state: &AppState) -> Result<(), String> {
                             AND fallback.status::text IN ('pending', 'flashing')
                         ))
                )"#,
-            [timeout_seconds.into()],
+            [timeout_seconds],
         ))
+        .exec(database.orm())
         .await
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -165,54 +171,57 @@ async fn process_device(
         .map_err(|error| error.to_string())?;
     let timeout_seconds =
         i64::try_from(state.config.workers.gen5_reboot_timeout_seconds).unwrap_or(i64::MAX);
-    // LATERAL controller mapping join + FOR UPDATE SKIP LOCKED — keep as raw SQL.
-    let device = StuckDevice::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT device."deviceId" AS device_id, attempt.attempted_at,
-              mapping.controller_ip, mapping.power_port
-           FROM devices device
-           LEFT JOIN farmcontroller.gen5_reboot_attempts attempt
-             ON attempt.device_id = device."deviceId"
-           LEFT JOIN LATERAL (
-             SELECT controller."ipAddress" AS controller_ip,
-                    entry.value ->> 'power' AS power_port
-             FROM device_controllers controller
-             CROSS JOIN LATERAL jsonb_each(COALESCE(controller.mappings, '{}'::jsonb)) entry
-             WHERE controller.status::text = 'approved'
-               AND controller.state::text = 'active'
-               AND controller."deletedAt" IS NULL
-               AND regexp_replace(lower(entry.key), '[:-]', '', 'g') =
-                   regexp_replace(lower(device."macAddress"), '[:-]', '', 'g')
-               AND COALESCE(entry.value ->> 'power', '') <> ''
-             ORDER BY controller."updatedAt" DESC LIMIT 1
-           ) mapping ON true
-           WHERE device."deviceId" = $1
-             AND device.status::text = 'approved'
-             AND replace(lower(device."deviceFamily"), ' ', '') LIKE '%gen5%'
-             AND (device.upgrading = true OR device.flashing = true)
-             AND device."updatedAt" < now() - ($2 * interval '1 second')
-             AND device."deletedAt" IS NULL
-             AND (EXISTS (
-                    SELECT 1 FROM device_action_queue action
-                    WHERE action."targetDeviceId" = device."deviceId"
-                      AND action.status::text IN ('running', 'waiting')
-                  ) OR EXISTS (
-                    SELECT 1 FROM fallback_updates fallback
-                    WHERE fallback."deviceId" = device."deviceId"
-                      AND fallback.status::text IN ('pending', 'flashing')
-                  ))
-           FOR UPDATE OF device SKIP LOCKED"#,
-        [device_id.into(), timeout_seconds.into()],
-    ))
-    .one(&transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    let Some(device) = device else {
+    let locked = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(Expr::cust(
+            r#"replace(lower("deviceFamily"), ' ', '') LIKE '%gen5%'"#,
+        ))
+        .filter(
+            sea_orm::Condition::any()
+                .add(device::Column::Upgrading.eq(true))
+                .add(device::Column::Flashing.eq(true)),
+        )
+        .filter(Expr::cust_with_values(
+            r#""updatedAt" < now() - ($1 * interval '1 second')"#,
+            [timeout_seconds],
+        ))
+        .filter(Expr::cust(
+            r#"(EXISTS (
+                  SELECT 1 FROM device_action_queue action
+                  WHERE action."targetDeviceId" = "devices"."deviceId"
+                    AND action.status::text IN ('running', 'waiting')
+                ) OR EXISTS (
+                  SELECT 1 FROM fallback_updates fallback
+                  WHERE fallback."deviceId" = "devices"."deviceId"
+                    AND fallback.status::text IN ('pending', 'flashing')
+                ))"#,
+        ))
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .one(&transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(locked) = locked else {
         transaction
             .rollback()
             .await
             .map_err(|error| error.to_string())?;
         return Ok(None);
+    };
+    let attempted_at = gen5_reboot_attempt::Entity::find_by_id(&locked.device_id)
+        .one(&transaction)
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|attempt| attempt.attempted_at);
+    let (controller_ip, power_port) = resolve_power_mapping(&transaction, &locked)
+        .await
+        .map_err(|error| error.to_string())?;
+    let device = StuckDevice {
+        device_id: locked.device_id,
+        attempted_at,
+        controller_ip,
+        power_port,
     };
     let timeout = chrono::Duration::seconds(timeout_seconds);
     let has_mapping = device.controller_ip.is_some() && device.power_port.is_some();
@@ -263,6 +272,52 @@ async fn process_device(
     }
 }
 
+async fn resolve_power_mapping(
+    transaction: &impl ConnectionTrait,
+    device: &device::Model,
+) -> Result<(Option<String>, Option<String>), sea_orm::DbErr> {
+    let normalized_mac = normalize_mac(device.mac_address.as_deref().unwrap_or_default());
+    if normalized_mac.is_empty() {
+        return Ok((None, None));
+    }
+    let controllers = device_controller::Entity::find()
+        .filter(device_controller::Column::Status.eq(device_controller::DeviceControllerStatus::Approved))
+        .filter(
+            device_controller::Column::State.eq(device_controller::DeviceControllerState::Active),
+        )
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .order_by_desc(device_controller::Column::UpdatedAt)
+        .all(transaction)
+        .await?;
+    for controller in controllers {
+        if let Some(mapping) = mapping_entry_for_mac(&controller.mappings, &normalized_mac) {
+            let power = mapping
+                .get("power")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            if let Some(power_port) = power {
+                return Ok((Some(controller.ip_address), Some(power_port)));
+            }
+        }
+    }
+    Ok((None, None))
+}
+
+fn normalize_mac(value: &str) -> String {
+    value.to_ascii_lowercase().replace([':', '-'], "")
+}
+
+fn mapping_entry_for_mac<'a>(
+    mappings: &'a serde_json::Value,
+    normalized_mac: &str,
+) -> Option<&'a serde_json::Value> {
+    let object = mappings.as_object()?;
+    object
+        .iter()
+        .find_map(|(key, value)| (normalize_mac(key) == normalized_mac).then_some(value))
+}
+
 async fn fail_stuck_device(
     transaction: &impl ConnectionTrait,
     device: &StuckDevice,
@@ -271,26 +326,59 @@ async fn fail_stuck_device(
         "Unable to boot device - Gen5 device {} stuck after reboot watchdog timeout",
         device.device_id
     );
-    // Distinct failed-test join across queue/fallback — keep as raw SQL.
-    let tests = FailedTest::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT DISTINCT test."testId" AS test_id, test."buildId"::text AS build_id,
-                  COALESCE(test."createdBy", action."userId") AS user_id
-           FROM test_executions test
-           LEFT JOIN device_action_queue action
-             ON action."testId" = test."testId"
-            AND action."targetDeviceId" = $1
-            AND action.status::text IN ('running', 'waiting')
-           LEFT JOIN fallback_updates fallback
-             ON fallback."testId" = test."testId"
-            AND fallback."deviceId" = $1
-            AND fallback.status::text IN ('pending', 'flashing')
-           WHERE action.id IS NOT NULL OR fallback.id IS NOT NULL"#,
-        [device.device_id.clone().into()],
-    ))
-    .all(transaction)
-    .await
-    .map_err(|error| error.to_string())?;
+    let action_tests = device_action_queue::Entity::find()
+        .filter(device_action_queue::Column::TargetDeviceId.eq(&device.device_id))
+        .filter(
+            device_action_queue::Column::Status.is_in([
+                device_action_queue::QueueJobStatus::Running,
+                device_action_queue::QueueJobStatus::Waiting,
+            ]),
+        )
+        .all(transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    let fallback_tests = fallback_update::Entity::find()
+        .filter(fallback_update::Column::DeviceId.eq(&device.device_id))
+        .filter(
+            fallback_update::Column::Status.is_in([
+                fallback_update::FallbackStatus::Pending,
+                fallback_update::FallbackStatus::Flashing,
+            ]),
+        )
+        .all(transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut test_ids = HashSet::new();
+    for action in &action_tests {
+        if let Some(test_id) = &action.test_id {
+            test_ids.insert(test_id.clone());
+        }
+    }
+    for fallback in &fallback_tests {
+        test_ids.insert(fallback.test_id.clone());
+    }
+    let mut tests = Vec::new();
+    for test_id in test_ids {
+        let Some(execution) = test_execution::Entity::find()
+            .filter(test_execution::Column::TestId.eq(&test_id))
+            .one(transaction)
+            .await
+            .map_err(|error| error.to_string())?
+        else {
+            continue;
+        };
+        let user_id = execution.created_by.clone().or_else(|| {
+            action_tests
+                .iter()
+                .find(|action| action.test_id.as_deref() == Some(test_id.as_str()))
+                .map(|action| action.user_id.clone())
+        });
+        tests.push(FailedTest {
+            test_id,
+            build_id: Some(execution.build_id),
+            user_id,
+        });
+    }
     let now = Utc::now();
     device_action_queue::Entity::update_many()
         .col_expr(
@@ -300,11 +388,10 @@ async fn fail_stuck_device(
         .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
         .filter(device_action_queue::Column::TargetDeviceId.eq(&device.device_id))
         .filter(
-            device_action_queue::Column::Status
-                .is_in([
-                    device_action_queue::QueueJobStatus::Running,
-                    device_action_queue::QueueJobStatus::Waiting,
-                ]),
+            device_action_queue::Column::Status.is_in([
+                device_action_queue::QueueJobStatus::Running,
+                device_action_queue::QueueJobStatus::Waiting,
+            ]),
         )
         .exec(transaction)
         .await
@@ -338,13 +425,11 @@ async fn fail_stuck_device(
             .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
             .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
             .filter(test_execution::Column::TestId.eq(&test.test_id))
-            .filter(
-                test_execution::Column::Status.is_not_in([
-                    test_execution::TestStatus::Completed,
-                    test_execution::TestStatus::Cancelled,
-                    test_execution::TestStatus::Failed,
-                ]),
-            )
+            .filter(test_execution::Column::Status.is_not_in([
+                test_execution::TestStatus::Completed,
+                test_execution::TestStatus::Cancelled,
+                test_execution::TestStatus::Failed,
+            ]))
             .exec(transaction)
             .await
             .map_err(|error| error.to_string())?

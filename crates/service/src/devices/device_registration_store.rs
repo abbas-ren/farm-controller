@@ -1,28 +1,23 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
-    EntityTrait, FromQueryResult, QueryFilter, Set, Statement, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
+    sea_query::{Expr, LockType, OnConflict},
 };
+use uuid::Uuid;
 
-use crate::persistence::entity::{alert, device, device_state_change};
+use crate::persistence::entity::{
+    alert, device, device_controller, device_interface, device_state_change, device_type_folder,
+    gen5_mapping_queue,
+};
 
 use super::{
     constants::GEN3_CONTROLLER_ID,
     error::DeviceRepositoryError,
+    postgres::json_models::{device_json, interface_json},
     repository_types::DeviceRegistrationResult,
     types::DeviceRegistration,
     validation::{device_interfaces, validate_device_registration},
 };
-
-#[derive(Debug, FromQueryResult)]
-struct ExistingDevice {
-    active: bool,
-    status: String,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: serde_json::Value,
-}
 
 fn parse_device_status(status: &str) -> Result<device::DeviceStatus, DeviceRepositoryError> {
     match status {
@@ -58,23 +53,26 @@ pub(crate) async fn register_device(
     );
     let device_id = validate_device_registration(registration)?;
     let transaction = orm.begin().await?;
-    let existing = ExistingDevice::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT "deletedAt" IS NULL AS active, COALESCE(status::text, 'requested') AS status
-           FROM devices WHERE "deviceId" = $1 FOR UPDATE"#,
-        [device_id.clone().into()],
-    ))
-    .one(&transaction)
-    .await?;
-    let notify_addition = existing.as_ref().is_none_or(|row| !row.active);
+    let existing = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(&device_id))
+        .lock(LockType::Update)
+        .one(&transaction)
+        .await?;
+    let notify_addition = existing
+        .as_ref()
+        .is_none_or(|row| row.deleted_at.is_some());
     let notify_approval = notify_addition
-        || existing
-            .as_ref()
-            .is_some_and(|row| row.active && row.status == "requested");
+        || existing.as_ref().is_some_and(|row| {
+            row.deleted_at.is_none()
+                && matches!(
+                    row.status,
+                    Some(device::DeviceStatus::Requested) | None
+                )
+        });
 
     let now = chrono::Utc::now();
     match existing.as_ref() {
-        Some(row) if row.active => {
+        Some(row) if row.deleted_at.is_none() => {
             let status = parse_device_status(&registration.status)?;
             device::Entity::update_many()
                 .col_expr(
@@ -169,7 +167,10 @@ pub(crate) async fn register_device(
                 .col_expr(device::Column::ControllerId, Expr::value(Some(String::new())))
                 .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
                 .col_expr(device::Column::Flashing, Expr::value(Some(false)))
-                .col_expr(device::Column::DeletedAt, Expr::value(Option::<chrono::DateTime<chrono::Utc>>::None))
+                .col_expr(
+                    device::Column::DeletedAt,
+                    Expr::value(Option::<chrono::DateTime<chrono::Utc>>::None),
+                )
                 .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
                 .col_expr(device::Column::UpdatedAt, Expr::value(now))
                 .filter(device::Column::DeviceId.eq(&device_id))
@@ -189,47 +190,31 @@ pub(crate) async fn register_device(
         None => {
             let state = parse_device_state(&registration.state)?;
             let status = parse_device_status(&registration.status)?;
-            // Insert via raw SQL: devices.id is serial and DeviceId is unique business key.
-            transaction
-                .execute_raw(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    r#"INSERT INTO devices
-                       ("deviceId", "macAddress", "ipAddress", "deviceName", "deviceFamily",
-                        "deviceType", "buildId", "heartbeatTimer", "softwareVersion", "nfsPath",
-                        state, status, "controllerId", upgrading, flashing, "createdAt", "updatedAt")
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                           $11::"enum_devices_state", $12::"enum_devices_status", '', false, false,
-                           now(), now())"#,
-                    [
-                        device_id.clone().into(),
-                        registration.mac_address.clone().into(),
-                        registration.ip_address.clone().into(),
-                        registration.device_name.clone().into(),
-                        registration.device_family.clone().into(),
-                        registration.device_type.clone().into(),
-                        registration.build_id.clone().into(),
-                        registration.timeout.into(),
-                        registration.software_version.clone().into(),
-                        registration.nfs_path.clone().into(),
-                        match state {
-                            device::DeviceState::Busy => "busy",
-                            device::DeviceState::NotReachable => "not_reachable",
-                            device::DeviceState::Free => "free",
-                            device::DeviceState::Faulty => "faulty",
-                            device::DeviceState::Unknown => "unknown",
-                        }
-                        .into(),
-                        match status {
-                            device::DeviceStatus::Approved => "approved",
-                            device::DeviceStatus::Requested => "requested",
-                            device::DeviceStatus::Declined => "declined",
-                        }
-                        .into(),
-                    ],
-                ))
-                .await?;
+            device::ActiveModel {
+                device_id: Set(device_id.clone()),
+                mac_address: Set(Some(registration.mac_address.clone())),
+                ip_address: Set(Some(registration.ip_address.clone())),
+                device_name: Set(Some(registration.device_name.clone())),
+                device_family: Set(registration.device_family.clone()),
+                device_type: Set(registration.device_type.clone()),
+                build_id: Set(registration.build_id.clone()),
+                heartbeat_timer: Set(registration.timeout as i32),
+                software_version: Set(registration.software_version.clone()),
+                nfs_path: Set(registration.nfs_path.clone()),
+                state: Set(Some(state)),
+                status: Set(Some(status)),
+                controller_id: Set(Some(String::new())),
+                upgrading: Set(Some(false)),
+                flashing: Set(Some(false)),
+                last_connected_on: Set(now),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&transaction)
+            .await?;
             alert::ActiveModel {
-                id: Set(uuid::Uuid::new_v4()),
+                id: Set(Uuid::new_v4()),
                 user_id: Set("ADMIN".to_owned()),
                 title: Set("New Device On board".to_owned()),
                 message: Set(format!("New device onboarded: {device_id}")),
@@ -247,71 +232,62 @@ pub(crate) async fn register_device(
         }
     }
 
-    // Legacy `type` column vs entity `interfaceType` — keep as raw SQL.
-    transaction
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"DELETE FROM device_interfaces WHERE "deviceId" = $1"#,
-            [device_id.clone().into()],
-        ))
+    device_interface::Entity::delete_many()
+        .filter(device_interface::Column::DeviceId.eq(&device_id))
+        .exec(&transaction)
         .await?;
     for interface in device_interfaces(registration) {
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"INSERT INTO device_interfaces
-                   ("deviceId", type, "interfaceId", "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, now(), now())"#,
-                [
-                    device_id.clone().into(),
-                    interface.interface_type.into(),
-                    interface.interface_id.into(),
-                ],
-            ))
-            .await?;
+        device_interface::ActiveModel {
+            device_id: Set(device_id.clone()),
+            interface_id: Set(interface.interface_id),
+            interface_type: Set(interface.interface_type.clone()),
+            r#type: Set(Some(interface.interface_type)),
+            status: Set(Some(device_interface::DeviceInterfaceStatus::Unknown)),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await?;
     }
 
     if let (Some(device_type), Some(device_family)) = (
         registration.device_type.as_deref(),
         registration.device_family.as_deref(),
     ) {
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"INSERT INTO device_type_folders
-                   ("deviceType", "folderName", "deviceFamily", "defaultVersion")
-               VALUES ($1, $2, $3, $4)
-               ON CONFLICT ("deviceType") DO NOTHING"#,
-                [
-                    device_type.into(),
-                    format!("{device_family}_{device_type}").into(),
-                    device_family.into(),
-                    registration
-                        .software_version
-                        .as_deref()
-                        .unwrap_or("v1.0.0")
-                        .into(),
-                ],
-            ))
-            .await?;
+        device_type_folder::Entity::insert(device_type_folder::ActiveModel {
+            device_type: Set(device_type.to_owned()),
+            folder_name: Set(format!("{device_family}_{device_type}")),
+            device_family: Set(device_family.to_owned()),
+            default_version: Set(registration
+                .software_version
+                .as_deref()
+                .unwrap_or("v1.0.0")
+                .to_owned()),
+        })
+        .on_conflict(
+            OnConflict::column(device_type_folder::Column::DeviceType)
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec(&transaction)
+        .await?;
     }
 
-    let device_json = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(device_row) || jsonb_build_object(
-                   'interfaces', COALESCE((
-                       SELECT jsonb_agg(to_jsonb(interface_row) ORDER BY interface_row.id)
-                       FROM device_interfaces interface_row
-                       WHERE interface_row."deviceId" = device_row."deviceId"
-                   ), '[]'::jsonb)
-               ) AS value
-           FROM devices device_row WHERE device_row."deviceId" = $1"#,
-        [device_id.clone().into()],
-    ))
-    .one(&transaction)
-    .await?
-    .ok_or_else(|| DeviceRepositoryError::Internal("registered device disappeared".to_owned()))?
-    .value;
+    let device_model = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(&device_id))
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| DeviceRepositoryError::Internal("registered device disappeared".to_owned()))?;
+    let interfaces = device_interface::Entity::find()
+        .filter(device_interface::Column::DeviceId.eq(&device_id))
+        .order_by_asc(device_interface::Column::Id)
+        .all(&transaction)
+        .await?;
+    let mut device_value = device_json(&device_model);
+    device_value["interfaces"] = serde_json::Value::Array(
+        interfaces.iter().map(interface_json).collect(),
+    );
 
     device::Entity::update_many()
         .col_expr(
@@ -335,24 +311,39 @@ pub(crate) async fn register_device(
                 .eq_ignore_ascii_case("gen5")
         })
     {
-        // Conditional insert with NOT EXISTS kept as raw SQL.
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"INSERT INTO gen5_mapping_queue
-                   (id, "macAddress", "userId", status, "retryCount", "createdAt", "updatedAt")
-               SELECT gen_random_uuid(), $1, 'system', 'queued', 0, now(), now()
-               WHERE NOT EXISTS (
-                   SELECT 1 FROM gen5_mapping_queue
-                   WHERE regexp_replace(lower("macAddress"), '[:-]', '', 'g') = $2
-                     AND status::text IN ('queued', 'running', 'waiting', 'failure_polling')
-               )"#,
-                [
-                    registration.mac_address.clone().into(),
-                    device_id.clone().into(),
-                ],
+        let active_exists = gen5_mapping_queue::Entity::find()
+            .filter(Expr::cust_with_values(
+                r#"regexp_replace(lower("macAddress"), '[:-]', '', 'g') = $1"#,
+                [device_id.clone()],
             ))
+            .filter(gen5_mapping_queue::Column::Status.is_in([
+                gen5_mapping_queue::QueueJobStatus::Queued,
+                gen5_mapping_queue::QueueJobStatus::Running,
+                gen5_mapping_queue::QueueJobStatus::Waiting,
+                gen5_mapping_queue::QueueJobStatus::FailurePolling,
+            ]))
+            .limit(1)
+            .one(&transaction)
+            .await?
+            .is_some();
+        if !active_exists {
+            gen5_mapping_queue::ActiveModel {
+                id: Set(Uuid::new_v4()),
+                mac_address: Set(registration.mac_address.clone()),
+                user_id: Set("system".to_owned()),
+                status: Set(gen5_mapping_queue::QueueJobStatus::Queued),
+                retry_count: Set(0),
+                last_error: Set(None),
+                failure_dc_ip: Set(None),
+                baseline_mapping_count: Set(None),
+                next_retry_at: Set(None),
+                retry_schedule_index: Set(None),
+                created_at: Set(now),
+                updated_at: Set(now),
+            }
+            .insert(&transaction)
             .await?;
+        }
     }
     transaction.commit().await?;
     if registration.device_family.as_deref().is_some_and(|family| {
@@ -361,27 +352,15 @@ pub(crate) async fn register_device(
             .collect::<String>()
             .eq_ignore_ascii_case("gen3")
     }) {
-        match orm
-            .execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"UPDATE device_controllers
-               SET mappings = COALESCE(mappings, '{}'::jsonb)
-                              || jsonb_build_object($2, jsonb_build_object('uart', '', 'power', '')),
-                   "updatedAt" = now()
-               WHERE "deviceControllerId" = $1
-                 AND NOT (COALESCE(mappings, '{}'::jsonb) ? $2)"#,
-                [GEN3_CONTROLLER_ID.into(), device_id.clone().into()],
-            ))
-            .await
-        {
-            Ok(result) if result.rows_affected() == 0 => {
+        match add_gen3_controller_mapping(orm, &device_id).await {
+            Ok(false) => {
                 tracing::warn!(
                     controller_id = GEN3_CONTROLLER_ID,
                     mac_address = %registration.mac_address,
                     "Gen3 controller mapping was already present or the controller was unavailable"
                 );
             }
-            Ok(_) => {}
+            Ok(true) => {}
             Err(error) => {
                 tracing::warn!(
                     %error,
@@ -393,8 +372,45 @@ pub(crate) async fn register_device(
         }
     }
     Ok(DeviceRegistrationResult {
-        device: device_json,
+        device: device_value,
         notify_addition,
         notify_approval,
     })
+}
+
+async fn add_gen3_controller_mapping(
+    orm: &DatabaseConnection,
+    device_id: &str,
+) -> Result<bool, DeviceRepositoryError> {
+    let Some(controller) = device_controller::Entity::find_by_id(GEN3_CONTROLLER_ID.to_owned())
+        .one(orm)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let mut mappings = if controller.mappings.is_null() {
+        serde_json::json!({})
+    } else {
+        controller.mappings.clone()
+    };
+    let Some(object) = mappings.as_object_mut() else {
+        return Ok(false);
+    };
+    if object.contains_key(device_id) {
+        return Ok(false);
+    }
+    object.insert(
+        device_id.to_owned(),
+        serde_json::json!({"uart": "", "power": ""}),
+    );
+    let now = chrono::Utc::now();
+    device_controller::ActiveModel {
+        device_controller_id: Set(controller.device_controller_id),
+        mappings: Set(mappings),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .update(orm)
+    .await?;
+    Ok(true)
 }

@@ -1,13 +1,16 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
-    EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
-    TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
+    sea_query::{Expr, LockType},
 };
 use uuid::Uuid;
 
 use crate::{
     devices::repository_types::DeviceHeartbeatResult,
-    persistence::entity::{alert, device, device_state_change, heartbeat},
+    persistence::entity::{
+        alert, device, device_action_queue, device_interface, device_state_change, fallback_update,
+        heartbeat,
+    },
 };
 
 use super::super::error::DeviceRepositoryError;
@@ -18,7 +21,8 @@ pub(crate) async fn record_device(
     device_id: &str,
     heartbeat_payload: &serde_json::Value,
 ) -> Result<Option<DeviceHeartbeatResult>, DeviceRepositoryError> {
-    let _api_trace = crate::observability::ApiTrace::enter("devices::heartbeat_store::device", "record_device");
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::heartbeat_store::device", "record_device");
     if !heartbeat_payload.is_object() {
         return Err(DeviceRepositoryError::Validation(
             "device heartbeat must be a JSON object".to_owned(),
@@ -28,44 +32,53 @@ pub(crate) async fn record_device(
     let interface_statuses = interface::parse_interface_statuses(&heartbeat_data);
     let transaction = orm.begin().await?;
 
-    // Complex FOR UPDATE + EXISTS active-work check — keep as raw SQL.
-    #[derive(Debug, FromQueryResult)]
-    struct LockedDevice {
-        state: String,
-        has_active_work: bool,
-    }
-    let device_row = LockedDevice::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT COALESCE(device.state::text, 'unknown') AS state,
-                  (EXISTS (SELECT 1 FROM device_action_queue action
-                           WHERE action."targetDeviceId" = device."deviceId"
-                             AND action.status::text IN ('queued', 'waiting', 'running'))
-                   OR EXISTS (SELECT 1 FROM fallback_updates fallback
-                              WHERE fallback."deviceId" = device."deviceId"
-                                AND fallback.status::text IN ('pending', 'flashing')))
-                  AS has_active_work
-           FROM devices device
-           WHERE device."deviceId" = $1
-             AND device."deletedAt" IS NULL
-             AND device.status::text = 'approved'
-           FOR UPDATE OF device"#,
-        [device_id.into()],
-    ))
-    .one(&transaction)
-    .await?;
-    let Some(LockedDevice {
-        state: previous_state,
-        has_active_work,
-    }) = device_row
-    else {
+    let device_row = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .lock(LockType::Update)
+        .one(&transaction)
+        .await?;
+    let Some(device_row) = device_row else {
         transaction.rollback().await?;
         return Ok(None);
     };
+    let previous_state = match device_row.state.as_ref() {
+        Some(device::DeviceState::Busy) => "busy",
+        Some(device::DeviceState::NotReachable) => "not_reachable",
+        Some(device::DeviceState::Free) => "free",
+        Some(device::DeviceState::Faulty) => "faulty",
+        Some(device::DeviceState::Unknown) | None => "unknown",
+    }
+    .to_owned();
+
+    let has_action_work = device_action_queue::Entity::find()
+        .filter(device_action_queue::Column::TargetDeviceId.eq(device_id))
+        .filter(device_action_queue::Column::Status.is_in([
+            device_action_queue::QueueJobStatus::Queued,
+            device_action_queue::QueueJobStatus::Waiting,
+            device_action_queue::QueueJobStatus::Running,
+        ]))
+        .limit(1)
+        .one(&transaction)
+        .await?
+        .is_some();
+    let has_fallback_work = fallback_update::Entity::find()
+        .filter(fallback_update::Column::DeviceId.eq(device_id))
+        .filter(fallback_update::Column::Status.is_in([
+            fallback_update::FallbackStatus::Pending,
+            fallback_update::FallbackStatus::Flashing,
+        ]))
+        .limit(1)
+        .one(&transaction)
+        .await?
+        .is_some();
+    let has_active_work = has_action_work || has_fallback_work;
 
     let existing = heartbeat::Entity::find()
         .filter(heartbeat::Column::DeviceId.eq(device_id))
         .order_by_desc(heartbeat::Column::Timestamp)
-        .lock(sea_orm::sea_query::LockType::Update)
+        .lock(LockType::Update)
         .one(&transaction)
         .await?;
     let now = chrono::Utc::now();
@@ -153,59 +166,48 @@ pub(crate) async fn record_device(
         alerts.push(alert_json(&inserted));
     }
 
-    // Interface rows still use raw SQL (legacy `type` column vs entity `interfaceType`).
     let mut interface_changes = Vec::new();
     for interface_status in interface_statuses {
         if let Some(interface_id) = interface_status.interface_id.as_deref() {
-            #[derive(Debug, FromQueryResult)]
-            struct ExistingInterface {
-                id: i32,
-                status: String,
-            }
-            let existing = ExistingInterface::find_by_statement(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"SELECT id, status::text AS status FROM device_interfaces
-                   WHERE "deviceId" = $1 AND type = $2 AND "interfaceId" = $3
-                   FOR UPDATE"#,
-                [
-                    device_id.into(),
-                    interface_status.interface_type.clone().into(),
-                    interface_id.into(),
-                ],
-            ))
-            .one(&transaction)
-            .await?;
+            let existing = device_interface::Entity::find()
+                .filter(device_interface::Column::DeviceId.eq(device_id))
+                .filter(device_interface::Column::Type.eq(&interface_status.interface_type))
+                .filter(device_interface::Column::InterfaceId.eq(interface_id))
+                .lock(LockType::Update)
+                .one(&transaction)
+                .await?;
             match existing {
-                Some(row) if row.status != interface_status.status => {
-                    interface::update_interface_status(
-                        &transaction,
-                        row.id,
-                        interface_status.status,
-                    )
-                    .await?;
-                    interface_changes.push(interface::InterfaceChange {
-                        interface_type: interface_status.interface_type,
-                        interface_id: interface_id.to_owned(),
-                        status: interface_status.status,
-                        previous_status: Some(row.status),
-                    });
+                Some(row) => {
+                    let previous = interface::interface_status_str(row.status.as_ref());
+                    if previous != interface_status.status {
+                        interface::update_interface_status(
+                            &transaction,
+                            row.id,
+                            interface_status.status,
+                        )
+                        .await?;
+                        interface_changes.push(interface::InterfaceChange {
+                            interface_type: interface_status.interface_type,
+                            interface_id: interface_id.to_owned(),
+                            status: interface_status.status,
+                            previous_status: Some(previous),
+                        });
+                    }
                 }
                 None => {
-                    transaction
-                        .execute_raw(Statement::from_sql_and_values(
-                            DatabaseBackend::Postgres,
-                            r#"INSERT INTO device_interfaces
-                                  ("deviceId", "interfaceId", type, status, "createdAt", "updatedAt")
-                               VALUES ($1, $2, $3, ($4::text)::"enum_device_interfaces_status",
-                                       now(), now())"#,
-                            [
-                                device_id.into(),
-                                interface_id.into(),
-                                interface_status.interface_type.clone().into(),
-                                interface_status.status.into(),
-                            ],
-                        ))
-                        .await?;
+                    let status = interface::parse_interface_status(interface_status.status)?;
+                    device_interface::ActiveModel {
+                        device_id: Set(device_id.to_owned()),
+                        interface_id: Set(interface_id.to_owned()),
+                        interface_type: Set(interface_status.interface_type.clone()),
+                        r#type: Set(Some(interface_status.interface_type.clone())),
+                        status: Set(Some(status)),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                        ..Default::default()
+                    }
+                    .insert(&transaction)
+                    .await?;
                     interface_changes.push(interface::InterfaceChange {
                         interface_type: interface_status.interface_type,
                         interface_id: interface_id.to_owned(),
@@ -213,29 +215,17 @@ pub(crate) async fn record_device(
                         previous_status: None,
                     });
                 }
-                Some(_) => {}
             }
         } else {
-            #[derive(Debug, FromQueryResult)]
-            struct ExistingInterface {
-                id: i32,
-                interface_id: String,
-                status: String,
-            }
-            let existing = ExistingInterface::find_by_statement(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"SELECT id, "interfaceId" AS interface_id, status::text AS status
-                   FROM device_interfaces
-                   WHERE "deviceId" = $1 AND type = $2 FOR UPDATE"#,
-                [
-                    device_id.into(),
-                    interface_status.interface_type.clone().into(),
-                ],
-            ))
-            .all(&transaction)
-            .await?;
+            let existing = device_interface::Entity::find()
+                .filter(device_interface::Column::DeviceId.eq(device_id))
+                .filter(device_interface::Column::Type.eq(&interface_status.interface_type))
+                .lock(LockType::Update)
+                .all(&transaction)
+                .await?;
             for row in existing {
-                if row.status == interface_status.status {
+                let previous = interface::interface_status_str(row.status.as_ref());
+                if previous == interface_status.status {
                     continue;
                 }
                 interface::update_interface_status(&transaction, row.id, interface_status.status)
@@ -244,7 +234,7 @@ pub(crate) async fn record_device(
                     interface_type: interface_status.interface_type.clone(),
                     interface_id: row.interface_id,
                     status: interface_status.status,
-                    previous_status: Some(row.status),
+                    previous_status: Some(previous),
                 });
             }
         }
@@ -258,10 +248,7 @@ pub(crate) async fn record_device(
         let inserted = alert::ActiveModel {
             id: Set(Uuid::new_v4()),
             user_id: Set("ADMIN".to_owned()),
-            title: Set(format!(
-                "Interface {} {}",
-                interface_label, change.status
-            )),
+            title: Set(format!("Interface {} {}", interface_label, change.status)),
             message: Set(format!(
                 "Device {device_id} interface {interface_label} status is {}",
                 change.status
@@ -321,7 +308,8 @@ pub(crate) async fn record_device(
 }
 
 fn alert_json(model: &alert::Model) -> serde_json::Value {
-    let _api_trace = crate::observability::ApiTrace::enter("devices::heartbeat_store::device", "alert_json");
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::heartbeat_store::device", "alert_json");
     serde_json::json!({
         "id": model.id,
         "user_id": model.user_id,
@@ -344,4 +332,3 @@ fn alert_json(model: &alert::Model) -> serde_json::Value {
         "updated_at": model.updated_at,
     })
 }
-

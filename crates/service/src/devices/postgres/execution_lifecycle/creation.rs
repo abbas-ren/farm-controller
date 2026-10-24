@@ -1,9 +1,14 @@
 use super::*;
 
-use crate::persistence::entity::{release, test_case, test_execution};
+use crate::{
+    devices::postgres::json_models::{
+        created_execution_json, execution_with_cases_json, test_case_json, test_status_str,
+    },
+    persistence::entity::{release, test_case, test_execution},
+};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, PaginatorTrait,
-    QueryFilter, QuerySelect, Set, Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
     sea_query::LockType,
 };
 use uuid::Uuid;
@@ -13,7 +18,10 @@ impl PostgresDeviceRepository {
         &self,
         execution: &ExecutionCreation,
     ) -> Result<serde_json::Value, DeviceRepositoryError> {
-        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::creation", "create_test_execution_inner");
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::execution_lifecycle::creation",
+            "create_test_execution_inner",
+        );
         let transaction = self.orm().begin().await?;
         let release_id = Uuid::parse_str(&execution.build_id).map_err(|_| {
             DeviceRepositoryError::NotFound(format!("Release {} not found", execution.build_id))
@@ -107,36 +115,35 @@ impl PostgresDeviceRepository {
             .await?;
         }
 
-        // Nested to_jsonb + jsonb_agg payload shape kept as raw SQL for API compatibility.
-        #[derive(Debug, FromQueryResult)]
-        struct CreatedExecution {
-            value: serde_json::Value,
-        }
-        let created = CreatedExecution::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT to_jsonb(te) || jsonb_build_object(
-                 'Device', NULL,
-                 'testCases', COALESCE((SELECT jsonb_agg(to_jsonb(tc) ORDER BY tc."suiteId", tc.id)
-                                        FROM testcase tc WHERE tc."executionId" = te."testId"), '[]'::jsonb),
-                 'logs', '[]'::jsonb) AS value
-               FROM test_executions te WHERE te."testId" = $1"#,
-            [test_id.into()],
-        ))
-        .one(&transaction)
-        .await?
-        .ok_or_else(|| {
-            DeviceRepositoryError::Internal("created test execution disappeared".to_owned())
-        })?;
+        let created_model = test_execution::Entity::find()
+            .filter(test_execution::Column::TestId.eq(&test_id))
+            .one(&transaction)
+            .await?
+            .ok_or_else(|| {
+                DeviceRepositoryError::Internal("created test execution disappeared".to_owned())
+            })?;
+        let mut cases = test_case::Entity::find()
+            .filter(test_case::Column::ExecutionId.eq(&test_id))
+            .order_by_asc(test_case::Column::SuiteId)
+            .order_by_asc(test_case::Column::Id)
+            .all(&transaction)
+            .await?;
+        // Stable order matching SQL jsonb_agg ORDER BY suiteId, id.
+        cases.sort_by(|a, b| a.suite_id.cmp(&b.suite_id).then(a.id.cmp(&b.id)));
 
+        let created = created_execution_json(&created_model, &cases);
         transaction.commit().await?;
-        Ok(created.value)
+        Ok(created)
     }
 
     pub(super) async fn test_execution_build_version_inner(
         &self,
         test_id: &str,
     ) -> Result<Option<String>, DeviceRepositoryError> {
-        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::creation", "test_execution_build_version_inner");
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::execution_lifecycle::creation",
+            "test_execution_build_version_inner",
+        );
         Ok(test_execution::Entity::find()
             .filter(test_execution::Column::TestId.eq(test_id))
             .select_only()
@@ -153,28 +160,32 @@ impl PostgresDeviceRepository {
         limit: i64,
         offset: i64,
     ) -> Result<serde_json::Value, DeviceRepositoryError> {
-        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::creation", "executions_by_build_inner");
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::execution_lifecycle::creation",
+            "executions_by_build_inner",
+        );
         let total = test_execution::Entity::find()
             .filter(test_execution::Column::BuildId.eq(build_id))
             .count(self.orm())
             .await? as i64;
 
-        // Nested to_jsonb + jsonb_agg kept as raw SQL for API response shape.
-        #[derive(Debug, FromQueryResult)]
-        struct ExecutionRow {
-            value: serde_json::Value,
+        let execution_rows = test_execution::Entity::find()
+            .filter(test_execution::Column::BuildId.eq(build_id))
+            .order_by_desc(test_execution::Column::CreatedAt)
+            .limit(limit as u64)
+            .offset(offset as u64)
+            .all(self.orm())
+            .await?;
+
+        let mut executions = Vec::with_capacity(execution_rows.len());
+        for execution in execution_rows {
+            let cases = test_case::Entity::find()
+                .filter(test_case::Column::ExecutionId.eq(&execution.test_id))
+                .order_by_asc(test_case::Column::Id)
+                .all(self.orm())
+                .await?;
+            executions.push(execution_with_cases_json(&execution, &cases));
         }
-        let executions = ExecutionRow::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT to_jsonb(te) || jsonb_build_object('testCases', COALESCE((SELECT jsonb_agg(to_jsonb(tc) ORDER BY tc.id) FROM testcase tc WHERE tc."executionId" = te."testId"), '[]'::jsonb)) AS value
-               FROM test_executions te WHERE te."buildId" = $1 ORDER BY te."createdAt" DESC LIMIT $2 OFFSET $3"#,
-            [build_id.into(), limit.into(), offset.into()],
-        ))
-        .all(self.orm())
-        .await?
-        .into_iter()
-        .map(|row| row.value)
-        .collect::<Vec<_>>();
 
         Ok(serde_json::json!({
             "limit": limit,
@@ -188,22 +199,25 @@ impl PostgresDeviceRepository {
         &self,
         test_id: &str,
     ) -> Result<Option<serde_json::Value>, DeviceRepositoryError> {
-        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::creation", "test_results_inner");
-        // Nested jsonb_agg kept as raw SQL for API response shape.
-        #[derive(Debug, FromQueryResult)]
-        struct ResultsRow {
-            value: serde_json::Value,
-        }
-        Ok(
-            ResultsRow::find_by_statement(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"SELECT jsonb_build_object('status', te.status, 'testCases', COALESCE((SELECT jsonb_agg(to_jsonb(tc) ORDER BY tc.id) FROM testcase tc WHERE tc."executionId" = te."testId"), '[]'::jsonb)) AS value
-                   FROM test_executions te WHERE te."testId" = $1"#,
-                [test_id.into()],
-            ))
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::execution_lifecycle::creation",
+            "test_results_inner",
+        );
+        let Some(execution) = test_execution::Entity::find()
+            .filter(test_execution::Column::TestId.eq(test_id))
             .one(self.orm())
             .await?
-            .map(|row| row.value),
-        )
+        else {
+            return Ok(None);
+        };
+        let cases = test_case::Entity::find()
+            .filter(test_case::Column::ExecutionId.eq(test_id))
+            .order_by_asc(test_case::Column::Id)
+            .all(self.orm())
+            .await?;
+        Ok(Some(serde_json::json!({
+            "status": test_status_str(execution.status.as_ref()),
+            "testCases": cases.iter().map(test_case_json).collect::<Vec<_>>(),
+        })))
     }
 }

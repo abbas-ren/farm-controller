@@ -1,5 +1,4 @@
 pub mod entity;
-pub mod orm_util;
 pub mod projection;
 #[cfg(test)]
 pub mod tests;
@@ -9,7 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder};
+use sea_orm::{
+    ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
+};
 use serde::Deserialize;
 use sqlx::{
     PgPool,
@@ -18,7 +20,10 @@ use sqlx::{
 
 use crate::{config::DatabaseConfig, error::AppError, observability::Metrics};
 
-use self::entity::retention_policy;
+use self::entity::{
+    alert, device_action_queue, device_controller_heartbeat, device_controller_metrics,
+    gen5_mapping_queue, log_entry, retention_policy,
+};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
@@ -71,16 +76,8 @@ impl Database {
     }
 
     pub async fn ping(&self) -> Result<(), sea_orm::DbErr> {
-        #[derive(Debug, FromQueryResult)]
-        struct PingRow {
-            #[allow(dead_code)]
-            n: i32,
-        }
         let started = Instant::now();
-        let result = orm_util::query_one::<_, PingRow>(self.orm(), "SELECT 1 AS n", vec![])
-            .await
-            .and_then(|row| row.ok_or(sea_orm::DbErr::RecordNotFound("ping".into())))
-            .map(|_| ());
+        let result = self.orm().ping().await;
         self.metrics.record_database_operation(
             "readiness",
             if result.is_ok() { "success" } else { "failure" },
@@ -125,13 +122,9 @@ impl Database {
         }
         let target = RetentionTarget::from_policy(policy)?;
         let started = Instant::now();
-        // Dynamic DELETE SQL is allowlisted via RetentionTarget — run through SeaORM Statement.
-        let result = orm_util::execute(
-            self.orm(),
-            target.delete_sql(),
-            vec![policy.retention_days.into(), policy.batch_size.into()],
-        )
-        .await;
+        let result = target
+            .delete_batch(self.orm(), policy.retention_days, policy.batch_size)
+            .await;
         self.metrics.record_database_operation(
             "retention_cleanup",
             if result.is_ok() { "success" } else { "failure" },
@@ -186,77 +179,171 @@ impl RetentionTarget {
         }
     }
 
-    fn delete_sql(self) -> &'static str {
-        match self {
+    async fn delete_batch(
+        self,
+        orm: &sea_orm::DatabaseConnection,
+        retention_days: i32,
+        batch_size: i32,
+    ) -> Result<u64, sea_orm::DbErr> {
+        let transaction = orm.begin().await?;
+        let limit = u64::try_from(batch_size.max(0)).unwrap_or(0);
+        let days = retention_days as i64;
+        let deleted = match self {
             Self::ControllerHeartbeats => {
-                r#"
-            WITH expired AS (
-                SELECT ctid FROM device_controller_heartbeats
-                WHERE timestamp < now() - ($1 * interval '1 day')
-                ORDER BY timestamp LIMIT $2 FOR UPDATE SKIP LOCKED
-            )
-            DELETE FROM device_controller_heartbeats target
-            USING expired WHERE target.ctid = expired.ctid
-        "#
+                let ids = device_controller_heartbeat::Entity::find()
+                    .filter(Expr::cust_with_values(
+                        r#"timestamp < now() - ($1 * interval '1 day')"#,
+                        [days],
+                    ))
+                    .order_by_asc(device_controller_heartbeat::Column::Timestamp)
+                    .limit(limit)
+                    .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                    .select_only()
+                    .column(device_controller_heartbeat::Column::Id)
+                    .into_tuple::<i32>()
+                    .all(&transaction)
+                    .await?;
+                if ids.is_empty() {
+                    0
+                } else {
+                    device_controller_heartbeat::Entity::delete_many()
+                        .filter(device_controller_heartbeat::Column::Id.is_in(ids))
+                        .exec(&transaction)
+                        .await?
+                        .rows_affected
+                }
             }
             Self::ControllerMetrics => {
-                r#"
-            WITH expired AS (
-                SELECT ctid FROM device_controller_metrics
-                WHERE "collectedAt" < now() - ($1 * interval '1 day')
-                ORDER BY "collectedAt" LIMIT $2 FOR UPDATE SKIP LOCKED
-            )
-            DELETE FROM device_controller_metrics target
-            USING expired WHERE target.ctid = expired.ctid
-        "#
+                let ids = device_controller_metrics::Entity::find()
+                    .filter(Expr::cust_with_values(
+                        r#""collectedAt" < now() - ($1 * interval '1 day')"#,
+                        [days],
+                    ))
+                    .order_by_asc(device_controller_metrics::Column::CollectedAt)
+                    .limit(limit)
+                    .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                    .select_only()
+                    .column(device_controller_metrics::Column::Id)
+                    .into_tuple::<i32>()
+                    .all(&transaction)
+                    .await?;
+                if ids.is_empty() {
+                    0
+                } else {
+                    device_controller_metrics::Entity::delete_many()
+                        .filter(device_controller_metrics::Column::Id.is_in(ids))
+                        .exec(&transaction)
+                        .await?
+                        .rows_affected
+                }
             }
             Self::LogEntries => {
-                r#"
-            WITH expired AS (
-                SELECT ctid FROM log_entries
-                WHERE timestamp < now() - ($1 * interval '1 day')
-                ORDER BY timestamp LIMIT $2 FOR UPDATE SKIP LOCKED
-            )
-            DELETE FROM log_entries target
-            USING expired WHERE target.ctid = expired.ctid
-        "#
+                let ids = log_entry::Entity::find()
+                    .filter(Expr::cust_with_values(
+                        r#"timestamp < now() - ($1 * interval '1 day')"#,
+                        [days],
+                    ))
+                    .order_by_asc(log_entry::Column::Timestamp)
+                    .limit(limit)
+                    .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                    .select_only()
+                    .column(log_entry::Column::Id)
+                    .into_tuple::<i32>()
+                    .all(&transaction)
+                    .await?;
+                if ids.is_empty() {
+                    0
+                } else {
+                    log_entry::Entity::delete_many()
+                        .filter(log_entry::Column::Id.is_in(ids))
+                        .exec(&transaction)
+                        .await?
+                        .rows_affected
+                }
             }
             Self::DeviceActionQueue => {
-                r#"
-            WITH expired AS (
-                SELECT ctid FROM device_action_queue
-                WHERE "updatedAt" < now() - ($1 * interval '1 day')
-                                    AND status IN ('completed', 'cancelled')
-                ORDER BY "updatedAt" LIMIT $2 FOR UPDATE SKIP LOCKED
-            )
-            DELETE FROM device_action_queue target
-            USING expired WHERE target.ctid = expired.ctid
-        "#
+                let ids = device_action_queue::Entity::find()
+                    .filter(Expr::cust_with_values(
+                        r#""updatedAt" < now() - ($1 * interval '1 day')"#,
+                        [days],
+                    ))
+                    .filter(device_action_queue::Column::Status.is_in([
+                        device_action_queue::QueueJobStatus::Completed,
+                        device_action_queue::QueueJobStatus::Cancelled,
+                    ]))
+                    .order_by_asc(device_action_queue::Column::UpdatedAt)
+                    .limit(limit)
+                    .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                    .select_only()
+                    .column(device_action_queue::Column::Id)
+                    .into_tuple::<uuid::Uuid>()
+                    .all(&transaction)
+                    .await?;
+                if ids.is_empty() {
+                    0
+                } else {
+                    device_action_queue::Entity::delete_many()
+                        .filter(device_action_queue::Column::Id.is_in(ids))
+                        .exec(&transaction)
+                        .await?
+                        .rows_affected
+                }
             }
             Self::Gen5MappingQueue => {
-                r#"
-            WITH expired AS (
-                SELECT ctid FROM gen5_mapping_queue
-                WHERE "updatedAt" < now() - ($1 * interval '1 day')
-                                    AND status IN ('completed', 'cancelled')
-                ORDER BY "updatedAt" LIMIT $2 FOR UPDATE SKIP LOCKED
-            )
-            DELETE FROM gen5_mapping_queue target
-            USING expired WHERE target.ctid = expired.ctid
-        "#
+                let ids = gen5_mapping_queue::Entity::find()
+                    .filter(Expr::cust_with_values(
+                        r#""updatedAt" < now() - ($1 * interval '1 day')"#,
+                        [days],
+                    ))
+                    .filter(gen5_mapping_queue::Column::Status.is_in([
+                        gen5_mapping_queue::QueueJobStatus::Completed,
+                        gen5_mapping_queue::QueueJobStatus::Cancelled,
+                    ]))
+                    .order_by_asc(gen5_mapping_queue::Column::UpdatedAt)
+                    .limit(limit)
+                    .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                    .select_only()
+                    .column(gen5_mapping_queue::Column::Id)
+                    .into_tuple::<uuid::Uuid>()
+                    .all(&transaction)
+                    .await?;
+                if ids.is_empty() {
+                    0
+                } else {
+                    gen5_mapping_queue::Entity::delete_many()
+                        .filter(gen5_mapping_queue::Column::Id.is_in(ids))
+                        .exec(&transaction)
+                        .await?
+                        .rows_affected
+                }
             }
             Self::Alerts => {
-                r#"
-            WITH expired AS (
-                SELECT ctid FROM alerts
-                WHERE created_at < now() - ($1 * interval '1 day')
-                  AND status = 'read'
-                ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED
-            )
-            DELETE FROM alerts target
-            USING expired WHERE target.ctid = expired.ctid
-        "#
+                let ids = alert::Entity::find()
+                    .filter(Expr::cust_with_values(
+                        r#"created_at < now() - ($1 * interval '1 day')"#,
+                        [days],
+                    ))
+                    .filter(alert::Column::Status.eq(alert::AlertStatus::Read))
+                    .order_by_asc(alert::Column::CreatedAt)
+                    .limit(limit)
+                    .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                    .select_only()
+                    .column(alert::Column::Id)
+                    .into_tuple::<uuid::Uuid>()
+                    .all(&transaction)
+                    .await?;
+                if ids.is_empty() {
+                    0
+                } else {
+                    alert::Entity::delete_many()
+                        .filter(alert::Column::Id.is_in(ids))
+                        .exec(&transaction)
+                        .await?
+                        .rows_affected
+                }
             }
-        }
+        };
+        transaction.commit().await?;
+        Ok(deleted)
     }
 }

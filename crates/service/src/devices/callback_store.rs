@@ -1,8 +1,7 @@
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend,
-    DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set,
-    Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
 use tracing::info;
@@ -10,8 +9,8 @@ use tracing::info;
 use crate::{
     devices::{FlashExecutionProgress, IplFlashingStatus},
     persistence::entity::{
-        device, device_action_queue, device_controller, device_state_change, log_entry,
-        test_execution,
+        device, device_action_queue, device_controller, device_state_change, gen5_mapping_queue,
+        log_entry, test_execution,
     },
 };
 
@@ -67,52 +66,74 @@ pub(crate) async fn save_gen5_mapping(
                 .update(&transaction)
                 .await?;
             }
-            // SKIP LOCKED claim inside UPDATE — irreducible as Entity.
-            transaction
-                .execute_raw(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    r#"
-                    UPDATE gen5_mapping_queue SET
-                        status = 'completed', "lastError" = NULL,
-                        "failureDcIp" = NULL, "baselineMappingCount" = NULL,
-                        "nextRetryAt" = NULL, "retryScheduleIndex" = NULL,
-                        "updatedAt" = now()
-                    WHERE id = (
-                        SELECT id FROM gen5_mapping_queue
-                        WHERE lower("macAddress") = lower($1)
-                          AND status IN ('waiting', 'failure_polling')
-                        ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED
-                    )
-                    "#,
-                    [mac.into()],
+            let job = gen5_mapping_queue::Entity::find()
+                .filter(Expr::cust_with_values(
+                    r#"lower("macAddress") = lower($1)"#,
+                    [mac],
                 ))
+                .filter(gen5_mapping_queue::Column::Status.is_in([
+                    gen5_mapping_queue::QueueJobStatus::Waiting,
+                    gen5_mapping_queue::QueueJobStatus::FailurePolling,
+                ]))
+                .order_by_asc(gen5_mapping_queue::Column::CreatedAt)
+                .limit(1)
+                .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                .one(&transaction)
                 .await?;
+            if let Some(job) = job {
+                let now = Utc::now();
+                gen5_mapping_queue::ActiveModel {
+                    id: Set(job.id),
+                    status: Set(gen5_mapping_queue::QueueJobStatus::Completed),
+                    last_error: Set(None),
+                    failure_dc_ip: Set(None),
+                    baseline_mapping_count: Set(None),
+                    next_retry_at: Set(None),
+                    retry_schedule_index: Set(None),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .update(&transaction)
+                .await?;
+            }
         }
         CallbackStatus::Failure => {
             let baseline_count = controller
                 .mappings
                 .as_object()
                 .map_or(0_i32, |value| value.len() as i32);
-            transaction
-                .execute_raw(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    r#"
-                    UPDATE gen5_mapping_queue SET
-                        status = 'failure_polling', "failureDcIp" = $2,
-                        "baselineMappingCount" = $3,
-                        "nextRetryAt" = now() + interval '5 minutes',
-                        "retryScheduleIndex" = 0,
-                        "lastError" = 'Device controller reported mapping failure',
-                        "updatedAt" = now()
-                    WHERE id = (
-                        SELECT id FROM gen5_mapping_queue
-                        WHERE lower("macAddress") = lower($1) AND status = 'waiting'
-                        ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED
-                    )
-                    "#,
-                    [mac.into(), caller_ip.into(), baseline_count.into()],
+            let job = gen5_mapping_queue::Entity::find()
+                .filter(Expr::cust_with_values(
+                    r#"lower("macAddress") = lower($1)"#,
+                    [mac],
                 ))
+                .filter(
+                    gen5_mapping_queue::Column::Status
+                        .eq(gen5_mapping_queue::QueueJobStatus::Waiting),
+                )
+                .order_by_asc(gen5_mapping_queue::Column::CreatedAt)
+                .limit(1)
+                .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+                .one(&transaction)
                 .await?;
+            if let Some(job) = job {
+                let now = Utc::now();
+                gen5_mapping_queue::ActiveModel {
+                    id: Set(job.id),
+                    status: Set(gen5_mapping_queue::QueueJobStatus::FailurePolling),
+                    failure_dc_ip: Set(Some(caller_ip.to_owned())),
+                    baseline_mapping_count: Set(Some(baseline_count)),
+                    next_retry_at: Set(Some(now + Duration::minutes(5))),
+                    retry_schedule_index: Set(Some(0)),
+                    last_error: Set(Some(
+                        "Device controller reported mapping failure".to_owned(),
+                    )),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .update(&transaction)
+                .await?;
+            }
         }
     }
     transaction.commit().await?;

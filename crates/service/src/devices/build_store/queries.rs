@@ -1,23 +1,17 @@
 use sea_orm::{
-    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, Statement,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
+    sea_query::{Expr, extension::postgres::PgExpr},
 };
 use uuid::Uuid;
 
 use crate::persistence::entity::release;
 
-use super::super::{BuildFilters, BuildList, BuildListQuery, error::DeviceRepositoryError};
-use super::uploads::release_json;
-
-#[derive(Debug, FromQueryResult)]
-struct CountRow {
-    count: i64,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: serde_json::Value,
-}
+use super::super::{
+    error::DeviceRepositoryError,
+    postgres::json_models::release_json,
+    BuildFilters, BuildList, BuildListQuery,
+};
 
 pub(crate) async fn build_filters(
     orm: &DatabaseConnection,
@@ -63,6 +57,55 @@ pub(crate) async fn build_by_id(
         .map(|row| release_json(&row)))
 }
 
+fn build_list_filters(
+    mut select: sea_orm::Select<release::Entity>,
+    query: &BuildListQuery,
+    flagged: Option<bool>,
+) -> sea_orm::Select<release::Entity> {
+    if let Some(device_type) = query.device_type.as_deref() {
+        select = select.filter(release::Column::DeviceType.eq(device_type));
+    }
+    if let Some(device_family) = query.device_family.as_deref() {
+        select = select.filter(release::Column::DeviceFamily.eq(device_family));
+    }
+    if let Some(flagged) = flagged {
+        select = select.filter(release::Column::IsFaulty.eq(flagged));
+    }
+    if let Some(version) = query.build_version.as_deref() {
+        select = select.filter(release::Column::Version.eq(version));
+    }
+    if let Some(search) = query.search.as_deref().filter(|value| !value.is_empty()) {
+        let pattern = format!("%{search}%");
+        select = select.filter(
+            Condition::any()
+                .add(Expr::col(release::Column::DeviceType).ilike(&pattern))
+                .add(Expr::col(release::Column::DeviceFamily).ilike(&pattern))
+                .add(Expr::col(release::Column::Version).ilike(&pattern))
+                .add(Expr::col(release::Column::Tag).ilike(&pattern)),
+        );
+    }
+    select
+}
+
+fn order_builds(
+    select: sea_orm::Select<release::Entity>,
+    sort_by: &str,
+    ascending: bool,
+) -> sea_orm::Select<release::Entity> {
+    match (sort_by, ascending) {
+        ("version", true) => select.order_by_asc(release::Column::Version),
+        ("version", false) => select.order_by_desc(release::Column::Version),
+        ("deviceFamily", true) => select.order_by_asc(release::Column::DeviceFamily),
+        ("deviceFamily", false) => select.order_by_desc(release::Column::DeviceFamily),
+        ("deviceType", true) => select.order_by_asc(release::Column::DeviceType),
+        ("deviceType", false) => select.order_by_desc(release::Column::DeviceType),
+        ("tag", true) => select.order_by_asc(release::Column::Tag),
+        ("tag", false) => select.order_by_desc(release::Column::Tag),
+        (_, true) => select.order_by_asc(release::Column::CreatedAt),
+        (_, false) => select.order_by_desc(release::Column::CreatedAt),
+    }
+}
+
 pub(crate) async fn list_builds(
     orm: &DatabaseConnection,
     query: &BuildListQuery,
@@ -82,71 +125,22 @@ pub(crate) async fn list_builds(
         .filter(|value| matches!(*value, "version" | "deviceFamily" | "deviceType" | "tag"))
         .unwrap_or("createdAt");
     let ascending = query.sort_order.as_deref() == Some("asc");
-    let search = query.search.as_deref().filter(|value| !value.is_empty());
-    // Dynamic optional filters + CASE ORDER BY kept as Statement.
-    let total_count = CountRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT count(*) AS count FROM releases r
-           WHERE ($1::text IS NULL OR r."deviceType" = $1)
-             AND ($2::text IS NULL OR r."deviceFamily" = $2)
-             AND ($3::boolean IS NULL OR r."isFaulty" = $3)
-             AND ($4::text IS NULL OR r.version = $4)
-             AND ($5::text IS NULL OR r."deviceType" ILIKE '%' || $5 || '%'
-                  OR r."deviceFamily" ILIKE '%' || $5 || '%'
-                  OR r.version ILIKE '%' || $5 || '%'
-                  OR r.tag ILIKE '%' || $5 || '%')"#,
-        [
-            query.device_type.clone().into(),
-            query.device_family.clone().into(),
-            flagged.into(),
-            query.build_version.clone().into(),
-            search.map(str::to_owned).into(),
-        ],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.count)
-    .unwrap_or(0);
-    let builds = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(r) AS value FROM releases r
-           WHERE ($1::text IS NULL OR r."deviceType" = $1)
-             AND ($2::text IS NULL OR r."deviceFamily" = $2)
-             AND ($3::boolean IS NULL OR r."isFaulty" = $3)
-             AND ($4::text IS NULL OR r.version = $4)
-             AND ($5::text IS NULL OR r."deviceType" ILIKE '%' || $5 || '%'
-                  OR r."deviceFamily" ILIKE '%' || $5 || '%'
-                  OR r.version ILIKE '%' || $5 || '%'
-                  OR r.tag ILIKE '%' || $5 || '%')
-           ORDER BY
-             CASE WHEN $6 = 'createdAt' AND $7 THEN r."createdAt" END ASC,
-             CASE WHEN $6 = 'createdAt' AND NOT $7 THEN r."createdAt" END DESC,
-             CASE WHEN $6 = 'version' AND $7 THEN r.version END ASC,
-             CASE WHEN $6 = 'version' AND NOT $7 THEN r.version END DESC,
-             CASE WHEN $6 = 'deviceFamily' AND $7 THEN r."deviceFamily" END ASC,
-             CASE WHEN $6 = 'deviceFamily' AND NOT $7 THEN r."deviceFamily" END DESC,
-             CASE WHEN $6 = 'deviceType' AND $7 THEN r."deviceType" END ASC,
-             CASE WHEN $6 = 'deviceType' AND NOT $7 THEN r."deviceType" END DESC,
-             CASE WHEN $6 = 'tag' AND $7 THEN r.tag END ASC,
-             CASE WHEN $6 = 'tag' AND NOT $7 THEN r.tag END DESC
-           LIMIT $8 OFFSET $9"#,
-        [
-            query.device_type.clone().into(),
-            query.device_family.clone().into(),
-            flagged.into(),
-            query.build_version.clone().into(),
-            search.map(str::to_owned).into(),
-            sort_by.into(),
-            ascending.into(),
-            limit.into(),
-            ((page - 1) * limit).into(),
-        ],
-    ))
+
+    let total_count =
+        build_list_filters(release::Entity::find(), query, flagged).count(orm).await? as i64;
+    let builds = order_builds(
+        build_list_filters(release::Entity::find(), query, flagged),
+        sort_by,
+        ascending,
+    )
+    .limit(limit as u64)
+    .offset(((page - 1) * limit) as u64)
     .all(orm)
     .await?
-    .into_iter()
-    .map(|row| row.value)
+    .iter()
+    .map(release_json)
     .collect::<Vec<_>>();
+
     Ok(BuildList {
         requested_count: builds.len() as u64,
         builds,

@@ -64,7 +64,7 @@ pub struct TtyEntry {
     pub power: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct FlashConfirmationQuery {
     pub status: CallbackStatus,
 }

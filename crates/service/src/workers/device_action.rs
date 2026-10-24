@@ -6,7 +6,8 @@ use tracing::{error, info};
 use crate::{
     devices::{DEVICE_ACTION_HTTP_TIMEOUT, DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
     persistence::entity::{
-        device, device_action_queue, device_state_change, release, test_execution,
+        device, device_action_queue, device_controller, device_state_change, relay, relay_channel,
+        release, test_execution,
     },
     socket::{
         helpers::{assignment_events, dispatch_failure_events},
@@ -19,9 +20,8 @@ use crate::{
 use super::test_preconditions;
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, ExprTrait, FromQueryResult,
-    JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Set, Statement,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, EntityTrait, ExprTrait, JoinType, QueryFilter, QueryOrder,
+    QuerySelect, RelationTrait, Set, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
 
@@ -568,31 +568,99 @@ async fn resolve_gen4_ipl_target(
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable for Gen4 IPL".to_owned())?;
-    // LATERAL jsonb_each + regexp_replace MAC match — irreducible Entity API.
-    Gen4IplTarget::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT dc."ipAddress" AS controller_ip,
-             r."serialNumber" AS relay_serial, rc."channelNumber" AS channel_number,
-             COALESCE(d."macAddress", d."deviceId") AS device_mac,
-             mapping.value ->> 'gpio' AS gpio,
-             COALESCE(mapping.value ->> 'gpioDefaultLevel', 'LOW') AS gpio_default_level,
-             COALESCE(mapping.value ->> 'relayDefaultLevel', 'LOW') AS relay_default_level
-           FROM devices d
-           JOIN relay_channels rc ON rc."deviceId" = d."deviceId" AND rc."deletedAt" IS NULL
-           JOIN relays r ON r.id = rc."relayId" AND r."deletedAt" IS NULL
-           JOIN device_controllers dc
-             ON dc."deviceControllerId" = r."deviceControllerId" AND dc."deletedAt" IS NULL
-           JOIN LATERAL jsonb_each(COALESCE(dc.mappings, '{}'::jsonb)) mapping
-             ON regexp_replace(lower(mapping.key), '[:-]', '', 'g') =
-                regexp_replace(lower(COALESCE(d."macAddress", d."deviceId")), '[:-]', '', 'g')
-           WHERE d."deviceId" = $1 AND d."deletedAt" IS NULL
-             AND replace(lower(COALESCE(d."deviceFamily", '')), ' ', '') = 'gen4'
-           ORDER BY rc."updatedAt" DESC LIMIT 1"#,
-        [device_id.into()],
-    ))
-    .one(database.orm())
-    .await
-    .map_err(|error| error.to_string())
+    let orm = database.orm();
+    let device = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .one(orm)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(device) = device else {
+        return Ok(None);
+    };
+    let family = device
+        .device_family
+        .as_deref()
+        .unwrap_or_default()
+        .to_lowercase()
+        .replace(' ', "");
+    if family != "gen4" {
+        return Ok(None);
+    }
+    let device_mac = device
+        .mac_address
+        .clone()
+        .unwrap_or_else(|| device.device_id.clone());
+    let normalized_mac = normalize_mac(&device_mac);
+    let channels = relay_channel::Entity::find()
+        .filter(relay_channel::Column::DeviceId.eq(device_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .order_by_desc(relay_channel::Column::UpdatedAt)
+        .all(orm)
+        .await
+        .map_err(|error| error.to_string())?;
+    for channel in channels {
+        let Some(relay_row) = relay::Entity::find_by_id(channel.relay_id)
+            .filter(relay::Column::DeletedAt.is_null())
+            .one(orm)
+            .await
+            .map_err(|error| error.to_string())?
+        else {
+            continue;
+        };
+        let Some(controller) =
+            device_controller::Entity::find_by_id(relay_row.device_controller_id)
+                .filter(device_controller::Column::DeletedAt.is_null())
+                .one(orm)
+                .await
+                .map_err(|error| error.to_string())?
+        else {
+            continue;
+        };
+        let Some(mapping) = mapping_entry_for_mac(&controller.mappings, &normalized_mac) else {
+            continue;
+        };
+        let gpio = mapping
+            .get("gpio")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_owned();
+        if gpio.is_empty() {
+            continue;
+        }
+        return Ok(Some(Gen4IplTarget {
+            controller_ip: controller.ip_address,
+            relay_serial: relay_row.serial_number,
+            channel_number: channel.channel_number,
+            device_mac,
+            gpio,
+            gpio_default_level: mapping
+                .get("gpioDefaultLevel")
+                .and_then(|value| value.as_str())
+                .unwrap_or("LOW")
+                .to_owned(),
+            relay_default_level: mapping
+                .get("relayDefaultLevel")
+                .and_then(|value| value.as_str())
+                .unwrap_or("LOW")
+                .to_owned(),
+        }));
+    }
+    Ok(None)
+}
+
+fn normalize_mac(value: &str) -> String {
+    value.to_ascii_lowercase().replace([':', '-'], "")
+}
+
+fn mapping_entry_for_mac<'a>(
+    mappings: &'a serde_json::Value,
+    normalized_mac: &str,
+) -> Option<&'a serde_json::Value> {
+    let object = mappings.as_object()?;
+    object.iter().find_map(|(key, value)| {
+        (normalize_mac(key) == normalized_mac).then_some(value)
+    })
 }
 
 async fn request_gen4_ipl(

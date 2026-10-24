@@ -1,22 +1,69 @@
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
-    Statement, sea_query::Expr,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
+    sea_query::{Expr, extension::postgres::PgExpr},
 };
 use uuid::Uuid;
 
 use crate::persistence::entity::alert;
 
-use super::{AlertList, error::DeviceRepositoryError};
+use super::{
+    error::DeviceRepositoryError,
+    postgres::json_models::alert_json,
+    AlertList,
+};
 
-#[derive(Debug, FromQueryResult)]
-struct CountRow {
-    count: i64,
+fn admin_alert_filters(
+    select: sea_orm::Select<alert::Entity>,
+) -> sea_orm::Select<alert::Entity> {
+    let thirty_days_ago = Utc::now() - chrono::Duration::days(30);
+    select
+        .filter(alert::Column::DeletedAt.is_null())
+        .filter(
+            Condition::any()
+                .add(alert::Column::Status.ne(alert::AlertStatus::Read))
+                .add(
+                    Condition::all()
+                        .add(alert::Column::Status.eq(alert::AlertStatus::Read))
+                        .add(alert::Column::CreatedAt.gte(thirty_days_ago)),
+                ),
+        )
+        .filter(
+            Condition::any()
+                .add(Expr::cust(
+                    r#"(data->>'deviceId' IN (
+                        SELECT d."deviceId" FROM devices d
+                        WHERE d."deletedAt" IS NULL AND d.status::text = 'approved'
+                    ))"#,
+                ))
+                .add(alert::Column::DeviceId.is_not_null())
+                .add(alert::Column::DeviceControllerId.is_not_null())
+                .add(alert::Column::BuildId.is_not_null())
+                .add(alert::Column::FaultyReportId.is_not_null())
+                .add(Expr::col(alert::Column::Title).ilike("%removed%")),
+        )
 }
 
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: serde_json::Value,
+fn order_admin_alerts(
+    select: sea_orm::Select<alert::Entity>,
+    sort_by: &str,
+    descending: bool,
+) -> sea_orm::Select<alert::Entity> {
+    match (sort_by, descending) {
+        ("title", true) => select.order_by_desc(alert::Column::Title),
+        ("title", false) => select.order_by_asc(alert::Column::Title),
+        ("type", true) => select.order_by_desc(alert::Column::Type),
+        ("type", false) => select.order_by_asc(alert::Column::Type),
+        ("status", true) => select.order_by_desc(alert::Column::Status),
+        ("status", false) => select.order_by_asc(alert::Column::Status),
+        ("isRead", true) => select.order_by_desc(alert::Column::IsRead),
+        ("isRead", false) => select.order_by_asc(alert::Column::IsRead),
+        ("updatedAt", true) => select.order_by_desc(alert::Column::UpdatedAt),
+        ("updatedAt", false) => select.order_by_asc(alert::Column::UpdatedAt),
+        (_, true) => select.order_by_desc(alert::Column::CreatedAt),
+        (_, false) => select.order_by_asc(alert::Column::CreatedAt),
+    }
 }
 
 pub(crate) async fn list_admin(
@@ -27,85 +74,15 @@ pub(crate) async fn list_admin(
     descending: bool,
 ) -> Result<AlertList, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "list_admin");
-    let total_data = CountRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT COUNT(*) AS count
-           FROM alerts a
-           WHERE a.deleted_at IS NULL
-             AND (a.status::text <> 'read'
-                  OR (a.status::text = 'read' AND a.created_at >= now() - interval '30 days'))
-             AND (
-                 a.data->>'deviceId' IN (
-                     SELECT d."deviceId" FROM devices d
-                     WHERE d."deletedAt" IS NULL AND d.status::text = 'approved'
-                 )
-                 OR a.device_id IS NOT NULL
-                 OR a.device_controller_id IS NOT NULL
-                 OR a.build_id IS NOT NULL
-                 OR a.faulty_report_id IS NOT NULL
-                 OR a.title ILIKE '%removed%'
-             )"#,
-        [],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.count)
-    .unwrap_or(0);
-
-    let data = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT jsonb_build_object(
-               'id', a.id, 'userId', a.user_id, 'title', a.title, 'message', a.message,
-               'data', a.data, 'type', a.type::text, 'status', a.status::text,
-               'isRead', a.is_read, 'readAt', a.read_at, 'createdAt', a.created_at,
-               'updatedAt', a.updated_at, 'buildId', a.build_id,
-               'faultyReportId', a.faulty_report_id, 'deviceId', a.device_id,
-               'deviceControllerId', a.device_controller_id) AS value
-           FROM alerts a
-           WHERE a.deleted_at IS NULL
-             AND (a.status::text <> 'read'
-                  OR (a.status::text = 'read' AND a.created_at >= now() - interval '30 days'))
-             AND (
-                 a.data->>'deviceId' IN (
-                     SELECT d."deviceId" FROM devices d
-                     WHERE d."deletedAt" IS NULL AND d.status::text = 'approved'
-                 )
-                 OR a.device_id IS NOT NULL
-                 OR a.device_controller_id IS NOT NULL
-                 OR a.build_id IS NOT NULL
-                 OR a.faulty_report_id IS NOT NULL
-                 OR a.title ILIKE '%removed%'
-             )
-           ORDER BY
-             CASE WHEN $3 THEN CASE $4
-                 WHEN 'title' THEN to_jsonb(a.title)
-                 WHEN 'type' THEN to_jsonb(a.type::text)
-                 WHEN 'status' THEN to_jsonb(a.status::text)
-                 WHEN 'isRead' THEN to_jsonb(a.is_read)
-                 WHEN 'updatedAt' THEN to_jsonb(a.updated_at)
-                 ELSE to_jsonb(a.created_at)
-             END END DESC,
-             CASE WHEN NOT $3 THEN CASE $4
-                 WHEN 'title' THEN to_jsonb(a.title)
-                 WHEN 'type' THEN to_jsonb(a.type::text)
-                 WHEN 'status' THEN to_jsonb(a.status::text)
-                 WHEN 'isRead' THEN to_jsonb(a.is_read)
-                 WHEN 'updatedAt' THEN to_jsonb(a.updated_at)
-                 ELSE to_jsonb(a.created_at)
-             END END ASC
-            LIMIT $1 OFFSET $2"#,
-        [
-            limit.into(),
-            ((page - 1) * limit).into(),
-            descending.into(),
-            sort_by.into(),
-        ],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect();
+    let total_data = admin_alert_filters(alert::Entity::find()).count(orm).await? as i64;
+    let data = order_admin_alerts(admin_alert_filters(alert::Entity::find()), sort_by, descending)
+        .limit(limit as u64)
+        .offset(((page - 1) * limit) as u64)
+        .all(orm)
+        .await?
+        .iter()
+        .map(alert_json)
+        .collect();
 
     Ok(AlertList {
         data,
@@ -116,6 +93,21 @@ pub(crate) async fn list_admin(
     })
 }
 
+fn list_all_filters(
+    mut select: sea_orm::Select<alert::Entity>,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> sea_orm::Select<alert::Entity> {
+    select = select.filter(alert::Column::DeletedAt.is_null());
+    if let Some(from) = from {
+        select = select.filter(alert::Column::CreatedAt.gte(from));
+    }
+    if let Some(to) = to {
+        select = select.filter(alert::Column::CreatedAt.lte(to));
+    }
+    select
+}
+
 pub(crate) async fn list_all(
     orm: &DatabaseConnection,
     page: i64,
@@ -124,57 +116,22 @@ pub(crate) async fn list_all(
     to: Option<DateTime<Utc>>,
 ) -> Result<AlertList, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "list_all");
-    let total_data = CountRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT COUNT(*) AS count FROM alerts
-           WHERE deleted_at IS NULL
-             AND ($1::timestamptz IS NULL OR created_at >= $1)
-             AND ($2::timestamptz IS NULL OR created_at <= $2)"#,
-        [from.into(), to.into()],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.count)
-    .unwrap_or(0);
-    let total_unread_count = CountRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT COUNT(*) AS count FROM alerts
-           WHERE deleted_at IS NULL AND is_read = false
-             AND ($1::timestamptz IS NULL OR created_at >= $1)
-             AND ($2::timestamptz IS NULL OR created_at <= $2)"#,
-        [from.into(), to.into()],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.count)
-    .unwrap_or(0);
-    let data = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT jsonb_build_object(
-               'id', a.id, 'userId', a.user_id, 'title', a.title, 'message', a.message,
-               'data', a.data, 'type', a.type::text, 'status', a.status::text,
-               'isRead', a.is_read, 'readAt', a.read_at, 'createdAt', a.created_at,
-               'updatedAt', a.updated_at, 'buildId', a.build_id,
-               'faultyReportId', a.faulty_report_id, 'deviceId', a.device_id,
-               'deviceControllerId', a.device_controller_id) AS value
-           FROM alerts a
-           WHERE a.deleted_at IS NULL
-             AND ($3::timestamptz IS NULL OR a.created_at >= $3)
-             AND ($4::timestamptz IS NULL OR a.created_at <= $4)
-           ORDER BY a.created_at DESC
-            LIMIT $1 OFFSET $2"#,
-        [
-            limit.into(),
-            ((page - 1) * limit).into(),
-            from.into(),
-            to.into(),
-        ],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect();
+    let total_data = list_all_filters(alert::Entity::find(), from, to)
+        .count(orm)
+        .await? as i64;
+    let total_unread_count = list_all_filters(alert::Entity::find(), from, to)
+        .filter(alert::Column::IsRead.eq(false))
+        .count(orm)
+        .await? as i64;
+    let data = list_all_filters(alert::Entity::find(), from, to)
+        .order_by_desc(alert::Column::CreatedAt)
+        .limit(limit as u64)
+        .offset(((page - 1) * limit) as u64)
+        .all(orm)
+        .await?
+        .iter()
+        .map(alert_json)
+        .collect();
 
     Ok(AlertList {
         data,

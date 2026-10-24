@@ -1,10 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter, Set,
-    Statement, TransactionTrait,
-    sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -41,54 +41,51 @@ async fn run_cycle(state: &AppState) {
             return;
         }
     };
-    let batch_size = i64::from(state.config.workers.device_heartbeat_batch_size);
-    // LATERAL last-seen / target-state + SKIP LOCKED — irreducible.
-    let stale_devices = match StaleDevice::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT device."deviceId" AS device_id,
-              COALESCE(device.state::text, 'unknown') AS previous_state,
-                  target.target_state,
-                  floor(extract(epoch FROM now() - seen.last_seen))::integer AS timeout
-           FROM devices device
-           CROSS JOIN LATERAL (
-               SELECT COALESCE(
-                   (SELECT max(heartbeat.timestamp)
-                    FROM heartbeats heartbeat
-                    WHERE heartbeat."deviceId" = device."deviceId"
-                      AND NOT (heartbeat.data @> '{"status":"disconnected"}'::jsonb)),
-                   device."lastConnectedOn", device."createdAt"
-               ) AS last_seen
-           ) seen
-           CROSS JOIN LATERAL (
-               SELECT CASE
-                   WHEN seen.last_seen < now() -
-                        (GREATEST(COALESCE(device."heartbeatTimer", 5), 1) * 12 * interval '1 second')
-                   THEN 'faulty'
-                   ELSE 'not_reachable'
-               END AS target_state
-           ) target
-           WHERE device."deletedAt" IS NULL
-             AND device.status::text = 'approved'
-             AND seen.last_seen < now() -
-                 (GREATEST(COALESCE(device."heartbeatTimer", 5), 1) * 6 * interval '1 second')
-             AND COALESCE(device.state::text, 'unknown') <> target.target_state
-             AND NOT EXISTS (
+    let batch_size = u64::from(state.config.workers.device_heartbeat_batch_size);
+    let candidates = match device::Entity::find()
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(Expr::cust(
+            r#"COALESCE(
+                 (SELECT max(heartbeat.timestamp)
+                  FROM heartbeats heartbeat
+                  WHERE heartbeat."deviceId" = "devices"."deviceId"
+                    AND NOT (heartbeat.data @> '{"status":"disconnected"}'::jsonb)),
+                 "devices"."lastConnectedOn",
+                 "devices"."createdAt"
+               ) < now() - (GREATEST(COALESCE("devices"."heartbeatTimer", 5), 1) * 6 * interval '1 second')"#,
+        ))
+        .filter(Expr::cust(
+            r#"NOT EXISTS (
                  SELECT 1 FROM device_action_queue action
-                 WHERE action."targetDeviceId" = device."deviceId"
+                 WHERE action."targetDeviceId" = "devices"."deviceId"
                    AND action.status::text IN ('queued', 'waiting', 'running')
-             )
-             AND NOT EXISTS (
+               )"#,
+        ))
+        .filter(Expr::cust(
+            r#"NOT EXISTS (
                  SELECT 1 FROM fallback_updates fallback
-                 WHERE fallback."deviceId" = device."deviceId"
+                 WHERE fallback."deviceId" = "devices"."deviceId"
                    AND fallback.status::text IN ('pending', 'flashing')
-             )
-           ORDER BY seen.last_seen ASC
-           LIMIT $1
-           FOR UPDATE OF device SKIP LOCKED"#,
-        [batch_size.into()],
-    ))
-    .all(&transaction)
-    .await
+               )"#,
+        ))
+        .order_by_asc::<Expr>(
+            Expr::cust(
+                r#"COALESCE(
+                     (SELECT max(heartbeat.timestamp)
+                      FROM heartbeats heartbeat
+                      WHERE heartbeat."deviceId" = "devices"."deviceId"
+                        AND NOT (heartbeat.data @> '{"status":"disconnected"}'::jsonb)),
+                     "devices"."lastConnectedOn",
+                     "devices"."createdAt"
+                   )"#,
+            )
+            .into(),
+        )
+        .limit(batch_size)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .all(&transaction)
+        .await
     {
         Ok(devices) => devices,
         Err(error) => {
@@ -98,17 +95,28 @@ async fn run_cycle(state: &AppState) {
         }
     };
 
-    let mut transitions = Vec::with_capacity(stale_devices.len());
+    let mut transitions = Vec::with_capacity(candidates.len());
     let now = Utc::now();
-    for device_row in stale_devices {
+    for device_row in candidates {
+        let last_seen = match latest_connected_seen(&transaction, &device_row).await {
+            Ok(last_seen) => last_seen,
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                record_failure(state, &error, "failed to resolve device last-seen");
+                return;
+            }
+        };
+        let Some(stale) = classify_stale_device(&device_row, last_seen, now) else {
+            continue;
+        };
         let (device_state, change_state, alert_type, title, message, state_label) =
-            if device_row.target_state == "faulty" {
+            if stale.target_state == "faulty" {
                 (
                     device::DeviceState::Faulty,
                     device_state_change::DeviceStateChangeState::Faulty,
                     alert::AlertType::Error,
                     "Device goes faulty".to_owned(),
-                    format!("Device {} is faulty", device_row.device_id),
+                    format!("Device {} is faulty", stale.device_id),
                     "faulty",
                 )
             } else {
@@ -116,8 +124,8 @@ async fn run_cycle(state: &AppState) {
                     device::DeviceState::NotReachable,
                     device_state_change::DeviceStateChangeState::NotReachable,
                     alert::AlertType::Warning,
-                    format!("Device {} is not_reachable", device_row.device_id),
-                    format!("Device {} is not_reachable", device_row.device_id),
+                    format!("Device {} is not_reachable", stale.device_id),
+                    format!("Device {} is not_reachable", stale.device_id),
                     "not_reachable",
                 )
             };
@@ -125,7 +133,7 @@ async fn run_cycle(state: &AppState) {
             .col_expr(device::Column::State, Expr::value(Some(device_state)))
             .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
             .col_expr(device::Column::UpdatedAt, Expr::value(now))
-            .filter(device::Column::DeviceId.eq(&device_row.device_id))
+            .filter(device::Column::DeviceId.eq(&stale.device_id))
             .exec(&transaction)
             .await
         {
@@ -134,7 +142,7 @@ async fn run_cycle(state: &AppState) {
             return;
         }
         if let Err(error) = (device_state_change::ActiveModel {
-            device_id: Set(device_row.device_id.clone()),
+            device_id: Set(stale.device_id.clone()),
             state: Set(change_state),
             changed_at: Set(now),
             created_at: Set(now),
@@ -149,9 +157,9 @@ async fn run_cycle(state: &AppState) {
             return;
         }
         if let Err(error) = (heartbeat::ActiveModel {
-            device_id: Set(device_row.device_id.clone()),
+            device_id: Set(stale.device_id.clone()),
             timestamp: Set(now),
-            timeout: Set(device_row.timeout),
+            timeout: Set(stale.timeout),
             data: Set(serde_json::json!({"status":"disconnected"})),
             ..Default::default()
         })
@@ -170,10 +178,10 @@ async fn run_cycle(state: &AppState) {
             r#type: Set(alert_type),
             status: Set(alert::AlertStatus::Unread),
             is_read: Set(false),
-            device_id: Set(Some(device_row.device_id.clone())),
+            device_id: Set(Some(stale.device_id.clone())),
             data: Set(Some(serde_json::json!({
-                "deviceId": device_row.device_id,
-                "previousState": device_row.previous_state,
+                "deviceId": stale.device_id,
+                "previousState": stale.previous_state,
                 "state": state_label,
             }))),
             created_at: Set(now),
@@ -191,8 +199,8 @@ async fn run_cycle(state: &AppState) {
             }
         };
         transitions.push(DeviceStateTransition {
-            device_id: device_row.device_id,
-            state: DeviceState::from(&device_row.target_state),
+            device_id: stale.device_id,
+            state: DeviceState::from(&stale.target_state),
             alert,
         });
     }
@@ -214,6 +222,63 @@ async fn run_cycle(state: &AppState) {
     state
         .metrics
         .record_worker_run("device_heartbeat_timeout", "success");
+}
+
+async fn latest_connected_seen(
+    transaction: &sea_orm::DatabaseTransaction,
+    device_row: &device::Model,
+) -> Result<DateTime<Utc>, sea_orm::DbErr> {
+    let heartbeat_seen = heartbeat::Entity::find()
+        .filter(heartbeat::Column::DeviceId.eq(&device_row.device_id))
+        .filter(Expr::cust(
+            r#"NOT (data @> '{"status":"disconnected"}'::jsonb)"#,
+        ))
+        .order_by_desc(heartbeat::Column::Timestamp)
+        .select_only()
+        .column(heartbeat::Column::Timestamp)
+        .into_tuple::<DateTime<Utc>>()
+        .one(transaction)
+        .await?;
+    Ok(heartbeat_seen.unwrap_or(device_row.last_connected_on))
+}
+
+
+fn classify_stale_device(
+    device_row: &device::Model,
+    last_seen: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<StaleDevice> {
+    let timer = device_row.heartbeat_timer.max(1) as i64;
+    let not_reachable_after = chrono::Duration::seconds(timer * 6);
+    let faulty_after = chrono::Duration::seconds(timer * 12);
+    if now.signed_duration_since(last_seen) < not_reachable_after {
+        return None;
+    }
+    let target_state = if now.signed_duration_since(last_seen) >= faulty_after {
+        "faulty"
+    } else {
+        "not_reachable"
+    };
+    let previous_state = match device_row.state.as_ref() {
+        Some(device::DeviceState::Busy) => "busy",
+        Some(device::DeviceState::NotReachable) => "not_reachable",
+        Some(device::DeviceState::Free) => "free",
+        Some(device::DeviceState::Faulty) => "faulty",
+        Some(device::DeviceState::Unknown) | None => "unknown",
+    };
+    if previous_state == target_state {
+        return None;
+    }
+    let timeout = now
+        .signed_duration_since(last_seen)
+        .num_seconds()
+        .clamp(0, i64::from(i32::MAX)) as i32;
+    Some(StaleDevice {
+        device_id: device_row.device_id.clone(),
+        previous_state: previous_state.to_owned(),
+        target_state: target_state.to_owned(),
+        timeout,
+    })
 }
 
 fn device_alert_json(model: &alert::Model) -> serde_json::Value {

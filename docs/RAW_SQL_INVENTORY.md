@@ -2,19 +2,22 @@
 
 > Generated: 2026-10-24  
 > Scope: `crates/service`, `crates/integrations`, `crates/core` (excluding `migrations/`, `target/`)  
-> **Status: MIGRATED (2026-10-24)**  
+> **Status: FULLY MIGRATED TO SEAORM ENTITY APIs (2026-10-24)**  
 > - Active `sqlx::query*` call sites: **0**  
+> - Active `Statement::from_sql_and_values` / `orm_util` call sites: **0** (`orm_util.rs` removed)  
 > - `sqlx` remains only for `PgPool` bootstrap + `sqlx::migrate!` in `persistence/mod.rs`  
 > - New entities: `gen5_reboot_attempt`, `device_uart_mapping`, `retention_policy`  
-> - Helper: `persistence/orm_util.rs` (`query_all` / `query_one` / `execute` via SeaORM `Statement`)
+> - JSON assembly: `devices/postgres/json_models.rs` (replaces `to_jsonb` / `jsonb_agg`)  
+> - Remaining SQL fragments: `Expr::cust` / `Expr::cust_with_values` inside Entity queries only (enum `::text` casts, MAC normalize, COALESCE, SKIP LOCKED claim predicates)
 
 ## Migration outcome
 
 | Layer | Result |
 |-------|--------|
 | `sqlx::query` / `query_as` / `query_scalar` | **Removed everywhere** |
-| SeaORM Entity / ActiveModel / `update_many` | Primary path for CRUD, filters, joins |
-| SeaORM `Statement` / `orm_util` | Retained only where SQL is not expressible cleanly as Entity builders: `FOR UPDATE SKIP LOCKED` claims, `LATERAL` / `jsonb_each` matching, analytics CTEs, dynamic retention DELETEs, nested `jsonb` export shapes |
+| SeaORM `Statement` / `orm_util` | **Removed everywhere** |
+| SeaORM Entity / ActiveModel / `update_many` / `lock_with_behavior(SkipLocked)` | Primary path for CRUD, claims, filters, joins |
+| Rust aggregation + `json_models` | Analytics CTEs, nested JSON exports, LATERAL mapping resolution |
 
 Historical per-file counts below are the **pre-migration** inventory (kept for audit). All listed sites were converted; treat Status column as superseded by this outcome section.
 

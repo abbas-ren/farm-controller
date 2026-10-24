@@ -9,7 +9,7 @@ use crate::workers::types::DeviceState;
 use crate::{devices::types::IplFlashingStatus, socket::types::farm::ServerEvent};
 use axum::{
     Json,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -203,6 +203,28 @@ pub async fn flash_confirm(
     flash_confirmation_response(&state, "x5h", flashing_status).await
 }
 
+/// Legacy Node/EdgeController compatibility: `GET /flash-confirm?status=success|failure`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/device/flash-confirm",
+    tag = "Devices",
+    summary = "Confirm a Gen5 IPL flash (legacy query)",
+    params(FlashConfirmationQuery),
+    responses(
+        (status = 200, description = "Confirmation processed", body = CallbackResponse),
+        (status = 500, description = "Confirmation persistence failed", body = ErrorResponse),
+        (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
+    )
+)]
+pub async fn flash_confirm_get(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FlashConfirmationQuery>,
+) -> axum::response::Response {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::callbacks", "flash_confirm_get");
+    flash_confirmation_response(&state, "x5h", legacy_flash_status(query.status, 5)).await
+}
+
 #[utoipa::path(
     post,
     path = "/api/v1/device/flash-confirm-gen4",
@@ -243,6 +265,39 @@ pub async fn flash_confirm_gen4(
         response.status()
     );
     response
+}
+
+/// Legacy Node/EdgeController compatibility: `GET /flash-confirm-gen4?status=success|failure`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/device/flash-confirm-gen4",
+    tag = "Devices",
+    summary = "Confirm a Gen4 IPL flash (legacy query)",
+    params(FlashConfirmationQuery),
+    responses(
+        (status = 200, description = "Confirmation processed", body = CallbackResponse),
+        (status = 500, description = "Confirmation persistence failed", body = ErrorResponse),
+        (status = 503, description = "Device persistence unavailable", body = ErrorResponse)
+    )
+)]
+pub async fn flash_confirm_gen4_get(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FlashConfirmationQuery>,
+) -> axum::response::Response {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::callbacks", "flash_confirm_gen4_get");
+    flash_confirmation_response(&state, "v4h", legacy_flash_status(query.status, 4)).await
+}
+
+fn legacy_flash_status(status: CallbackStatus, generation: u8) -> IplFlashingStatus {
+    IplFlashingStatus {
+        status,
+        percentage: 100,
+        completed: true,
+        mac: String::new(),
+        generation,
+        message: String::new(),
+    }
 }
 
 async fn callback_response<F, Fut>(

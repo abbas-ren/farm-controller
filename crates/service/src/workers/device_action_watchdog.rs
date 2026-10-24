@@ -2,9 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use sea_orm::{
-    ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, Statement, TransactionTrait,
-    sea_query::{Expr, LockType},
+    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+    TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -43,26 +43,42 @@ async fn run_cycle(state: &AppState) {
     let timeout_minutes =
         i64::try_from(state.config.workers.device_action_stale_timeout_minutes).unwrap_or(i64::MAX);
     let batch_size = u64::from(state.config.workers.device_action_watchdog_batch_size);
-    // Join + interval timeout + SKIP LOCKED — keep as Statement.
-    let actions = match StaleAction::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT action.id, action.type::text AS job_type, action."testId" AS test_id,
-                  action."releaseId" AS release_id, action."targetDeviceId" AS device_id,
-                  action."deviceType" AS device_type, action."userId" AS user_id,
-                  test."buildId"::text AS build_id, test."createdBy" AS created_by,
-                  release.version
-           FROM device_action_queue action
-           LEFT JOIN test_executions test ON test."testId" = action."testId"
-           LEFT JOIN releases release ON release.id = action."releaseId"
-           WHERE action.status::text IN ('running', 'waiting')
-             AND action."updatedAt" < now() - ($1 * interval '1 minute')
-           ORDER BY action."updatedAt" ASC
-           LIMIT $2
-           FOR UPDATE OF action SKIP LOCKED"#,
-        [timeout_minutes.into(), (batch_size as i64).into()],
-    ))
-    .all(&transaction)
-    .await
+    let actions = match device_action_queue::Entity::find()
+        .join(
+            JoinType::LeftJoin,
+            device_action_queue::Relation::TestExecution.def(),
+        )
+        .join(
+            JoinType::LeftJoin,
+            device_action_queue::Relation::Release.def(),
+        )
+        .select_only()
+        .column(device_action_queue::Column::Id)
+        .column_as(Expr::cust(r#""device_action_queue"."type"::text"#), "job_type")
+        .column(device_action_queue::Column::TestId)
+        .column(device_action_queue::Column::ReleaseId)
+        .column_as(device_action_queue::Column::TargetDeviceId, "device_id")
+        .column(device_action_queue::Column::DeviceType)
+        .column(device_action_queue::Column::UserId)
+        .column_as(Expr::cust(r#"test_executions."buildId"::text"#), "build_id")
+        .column_as(test_execution::Column::CreatedBy, "created_by")
+        .column_as(release::Column::Version, "version")
+        .filter(
+            device_action_queue::Column::Status.is_in([
+                device_action_queue::QueueJobStatus::Running,
+                device_action_queue::QueueJobStatus::Waiting,
+            ]),
+        )
+        .filter(Expr::cust_with_values(
+            r#""device_action_queue"."updatedAt" < now() - ($1 * interval '1 minute')"#,
+            [timeout_minutes],
+        ))
+        .order_by_asc(device_action_queue::Column::UpdatedAt)
+        .limit(batch_size)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .into_model::<StaleAction>()
+        .all(&transaction)
+        .await
     {
         Ok(actions) => actions,
         Err(error) => {
@@ -205,7 +221,7 @@ async fn fail_flash_action(
                 .filter(release::Column::Status.eq(release::ReleaseTestStatus::Testing))
                 .order_by_desc(release::Column::UpdatedAt)
                 .limit(1)
-                .lock(LockType::Update)
+                .lock(sea_orm::sea_query::LockType::Update)
                 .select_only()
                 .column(release::Column::Id)
                 .into_tuple::<uuid::Uuid>()

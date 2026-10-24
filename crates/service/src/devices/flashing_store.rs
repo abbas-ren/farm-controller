@@ -1,7 +1,7 @@
 use chrono::Utc;
 use sea_orm::{
-    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, Statement, TransactionTrait,
+    ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    QuerySelect, TransactionTrait,
     sea_query::{Expr, LockType},
 };
 
@@ -11,6 +11,7 @@ use crate::persistence::entity::{
 
 use super::{
     error::DeviceRepositoryError,
+    postgres::json_models::mapping_uart_port,
     repository_types::{DeviceFlashingResult, RtosCaptureTarget},
     validation::compare_versions,
 };
@@ -130,7 +131,33 @@ pub(crate) async fn mark_device_flashing(
         .ok_or_else(|| {
             DeviceRepositoryError::Internal("device disappeared after flashing update".to_owned())
         })?;
-    let updated = device_json(&updated_device);
+    // Flashing response historically returns a device-field subset (not full device_json).
+    let updated = serde_json::json!({
+        "id": updated_device.id,
+        "deviceName": updated_device.device_name,
+        "deviceFamily": updated_device.device_family,
+        "deviceId": updated_device.device_id,
+        "macAddress": updated_device.mac_address,
+        "ipAddress": updated_device.ip_address,
+        "deviceType": updated_device.device_type,
+        "state": updated_device.state.as_ref().map(|state| match state {
+            device::DeviceState::Busy => "busy",
+            device::DeviceState::NotReachable => "not_reachable",
+            device::DeviceState::Free => "free",
+            device::DeviceState::Faulty => "faulty",
+            device::DeviceState::Unknown => "unknown",
+        }),
+        "status": updated_device.status.as_ref().map(|status| match status {
+            device::DeviceStatus::Approved => "approved",
+            device::DeviceStatus::Requested => "requested",
+            device::DeviceStatus::Declined => "declined",
+        }),
+        "upgrading": updated_device.upgrading,
+        "flashing": updated_device.flashing,
+        "softwareVersion": updated_device.software_version,
+        "updatedAt": updated_device.updated_at,
+        "createdAt": updated_device.created_at,
+    });
 
     let family = device_row.device_family.as_deref().map(|value| {
         value
@@ -141,32 +168,23 @@ pub(crate) async fn mark_device_flashing(
     let rtos_target = if active_job_type.as_deref() == Some("test") {
         match family.as_deref() {
             Some("gen5") => {
-                #[derive(Debug, FromQueryResult)]
-                struct Gen5Target {
-                    ip_address: String,
-                    uart_port: Option<String>,
-                }
-                // LATERAL jsonb_each + regexp_replace MAC match — irreducible.
-                Gen5Target::find_by_statement(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    r#"SELECT controller."ipAddress" AS ip_address,
-                              entry.value ->> 'uart' AS uart_port
-                       FROM device_controllers controller
-                       CROSS JOIN LATERAL jsonb_each(COALESCE(controller.mappings, '{}'::jsonb)) entry
-                       WHERE controller.status::text = 'approved'
-                         AND controller.state::text = 'active'
-                         AND controller."deletedAt" IS NULL
-                         AND regexp_replace(lower(entry.key), '[:-]', '', 'g') =
-                             regexp_replace(lower($1), '[:-]', '', 'g')
-                         AND COALESCE(entry.value ->> 'uart', '') <> ''
-                       ORDER BY controller."updatedAt" DESC LIMIT 1"#,
-                    [mac_address.clone().into()],
-                ))
-                .one(&transaction)
-                .await?
-                .and_then(|row| {
-                    row.uart_port.map(|uart_port| RtosCaptureTarget {
-                        controller_ip: row.ip_address,
+                let controllers = device_controller::Entity::find()
+                    .filter(
+                        device_controller::Column::Status
+                            .eq(device_controller::DeviceControllerStatus::Approved),
+                    )
+                    .filter(
+                        device_controller::Column::State
+                            .eq(device_controller::DeviceControllerState::Active),
+                    )
+                    .filter(device_controller::Column::DeletedAt.is_null())
+                    .order_by_desc(device_controller::Column::UpdatedAt)
+                    .all(&transaction)
+                    .await?;
+                controllers.into_iter().find_map(|controller| {
+                    let uart_port = mapping_uart_port(&controller.mappings, &mac_address)?;
+                    Some(RtosCaptureTarget {
+                        controller_ip: controller.ip_address,
                         mac_address: mac_address.clone(),
                         generation: 5,
                         rtos_port: Some(next_uart_port(&uart_port)),
@@ -215,35 +233,6 @@ pub(crate) async fn mark_device_flashing(
         device: updated,
         rtos_target,
     }))
-}
-
-fn device_json(model: &device::Model) -> serde_json::Value {
-    serde_json::json!({
-        "id": model.id,
-        "deviceName": model.device_name,
-        "deviceFamily": model.device_family,
-        "deviceId": model.device_id,
-        "macAddress": model.mac_address,
-        "ipAddress": model.ip_address,
-        "deviceType": model.device_type,
-        "state": model.state.as_ref().map(|state| match state {
-            device::DeviceState::Busy => "busy",
-            device::DeviceState::NotReachable => "not_reachable",
-            device::DeviceState::Free => "free",
-            device::DeviceState::Faulty => "faulty",
-            device::DeviceState::Unknown => "unknown",
-        }),
-        "status": model.status.as_ref().map(|status| match status {
-            device::DeviceStatus::Approved => "approved",
-            device::DeviceStatus::Requested => "requested",
-            device::DeviceStatus::Declined => "declined",
-        }),
-        "upgrading": model.upgrading,
-        "flashing": model.flashing,
-        "softwareVersion": model.software_version,
-        "updatedAt": model.updated_at,
-        "createdAt": model.created_at,
-    })
 }
 
 fn next_uart_port(port: &str) -> String {

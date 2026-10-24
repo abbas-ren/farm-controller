@@ -1,37 +1,22 @@
 use sea_orm::{
-    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
-    Statement, TransactionTrait, sea_query::Expr,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, TransactionTrait,
+    sea_query::{Expr, extension::postgres::PgExpr},
 };
 use uuid::Uuid;
 
-use crate::persistence::entity::{device, pending_relay_config, relay, relay_channel};
+use crate::persistence::entity::{device, device_controller, pending_relay_config, relay, relay_channel};
 
 use super::{
     AvailableRelayDevicesQuery,
     constants::MAX_PAGE_SIZE,
     error::DeviceRepositoryError,
+    postgres::json_models::{
+        available_relay_device_json, mapping_power_port, normalize_mapping_lookup_key, relay_channel_json,
+        relay_channel_with_device_json, relay_json,
+    },
     repository_types::{DevicePowerTarget, RelayIdentityTarget, RelayStateTarget},
 };
-
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: serde_json::Value,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct ExistsRow {
-    exists: bool,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct CountRow {
-    count: i64,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct GenerationRow {
-    generation: Option<String>,
-}
 
 fn parse_channel_state(state: &str) -> Result<relay_channel::ChannelState, DeviceRepositoryError> {
     match state {
@@ -53,40 +38,114 @@ fn parse_device_power(state: &str) -> Result<device::DevicePower, DeviceReposito
     }
 }
 
+fn power_text(power: Option<&device::DevicePower>) -> Option<String> {
+    power.map(|p| match p {
+        device::DevicePower::On => "on".to_owned(),
+        device::DevicePower::Off => "off".to_owned(),
+    })
+}
+
+fn controller_generation(device_family: Option<&str>) -> Option<String> {
+    let normalized = device_family?
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    if str::contains(&normalized, "gen3") {
+        Some("gen3".to_owned())
+    } else if str::contains(&normalized, "gen4") {
+        Some("gen4".to_owned())
+    } else {
+        None
+    }
+}
+
 pub(crate) async fn device_power_target(
     orm: &DatabaseConnection,
     device_id: &str,
 ) -> Result<Option<DevicePowerTarget>, DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::relay_store", "device_power_target");
-    // Complex LATERAL join — keep as raw SQL via SeaORM Statement.
-    Ok(
-        DevicePowerTarget::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT d."deviceFamily" AS device_family, d.power::text AS current_power,
-             COALESCE(relay_dc."ipAddress", mapping."ipAddress") AS controller_ip,
-             mapping.power_port, r."serialNumber" AS relay_serial,
-             rc.id AS channel_id, rc."channelNumber" AS channel_number
-           FROM devices d
-           LEFT JOIN relay_channels rc ON rc."deviceId" = d."deviceId" AND rc."deletedAt" IS NULL
-           LEFT JOIN relays r ON r.id = rc."relayId" AND r."deletedAt" IS NULL
-           LEFT JOIN device_controllers relay_dc ON relay_dc."deviceControllerId" = r."deviceControllerId"
-           LEFT JOIN LATERAL (
-             SELECT dc."ipAddress",
-               dc.mappings -> regexp_replace(lower(COALESCE(d."macAddress", d."deviceId")), '[:-]', '', 'g') ->> 'power' AS power_port
-             FROM device_controllers dc
-             WHERE dc.state::text = 'active' AND dc.status::text = 'approved'
-               AND dc."deletedAt" IS NULL
-               AND dc.mappings ? regexp_replace(lower(COALESCE(d."macAddress", d."deviceId")), '[:-]', '', 'g')
-             ORDER BY (dc."deviceControllerId" = d."controllerId") DESC, dc."updatedAt" DESC LIMIT 1
-           ) mapping ON true
-           WHERE d."deviceId" = $1 AND d."deletedAt" IS NULL
-           ORDER BY rc."updatedAt" DESC NULLS LAST LIMIT 1"#,
-            [device_id.into()],
-        ))
+    let Some(device_row) = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
         .one(orm)
-        .await?,
-    )
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let channel_row = relay_channel::Entity::find()
+        .filter(relay_channel::Column::DeviceId.eq(device_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .find_also_related(relay::Entity)
+        .order_by_desc(relay_channel::Column::UpdatedAt)
+        .one(orm)
+        .await?;
+
+    let (channel_id, channel_number, relay_serial, relay_controller_ip) =
+        match channel_row {
+            Some((channel, Some(relay_row))) if relay_row.deleted_at.is_none() => {
+                let controller = device_controller::Entity::find()
+                    .filter(
+                        device_controller::Column::DeviceControllerId
+                            .eq(&relay_row.device_controller_id),
+                    )
+                    .one(orm)
+                    .await?;
+                (
+                    Some(channel.id),
+                    Some(channel.channel_number),
+                    Some(relay_row.serial_number),
+                    controller.map(|c| c.ip_address),
+                )
+            }
+            _ => (None, None, None, None),
+        };
+
+    let mapping_mac = device_row
+        .mac_address
+        .as_deref()
+        .filter(|mac| !mac.is_empty())
+        .unwrap_or(device_row.device_id.as_str());
+    let normalized_mac = normalize_mapping_lookup_key(mapping_mac);
+
+    let mut controllers = device_controller::Entity::find()
+        .filter(device_controller::Column::State.eq(device_controller::DeviceControllerState::Active))
+        .filter(
+            device_controller::Column::Status.eq(device_controller::DeviceControllerStatus::Approved),
+        )
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .all(orm)
+        .await?;
+    controllers.sort_by(|a, b| {
+        let a_preferred = Some(a.device_controller_id.as_str()) == device_row.controller_id.as_deref();
+        let b_preferred = Some(b.device_controller_id.as_str()) == device_row.controller_id.as_deref();
+        b_preferred
+            .cmp(&a_preferred)
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
+
+    let mapping = controllers.into_iter().find_map(|controller| {
+        let power_port = mapping_power_port(&controller.mappings, &normalized_mac)?;
+        // Exact-key presence check mirrors SQL `mappings ? normalized_key` after fuzzy resolve.
+        Some((controller.ip_address, power_port))
+    });
+
+    let (mapping_ip, power_port) = match mapping {
+        Some((ip, port)) => (Some(ip), Some(port)),
+        None => (None, None),
+    };
+
+    Ok(Some(DevicePowerTarget {
+        device_family: device_row.device_family,
+        current_power: power_text(device_row.power.as_ref()),
+        controller_ip: relay_controller_ip.or(mapping_ip),
+        power_port,
+        relay_serial,
+        channel_id,
+        channel_number,
+    }))
 }
 
 pub(crate) async fn apply_device_power(
@@ -122,14 +181,10 @@ pub(crate) async fn apply_device_power(
         .await?
         .rows_affected;
     let channel = if let Some(channel_id) = channel_id {
-        JsonRow::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT to_jsonb(rc) AS value FROM relay_channels rc WHERE rc.id = $1"#,
-            [channel_id.into()],
-        ))
-        .one(&transaction)
-        .await?
-        .map(|row| row.value)
+        relay_channel::Entity::find_by_id(channel_id)
+            .one(&transaction)
+            .await?
+            .map(|row| relay_channel_json(&row))
     } else {
         None
     };
@@ -145,27 +200,37 @@ pub(crate) async fn relays_for_controller(
 ) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::relay_store", "relays_for_controller");
-    // Nested to_jsonb + jsonb_agg kept as raw SQL for API response shape.
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(r) || jsonb_build_object('relayChannels', COALESCE((
-             SELECT jsonb_agg(to_jsonb(rc) || jsonb_build_object('device', CASE
-               WHEN d."deviceId" IS NULL THEN NULL ELSE jsonb_build_object(
-                 'deviceId', d."deviceId", 'macAddress', d."macAddress",
-                 'deviceName', d."deviceName", 'ipAddress', d."ipAddress",
-                 'deviceType', d."deviceType") END) ORDER BY rc."channelNumber")
-             FROM relay_channels rc LEFT JOIN devices d ON d."deviceId" = rc."deviceId"
-             WHERE rc."relayId" = r.id AND rc."deletedAt" IS NULL
-           ), '[]'::jsonb)) AS value
-           FROM relays r WHERE r."deviceControllerId" = $1 AND r."deletedAt" IS NULL
-           ORDER BY r."createdAt" ASC"#,
-        [controller_id.into()],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect())
+    let relays = relay::Entity::find()
+        .filter(relay::Column::DeviceControllerId.eq(controller_id))
+        .filter(relay::Column::DeletedAt.is_null())
+        .order_by_asc(relay::Column::CreatedAt)
+        .all(orm)
+        .await?;
+    let mut values = Vec::with_capacity(relays.len());
+    for relay_model in relays {
+        let channels = relay_channel::Entity::find()
+            .filter(relay_channel::Column::RelayId.eq(relay_model.id))
+            .filter(relay_channel::Column::DeletedAt.is_null())
+            .order_by_asc(relay_channel::Column::ChannelNumber)
+            .all(orm)
+            .await?;
+        let mut channel_values = Vec::with_capacity(channels.len());
+        for channel in channels {
+            let device = if let Some(device_id) = channel.device_id.as_deref() {
+                device::Entity::find()
+                    .filter(device::Column::DeviceId.eq(device_id))
+                    .one(orm)
+                    .await?
+            } else {
+                None
+            };
+            channel_values.push(relay_channel_with_device_json(&channel, device.as_ref()));
+        }
+        let mut relay_value = relay_json(&relay_model);
+        relay_value["relayChannels"] = serde_json::Value::Array(channel_values);
+        values.push(relay_value);
+    }
+    Ok(values)
 }
 
 pub(crate) async fn channels_for_relay(
@@ -182,25 +247,25 @@ pub(crate) async fn channels_for_relay(
     if !exists {
         return Ok(None);
     }
-    Ok(Some(
-        JsonRow::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT to_jsonb(rc) || jsonb_build_object('device', CASE
-             WHEN d."deviceId" IS NULL THEN NULL ELSE jsonb_build_object(
-               'deviceId', d."deviceId", 'macAddress', d."macAddress",
-               'deviceName', d."deviceName", 'ipAddress', d."ipAddress",
-               'deviceType', d."deviceType") END) AS value
-           FROM relay_channels rc LEFT JOIN devices d ON d."deviceId" = rc."deviceId"
-           WHERE rc."relayId" = $1 AND rc."deletedAt" IS NULL
-           ORDER BY rc."channelNumber" ASC"#,
-            [relay_id.into()],
-        ))
+    let channels = relay_channel::Entity::find()
+        .filter(relay_channel::Column::RelayId.eq(relay_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .order_by_asc(relay_channel::Column::ChannelNumber)
         .all(orm)
-        .await?
-        .into_iter()
-        .map(|row| row.value)
-        .collect(),
-    ))
+        .await?;
+    let mut values = Vec::with_capacity(channels.len());
+    for channel in channels {
+        let device = if let Some(device_id) = channel.device_id.as_deref() {
+            device::Entity::find()
+                .filter(device::Column::DeviceId.eq(device_id))
+                .one(orm)
+                .await?
+        } else {
+            None
+        };
+        values.push(relay_channel_with_device_json(&channel, device.as_ref()));
+    }
+    Ok(Some(values))
 }
 
 pub(crate) async fn available_devices(
@@ -212,60 +277,70 @@ pub(crate) async fn available_devices(
     let page = query.page.unwrap_or(1).max(1);
     let limit = query.limit.unwrap_or(10).clamp(1, MAX_PAGE_SIZE);
     let offset = i64::from(page.saturating_sub(1)) * i64::from(limit);
-    let generation = GenerationRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT CASE
-             WHEN replace(lower(dc."deviceFamily"), ' ', '') LIKE '%gen3%' THEN 'gen3'
-             WHEN replace(lower(dc."deviceFamily"), ' ', '') LIKE '%gen4%' THEN 'gen4'
-             ELSE NULL END AS generation
-           FROM relays r JOIN device_controllers dc
-             ON dc."deviceControllerId" = r."deviceControllerId"
-           WHERE r.id = $1 AND r."deletedAt" IS NULL"#,
-        [query.relay_id.into()],
-    ))
-    .one(orm)
-    .await?
-    .and_then(|row| row.generation);
-    let total_count = CountRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT count(*) AS count FROM devices d
-           WHERE d."deletedAt" IS NULL
-             AND NOT EXISTS (SELECT 1 FROM relay_channels rc
-               WHERE rc."deviceId" = d."deviceId" AND rc."deletedAt" IS NULL
-                 AND ($1::uuid IS NULL OR rc."relayId" <> $1))
-             AND ($2::text IS NULL OR d."deviceFamily" ILIKE '%' || $2 || '%'
-               OR d."deviceType" ILIKE '%' || $2 || '%')"#,
-        [query.relay_id.into(), generation.clone().into()],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.count)
-    .unwrap_or(0);
-    let devices = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT jsonb_build_object(
-             'deviceId', d."deviceId", 'macAddress', d."macAddress",
-             'deviceName', d."deviceName", 'ipAddress', d."ipAddress",
-             'deviceType', d."deviceType", 'deviceFamily', d."deviceFamily") AS value
-           FROM devices d WHERE d."deletedAt" IS NULL
-             AND NOT EXISTS (SELECT 1 FROM relay_channels rc
-               WHERE rc."deviceId" = d."deviceId" AND rc."deletedAt" IS NULL
-                 AND ($1::uuid IS NULL OR rc."relayId" <> $1))
-             AND ($2::text IS NULL OR d."deviceFamily" ILIKE '%' || $2 || '%'
-               OR d."deviceType" ILIKE '%' || $2 || '%')
-           ORDER BY d."deviceId" ASC LIMIT $3 OFFSET $4"#,
-        [
-            query.relay_id.into(),
-            generation.into(),
-            i64::from(limit).into(),
-            offset.into(),
-        ],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect::<Vec<_>>();
+
+    let generation = if let Some(relay_id) = query.relay_id {
+        let relay_row = relay::Entity::find_by_id(relay_id)
+            .filter(relay::Column::DeletedAt.is_null())
+            .one(orm)
+            .await?;
+        match relay_row {
+            Some(relay_row) => {
+                let controller = device_controller::Entity::find()
+                    .filter(
+                        device_controller::Column::DeviceControllerId
+                            .eq(&relay_row.device_controller_id),
+                    )
+                    .one(orm)
+                    .await?;
+                controller_generation(controller.and_then(|c| c.device_family).as_deref())
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    // When relay_id is None: any mapped device is claimed.
+    // When Some: only mappings on *other* relays claim the device.
+    let claimed_device_ids: Vec<String> = {
+        let mut select = relay_channel::Entity::find()
+            .filter(relay_channel::Column::DeletedAt.is_null())
+            .filter(relay_channel::Column::DeviceId.is_not_null());
+        if let Some(relay_id) = query.relay_id {
+            select = select.filter(relay_channel::Column::RelayId.ne(relay_id));
+        }
+        select
+            .all(orm)
+            .await?
+            .into_iter()
+            .filter_map(|channel| channel.device_id)
+            .collect()
+    };
+
+    let mut base = device::Entity::find().filter(device::Column::DeletedAt.is_null());
+    if !claimed_device_ids.is_empty() {
+        base = base.filter(device::Column::DeviceId.is_not_in(claimed_device_ids));
+    }
+    if let Some(generation) = generation.as_deref() {
+        let pattern = format!("%{generation}%");
+        base = base.filter(
+            Condition::any()
+                .add(Expr::col(device::Column::DeviceFamily).ilike(&pattern))
+                .add(Expr::col(device::Column::DeviceType).ilike(&pattern)),
+        );
+    }
+
+    let total_count = base.clone().count(orm).await? as i64;
+    let devices = base
+        .order_by_asc(device::Column::DeviceId)
+        .limit(u64::from(limit))
+        .offset(offset as u64)
+        .all(orm)
+        .await?
+        .iter()
+        .map(available_relay_device_json)
+        .collect::<Vec<_>>();
+
     Ok(serde_json::json!({
         "devices": devices,
         "pagination": {
@@ -280,23 +355,33 @@ pub(crate) async fn state_target(
     device_id: &str,
 ) -> Result<Option<RelayStateTarget>, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::relay_store", "state_target");
-    Ok(
-        RelayStateTarget::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT dc."ipAddress" AS controller_ip,
-             r."serialNumber" AS relay_serial, rc.id AS channel_id,
-             rc."channelNumber" AS channel_number
-           FROM relay_channels rc
-           JOIN relays r ON r.id = rc."relayId" AND r."deletedAt" IS NULL
-           JOIN device_controllers dc
-             ON dc."deviceControllerId" = r."deviceControllerId" AND dc."deletedAt" IS NULL
-           WHERE rc."deviceId" = $1 AND rc."deletedAt" IS NULL
-           ORDER BY rc."updatedAt" DESC LIMIT 1"#,
-            [device_id.into()],
-        ))
+    let Some((channel, Some(relay_row))) = relay_channel::Entity::find()
+        .filter(relay_channel::Column::DeviceId.eq(device_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .find_also_related(relay::Entity)
+        .order_by_desc(relay_channel::Column::UpdatedAt)
         .one(orm)
-        .await?,
-    )
+        .await?
+    else {
+        return Ok(None);
+    };
+    if relay_row.deleted_at.is_some() {
+        return Ok(None);
+    }
+    let Some(controller) = device_controller::Entity::find()
+        .filter(device_controller::Column::DeviceControllerId.eq(&relay_row.device_controller_id))
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .one(orm)
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(RelayStateTarget {
+        controller_ip: controller.ip_address,
+        relay_serial: relay_row.serial_number,
+        channel_id: channel.id,
+        channel_number: channel.channel_number,
+    }))
 }
 
 pub(crate) async fn update_state(
@@ -326,20 +411,26 @@ pub(crate) async fn identity_target(
 ) -> Result<Option<RelayIdentityTarget>, DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::relay_store", "identity_target");
-    Ok(
-        RelayIdentityTarget::find_by_statement(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"SELECT r."deviceControllerId" AS controller_id,
-             dc."ipAddress" AS controller_ip, r."serialNumber" AS current_serial
-           FROM relays r
-           JOIN device_controllers dc
-             ON dc."deviceControllerId" = r."deviceControllerId" AND dc."deletedAt" IS NULL
-           WHERE r.id = $1 AND r."deletedAt" IS NULL"#,
-            [relay_id.into()],
-        ))
+    let Some(relay_row) = relay::Entity::find_by_id(relay_id)
+        .filter(relay::Column::DeletedAt.is_null())
         .one(orm)
-        .await?,
-    )
+        .await?
+    else {
+        return Ok(None);
+    };
+    let Some(controller) = device_controller::Entity::find()
+        .filter(device_controller::Column::DeviceControllerId.eq(&relay_row.device_controller_id))
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .one(orm)
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(RelayIdentityTarget {
+        controller_id: relay_row.device_controller_id,
+        controller_ip: controller.ip_address,
+        current_serial: relay_row.serial_number,
+    }))
 }
 
 pub(crate) async fn update_identity(
@@ -353,16 +444,13 @@ pub(crate) async fn update_identity(
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::relay_store", "update_identity");
     let transaction = orm.begin().await?;
-    let duplicate = ExistsRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT EXISTS(SELECT 1 FROM relays
-           WHERE "serialNumber" = $1 AND id <> $2 AND "deletedAt" IS NULL) AS exists"#,
-        [serial_number.into(), relay_id.into()],
-    ))
-    .one(&transaction)
-    .await?
-    .map(|row| row.exists)
-    .unwrap_or(false);
+    let duplicate = relay::Entity::find()
+        .filter(relay::Column::SerialNumber.eq(serial_number))
+        .filter(relay::Column::Id.ne(relay_id))
+        .filter(relay::Column::DeletedAt.is_null())
+        .one(&transaction)
+        .await?
+        .is_some();
     if duplicate {
         return Err(DeviceRepositoryError::Conflict(
             "Relay serial number is already assigned".to_owned(),

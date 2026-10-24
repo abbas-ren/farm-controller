@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
-    EntityTrait, FromQueryResult, QueryFilter, Set, Statement, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QuerySelect, Set, TransactionTrait,
+    sea_query::{Expr, LockType},
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -14,11 +15,11 @@ use crate::persistence::entity::{
 use super::super::{
     RelayChannelConfiguration,
     error::DeviceRepositoryError,
+    postgres::json_models::relay_channel_json,
     repository_types::{RelayConfigurationResult, RelayControllerAction},
 };
 use super::mappings::{clear_gpio_mapping, upsert_gpio_mapping};
 
-#[derive(Debug, FromQueryResult)]
 struct ChannelContext {
     controller_address: String,
     mappings: Value,
@@ -28,23 +29,16 @@ struct ChannelContext {
     channel_state: String,
 }
 
-#[derive(Debug, FromQueryResult)]
 struct DeviceContext {
     device_id: String,
     mac_address: Option<String>,
     device_generation: Option<String>,
 }
 
-#[derive(Debug, FromQueryResult)]
 struct ExistingMapping {
     channel_id: Uuid,
     relay_serial: String,
     channel_number: i32,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: Value,
 }
 
 pub(crate) async fn configure(
@@ -99,18 +93,8 @@ async fn configure_channel(
     let device = load_device(transaction, device_id)
         .await?
         .ok_or_else(|| DeviceRepositoryError::NotFound(format!("Device {device_id} not found")))?;
-    if let Some(existing) = ExistingMapping::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT rc.id AS channel_id, r."serialNumber" AS relay_serial,
-             rc."channelNumber" AS channel_number
-           FROM relay_channels rc
-           JOIN relays r ON r.id = rc."relayId" AND r."deletedAt" IS NULL
-           WHERE rc."deviceId" = $1 AND rc.id <> $2 AND rc."deletedAt" IS NULL
-           LIMIT 1 FOR UPDATE OF rc"#,
-        [device_id.into(), configuration.channel_id.into()],
-    ))
-    .one(transaction)
-    .await?
+    if let Some(existing) = load_existing_mapping(transaction, device_id, configuration.channel_id)
+        .await?
         && !cleared_channels.contains(&existing.channel_id)
     {
         return Err(DeviceRepositoryError::Conflict(format!(
@@ -201,34 +185,89 @@ async fn configure_channel(
     load_channel_json(transaction, configuration.channel_id).await
 }
 
+async fn load_existing_mapping(
+    transaction: &impl ConnectionTrait,
+    device_id: &str,
+    channel_id: Uuid,
+) -> Result<Option<ExistingMapping>, DeviceRepositoryError> {
+    let Some((channel, Some(relay_row))) = relay_channel::Entity::find()
+        .filter(relay_channel::Column::DeviceId.eq(device_id))
+        .filter(relay_channel::Column::Id.ne(channel_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .find_also_related(relay::Entity)
+        .lock(LockType::Update)
+        .one(transaction)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if relay_row.deleted_at.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(ExistingMapping {
+        channel_id: channel.id,
+        relay_serial: relay_row.serial_number,
+        channel_number: channel.channel_number,
+    }))
+}
+
 async fn load_channel(
     transaction: &impl ConnectionTrait,
     configuration: &RelayChannelConfiguration,
 ) -> Result<ChannelContext, DeviceRepositoryError> {
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::relay_configuration_store::apply", "load_channel");
-    ChannelContext::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT dc."ipAddress" AS controller_address,
-             COALESCE(dc.mappings, '{}'::jsonb) AS mappings,
-             r."serialNumber" AS relay_serial, rc."deviceId" AS current_device_id,
-             rc."channelNumber" AS channel_number,
-             COALESCE(rc.state::text, 'off') AS channel_state
-           FROM relays r
-           JOIN relay_channels rc ON rc."relayId" = r.id AND rc."deletedAt" IS NULL
-           JOIN device_controllers dc
-             ON dc."deviceControllerId" = r."deviceControllerId" AND dc."deletedAt" IS NULL
-           WHERE r.id = $1 AND rc.id = $2 AND r."deletedAt" IS NULL
-           FOR UPDATE OF rc, dc"#,
-        [configuration.relay_id.into(), configuration.channel_id.into()],
-    ))
-    .one(transaction)
-    .await?
-    .ok_or_else(|| {
-        DeviceRepositoryError::NotFound(format!(
-            "Relay channel {} not found for relay {}",
-            configuration.channel_id, configuration.relay_id
-        ))
+    let channel = relay_channel::Entity::find_by_id(configuration.channel_id)
+        .filter(relay_channel::Column::RelayId.eq(configuration.relay_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .lock(LockType::Update)
+        .one(transaction)
+        .await?
+        .ok_or_else(|| {
+            DeviceRepositoryError::NotFound(format!(
+                "Relay channel {} not found for relay {}",
+                configuration.channel_id, configuration.relay_id
+            ))
+        })?;
+    let relay_row = relay::Entity::find_by_id(configuration.relay_id)
+        .filter(relay::Column::DeletedAt.is_null())
+        .one(transaction)
+        .await?
+        .ok_or_else(|| {
+            DeviceRepositoryError::NotFound(format!(
+                "Relay channel {} not found for relay {}",
+                configuration.channel_id, configuration.relay_id
+            ))
+        })?;
+    let controller = device_controller::Entity::find()
+        .filter(device_controller::Column::DeviceControllerId.eq(&relay_row.device_controller_id))
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .lock(LockType::Update)
+        .one(transaction)
+        .await?
+        .ok_or_else(|| {
+            DeviceRepositoryError::NotFound(format!(
+                "Relay channel {} not found for relay {}",
+                configuration.channel_id, configuration.relay_id
+            ))
+        })?;
+    let channel_state = match channel.state {
+        Some(relay_channel::ChannelState::On) => "on",
+        _ => "off",
+    }
+    .to_owned();
+    let mappings = if controller.mappings.is_null() {
+        serde_json::json!({})
+    } else {
+        controller.mappings
+    };
+    Ok(ChannelContext {
+        controller_address: controller.ip_address,
+        mappings,
+        relay_serial: relay_row.serial_number,
+        current_device_id: channel.device_id,
+        channel_number: channel.channel_number,
+        channel_state,
     })
 }
 
@@ -281,15 +320,11 @@ async fn load_channel_json(
         "devices::relay_configuration_store::apply",
         "load_channel_json",
     );
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(rc) AS value FROM relay_channels rc WHERE rc.id = $1"#,
-        [channel_id.into()],
-    ))
-    .one(transaction)
-    .await?
-    .ok_or_else(|| DeviceRepositoryError::NotFound("Relay channel not found".to_owned()))?
-    .value)
+    relay_channel::Entity::find_by_id(channel_id)
+        .one(transaction)
+        .await?
+        .map(|row| relay_channel_json(&row))
+        .ok_or_else(|| DeviceRepositoryError::NotFound("Relay channel not found".to_owned()))
 }
 
 fn normalized_device_id(configuration: &RelayChannelConfiguration) -> Option<&str> {

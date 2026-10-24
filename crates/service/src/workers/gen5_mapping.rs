@@ -6,13 +6,12 @@ use uuid::Uuid;
 
 use crate::{
     devices::EDGE_CONTROLLER_PORT,
-    persistence::entity::{device_controller, gen5_mapping_queue},
+    persistence::entity::{device, device_controller, gen5_mapping_queue},
     state::AppState,
 };
 
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, ExprTrait, QueryFilter, QueryOrder,
-    QuerySelect, Statement, TransactionTrait,
+    ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
 
@@ -399,15 +398,13 @@ async fn cancel_and_delete_device(
         .map_err(|error| error.to_string())?
         .rows_affected;
     if updated > 0 {
-        // MAC normalization match — keep as raw SQL.
-        transaction
-            .execute_raw(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                r#"DELETE FROM devices
-                   WHERE regexp_replace(lower("macAddress"), '[:-]', '', 'g') =
-                         regexp_replace(lower($1), '[:-]', '', 'g')"#,
-                [job.mac_address.clone().into()],
+        device::Entity::delete_many()
+            .filter(Expr::cust_with_values(
+                r#"regexp_replace(lower("macAddress"), '[:-]', '', 'g') =
+                   regexp_replace(lower($1), '[:-]', '', 'g')"#,
+                [job.mac_address.clone()],
             ))
+            .exec(&transaction)
             .await
             .map_err(|error| error.to_string())?;
     }

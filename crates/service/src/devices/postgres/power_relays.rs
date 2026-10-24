@@ -1,16 +1,9 @@
 use super::*;
 
-use crate::persistence::{
-    entity::device,
-    orm_util,
-};
-use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter};
+use crate::persistence::entity::{device, device_controller};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 
-#[derive(Debug, FromQueryResult)]
-struct RebootTargetRow {
-    controller_ip: Option<String>,
-    power_port: Option<String>,
-}
+use super::json_models::mapping_power_port;
 
 #[async_trait]
 impl PowerRelayRepository for PostgresDeviceRepository {
@@ -31,24 +24,28 @@ impl PowerRelayRepository for PostgresDeviceRepository {
             return Ok(None);
         };
 
-        // Lateral mapping lookup kept as SeaORM Statement (not sqlx) for JSON-key path.
-        let mapping = orm_util::query_one::<_, RebootTargetRow>(
-            self.orm(),
-            r#"SELECT dc."ipAddress" AS controller_ip,
-                      dc.mappings -> regexp_replace(lower($1), '[:-]', '', 'g') ->> 'power' AS power_port
-               FROM device_controllers dc
-               WHERE dc.state::text = 'active' AND dc.status::text = 'approved'
-                 AND dc."deletedAt" IS NULL
-                 AND dc.mappings ? regexp_replace(lower($1), '[:-]', '', 'g')
-               ORDER BY dc."updatedAt" DESC LIMIT 1"#,
-            vec![device.mac_address.clone().unwrap_or_default().into()],
-        )
-        .await?;
+        let mac = device.mac_address.clone().unwrap_or_default();
+        let controllers = device_controller::Entity::find()
+            .filter(
+                device_controller::Column::State.eq(device_controller::DeviceControllerState::Active),
+            )
+            .filter(
+                device_controller::Column::Status
+                    .eq(device_controller::DeviceControllerStatus::Approved),
+            )
+            .filter(device_controller::Column::DeletedAt.is_null())
+            .order_by_desc(device_controller::Column::UpdatedAt)
+            .all(self.orm())
+            .await?;
+        let mapping = controllers.into_iter().find_map(|controller| {
+            let power_port = mapping_power_port(&controller.mappings, &mac)?;
+            Some((controller.ip_address, power_port))
+        });
 
         Ok(Some(DeviceRebootTarget {
             device_family: device.device_family,
-            controller_ip: mapping.as_ref().and_then(|m| m.controller_ip.clone()),
-            power_port: mapping.and_then(|m| m.power_port),
+            controller_ip: mapping.as_ref().map(|(ip, _)| ip.clone()),
+            power_port: mapping.map(|(_, port)| port),
         }))
     }
 

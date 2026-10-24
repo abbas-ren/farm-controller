@@ -1,27 +1,12 @@
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait,
-    FromQueryResult, QueryFilter, Statement, TransactionTrait, sea_query::Expr,
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, TransactionTrait,
+    sea_query::{Expr, LockType},
 };
-use uuid::Uuid;
 
-use crate::persistence::entity::{pending_relay_config, relay_channel};
+use crate::persistence::entity::{device, pending_relay_config, relay, relay_channel};
 
 use super::super::{RelayConfirmationResponse, error::DeviceRepositoryError};
-
-#[derive(Debug, FromQueryResult)]
-struct PendingRow {
-    pending_id: Uuid,
-    channel_id: Uuid,
-    channel_number: i32,
-    relay_id: Uuid,
-    controller_id: String,
-    device_id: Option<String>,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct CountRow {
-    count: i64,
-}
 
 pub(crate) async fn confirm(
     orm: &DatabaseConnection,
@@ -37,30 +22,20 @@ pub(crate) async fn confirm(
         ));
     }
     let transaction = orm.begin().await?;
-    let pending = PendingRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT pending.id AS pending_id, pending."relayChannelId" AS channel_id,
-                  pending."channelNo" AS channel_number,
-                  relay.id AS relay_id, relay."deviceControllerId" AS controller_id,
-                  channel."deviceId" AS device_id
-           FROM pending_relay_configs pending
-           JOIN relay_channels channel ON channel.id = pending."relayChannelId"
-           JOIN relays relay ON relay.id = channel."relayId"
-           WHERE lower(pending."deviceMac") = $1 AND pending.status::text = 'pending'
-           ORDER BY pending."createdAt" ASC LIMIT 1 FOR UPDATE"#,
-        [normalized_mac.clone().into()],
-    ))
-    .one(&transaction)
-    .await?;
-    let Some(PendingRow {
-        pending_id,
-        channel_id,
-        channel_number,
-        relay_id,
-        controller_id,
-        device_id,
-    }) = pending
-    else {
+    let pending = pending_relay_config::Entity::find()
+        .filter(Expr::cust_with_values(
+            r#"lower("deviceMac") = $1"#,
+            [normalized_mac.clone()],
+        ))
+        .filter(
+            pending_relay_config::Column::Status
+                .eq(pending_relay_config::PendingRelayConfigStatus::Pending),
+        )
+        .order_by_asc(pending_relay_config::Column::CreatedAt)
+        .lock(LockType::Update)
+        .one(&transaction)
+        .await?;
+    let Some(pending) = pending else {
         transaction.commit().await?;
         return Ok(RelayConfirmationResponse {
             confirmed: false,
@@ -71,6 +46,23 @@ pub(crate) async fn confirm(
             configuration_complete: false,
         });
     };
+    let channel = relay_channel::Entity::find_by_id(pending.relay_channel_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| {
+            DeviceRepositoryError::Internal("pending relay channel missing".to_owned())
+        })?;
+    let relay_row = relay::Entity::find_by_id(channel.relay_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| DeviceRepositoryError::Internal("pending relay missing".to_owned()))?;
+    let pending_id = pending.id;
+    let channel_id = pending.relay_channel_id;
+    let channel_number = pending.channel_no;
+    let relay_id = relay_row.id;
+    let controller_id = relay_row.device_controller_id.clone();
+    let device_id = channel.device_id.clone();
+
     let now = chrono::Utc::now();
     if !succeeded {
         pending_relay_config::Entity::update_many()
@@ -111,29 +103,37 @@ pub(crate) async fn confirm(
         .filter(relay_channel::Column::DeletedAt.is_null())
         .exec(&transaction)
         .await?;
-    // Subquery update for device power kept as raw SQL.
-    transaction
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            r#"UPDATE devices SET power = 'on', "updatedAt" = now()
-               WHERE "deviceId" = (
-                 SELECT "deviceId" FROM relay_channels WHERE id = $1
-               ) AND "deletedAt" IS NULL"#,
-            [channel_id.into()],
-        ))
+    if let Some(mapped_device_id) = channel.device_id.as_deref() {
+        device::Entity::update_many()
+            .col_expr(
+                device::Column::Power,
+                Expr::value(Some(device::DevicePower::On)),
+            )
+            .col_expr(device::Column::UpdatedAt, Expr::value(now))
+            .filter(device::Column::DeviceId.eq(mapped_device_id))
+            .filter(device::Column::DeletedAt.is_null())
+            .exec(&transaction)
+            .await?;
+    }
+    let channel_ids_on_relay: Vec<uuid::Uuid> = relay_channel::Entity::find()
+        .filter(relay_channel::Column::RelayId.eq(relay_id))
+        .select_only()
+        .column(relay_channel::Column::Id)
+        .into_tuple::<uuid::Uuid>()
+        .all(&transaction)
         .await?;
-    let remaining = CountRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT count(*) AS count
-           FROM pending_relay_configs pending
-           JOIN relay_channels channel ON channel.id = pending."relayChannelId"
-           WHERE channel."relayId" = $1 AND pending.status::text = 'pending'"#,
-        [relay_id.into()],
-    ))
-    .one(&transaction)
-    .await?
-    .map(|row| row.count)
-    .unwrap_or(0);
+    let remaining = if channel_ids_on_relay.is_empty() {
+        0
+    } else {
+        pending_relay_config::Entity::find()
+            .filter(pending_relay_config::Column::RelayChannelId.is_in(channel_ids_on_relay))
+            .filter(
+                pending_relay_config::Column::Status
+                    .eq(pending_relay_config::PendingRelayConfigStatus::Pending),
+            )
+            .count(&transaction)
+            .await? as i64
+    };
     transaction.commit().await?;
     tracing::info!(%normalized_mac, channel_number, "relay configuration confirmed");
     Ok(RelayConfirmationResponse {

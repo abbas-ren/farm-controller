@@ -1,21 +1,17 @@
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait,
-    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
     sea_query::Expr,
 };
 use uuid::Uuid;
 
-use crate::persistence::entity::{device, faulty_report, release, test_execution};
+use crate::persistence::entity::{alert, device, faulty_report, release, test_execution};
 
 use super::{
     error::DeviceRepositoryError,
+    postgres::json_models::{faulty_report_alert_json, faulty_report_json},
     repository_types::{FaultyReportCreate, FaultyReportCreation, FaultyReportFinalization},
 };
-
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: serde_json::Value,
-}
 
 pub(crate) async fn create(
     orm: &DatabaseConnection,
@@ -108,68 +104,62 @@ pub(crate) async fn finalize(
         .exec(&transaction)
         .await?;
 
-    let report = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(faulty_reports) AS value FROM faulty_reports WHERE id = $1"#,
-        [report_id.into()],
-    ))
-    .one(&transaction)
-    .await?
-    .ok_or_else(|| DeviceRepositoryError::NotFound("Faulty report not found".to_owned()))?
-    .value;
+    let report_model = faulty_report::Entity::find_by_id(report_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| DeviceRepositoryError::NotFound("Faulty report not found".to_owned()))?;
+    let release_model = release::Entity::find_by_id(report_model.release_id)
+        .one(&transaction)
+        .await?
+        .ok_or_else(|| DeviceRepositoryError::Internal("faulty report release missing".to_owned()))?;
 
-    // Nested alert insert + jsonb response shape kept as raw SQL.
-    let alert = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"WITH inserted AS (
-               INSERT INTO alerts
-                  (id, user_id, title, message, type, status, is_read, faulty_report_id,
-                   build_id, data, created_at, updated_at)
-               SELECT gen_random_uuid(), 'ADMIN', 'Faulty Report',
-                      'New faulty report submitted for release ' || fr."releaseId"::text,
-                      'warning', 'unread', false, fr.id::text, fr."releaseId"::text,
-                      jsonb_build_object(
-                          'faultyReportId', fr.id,
-                          'buildId', fr."releaseId",
-                          'buildVersion', r.version,
-                          'deviceType', fr."deviceType",
-                          'deviceFamily', fr."deviceFamily",
-                          'createdBy', fr."createdBy"
-                      ), now(), now()
-               FROM faulty_reports fr
-               JOIN releases r ON r.id = fr."releaseId"
-               WHERE fr.id = $1
-               RETURNING *
-           )
-           SELECT jsonb_build_object(
-               'id', a.id, 'userId', a.user_id, 'title', a.title, 'message', a.message,
-               'type', a.type::text, 'status', a.status::text, 'isRead', a.is_read,
-               'faultyReportId', a.faulty_report_id, 'buildId', a.build_id,
-               'buildVersion', a.data->>'buildVersion', 'data', a.data,
-               'createdAt', a.created_at) AS value
-           FROM inserted a"#,
-        [report_id.into()],
-    ))
-    .one(&transaction)
-    .await?
-    .ok_or_else(|| DeviceRepositoryError::Internal("failed to create faulty report alert".to_owned()))?
-    .value;
+    let data = serde_json::json!({
+        "faultyReportId": report_model.id,
+        "buildId": report_model.release_id,
+        "buildVersion": release_model.version,
+        "deviceType": report_model.device_type,
+        "deviceFamily": report_model.device_family,
+        "createdBy": report_model.created_by,
+    });
+    let alert_model = alert::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        user_id: Set("ADMIN".to_owned()),
+        title: Set("Faulty Report".to_owned()),
+        message: Set(format!(
+            "New faulty report submitted for release {}",
+            report_model.release_id
+        )),
+        data: Set(Some(data)),
+        r#type: Set(alert::AlertType::Warning),
+        status: Set(alert::AlertStatus::Unread),
+        is_read: Set(false),
+        read_at: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        build_id: Set(Some(report_model.release_id.to_string())),
+        faulty_report_id: Set(Some(report_model.id.to_string())),
+        device_id: Set(None),
+        device_controller_id: Set(None),
+        deleted_at: Set(None),
+    }
+    .insert(&transaction)
+    .await?;
+
+    let report = faulty_report_json(&report_model);
+    let alert = faulty_report_alert_json(&alert_model, Some(&release_model.version));
     transaction.commit().await?;
     Ok(FaultyReportFinalization { report, alert })
 }
 
 pub(crate) async fn list(orm: &DatabaseConnection) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_store", "list");
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(fr) AS value FROM faulty_reports fr ORDER BY fr."createdAt" DESC"#,
-        [],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect())
+    Ok(faulty_report::Entity::find()
+        .order_by_desc(faulty_report::Column::CreatedAt)
+        .all(orm)
+        .await?
+        .iter()
+        .map(faulty_report_json)
+        .collect())
 }
 
 pub(crate) async fn by_id(
@@ -177,19 +167,19 @@ pub(crate) async fn by_id(
     report_id: Uuid,
 ) -> Result<Option<serde_json::Value>, DeviceRepositoryError> {
     let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_store", "by_id");
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT jsonb_build_object(
-               'report', to_jsonb(fr),
-               'buildVersion', COALESCE(r.version, 'Unknown')) AS value
-           FROM faulty_reports fr
-           LEFT JOIN releases r ON r.id = fr."releaseId"
-           WHERE fr.id = $1"#,
-        [report_id.into()],
-    ))
-    .one(orm)
-    .await?
-    .map(|row| row.value))
+    let Some((report, release_model)) = faulty_report::Entity::find_by_id(report_id)
+        .find_also_related(release::Entity)
+        .one(orm)
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::json!({
+        "report": faulty_report_json(&report),
+        "buildVersion": release_model
+            .map(|r| r.version)
+            .unwrap_or_else(|| "Unknown".to_owned()),
+    })))
 }
 
 pub(crate) async fn update_status(
@@ -233,14 +223,10 @@ pub(crate) async fn update_status(
             .exec(&transaction)
             .await?;
     }
-    let report = JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(faulty_reports) AS value FROM faulty_reports WHERE id = $1"#,
-        [report_id.into()],
-    ))
-    .one(&transaction)
-    .await?
-    .map(|row| row.value);
+    let report = faulty_report::Entity::find_by_id(report_id)
+        .one(&transaction)
+        .await?
+        .map(|row| faulty_report_json(&row));
     transaction.commit().await?;
     Ok(report)
 }

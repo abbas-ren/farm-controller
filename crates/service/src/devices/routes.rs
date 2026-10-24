@@ -51,7 +51,8 @@ use super::{
     active_devices, available_relay_devices, builds_for_device, builds_for_device_type,
     channels_for_relay, configure_artifacts, delete_controller, delete_device, device_action,
     device_by_id, device_families, device_topology, device_types, edit_controller, flash_confirm,
-    flash_confirm_gen4, latest_heartbeat, list_controllers, list_devices, list_user_devices,
+    flash_confirm_gen4, flash_confirm_gen4_get, flash_confirm_get, latest_heartbeat,
+    list_controllers, list_devices, list_user_devices,
     mapping_gen5, reboot_device, register_controller, relay_device_state, relays_for_controller,
     toggle_device_power, update_heartbeat_timeout,
 };
@@ -72,8 +73,14 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
             get(list_controllers).post(register_controller),
         )
         .route("/mapping-gen5", post(mapping_gen5))
-        .route("/flash-confirm", post(flash_confirm))
-        .route("/flash-confirm-gen4", post(flash_confirm_gen4))
+        .route(
+            "/flash-confirm",
+            get(flash_confirm_get).post(flash_confirm),
+        )
+        .route(
+            "/flash-confirm-gen4",
+            get(flash_confirm_gen4_get).post(flash_confirm_gen4),
+        )
         .route("/log", get(log_handlers::list).post(log_handlers::create))
         .route("/log/", get(log_handlers::list).post(log_handlers::create))
         .route("/log/search", get(log_handlers::search))

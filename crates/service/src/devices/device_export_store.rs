@@ -1,11 +1,15 @@
-use sea_orm::{DatabaseBackend, DatabaseConnection, FromQueryResult, Statement};
+use sea_orm::{
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    sea_query::{Expr, extension::postgres::PgExpr},
+};
 
-use super::{DeviceCsvQuery, error::DeviceRepositoryError};
+use crate::persistence::entity::{device, device_interface};
 
-#[derive(Debug, FromQueryResult)]
-struct JsonRow {
-    value: serde_json::Value,
-}
+use super::{
+    error::DeviceRepositoryError,
+    postgres::json_models::{device_json, interface_json},
+    DeviceCsvQuery,
+};
 
 pub(crate) async fn export_devices(
     orm: &DatabaseConnection,
@@ -14,34 +18,45 @@ pub(crate) async fn export_devices(
     let _api_trace =
         crate::observability::ApiTrace::enter("devices::device_export_store", "export_devices");
     let search = query.search.as_deref().map(str::trim).unwrap_or_default();
-    // Nested interfaces jsonb_agg kept as Statement for CSV export shape.
-    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        r#"SELECT to_jsonb(device_row) || jsonb_build_object(
-                   'interfaces', COALESCE((
-                       SELECT jsonb_agg(to_jsonb(interface_row) ORDER BY interface_row.id)
-                       FROM device_interfaces interface_row
-                       WHERE interface_row."deviceId" = device_row."deviceId"
-                   ), '[]'::jsonb)
-               ) AS value
-           FROM devices device_row
-           WHERE device_row."deletedAt" IS NULL
-             AND ($1 = '' OR device_row."deviceName" ILIKE '%' || $1 || '%'
-                  OR device_row."deviceId" ILIKE '%' || $1 || '%'
-                  OR device_row."deviceType" ILIKE '%' || $1 || '%'
-                  OR device_row."macAddress" ILIKE '%' || $1 || '%')
-             AND ($2::text IS NULL OR device_row."createdAt" >= $2::timestamptz)
-             AND ($3::text IS NULL OR device_row."createdAt" <= $3::timestamptz)
-           ORDER BY device_row."createdAt" DESC"#,
-        [
-            search.into(),
-            query.from_date.clone().into(),
-            query.to_date.clone().into(),
-        ],
-    ))
-    .all(orm)
-    .await?
-    .into_iter()
-    .map(|row| row.value)
-    .collect())
+    let mut select = device::Entity::find().filter(device::Column::DeletedAt.is_null());
+    if !search.is_empty() {
+        let pattern = format!("%{search}%");
+        select = select.filter(
+            Condition::any()
+                .add(Expr::col(device::Column::DeviceName).ilike(&pattern))
+                .add(Expr::col(device::Column::DeviceId).ilike(&pattern))
+                .add(Expr::col(device::Column::DeviceType).ilike(&pattern))
+                .add(Expr::col(device::Column::MacAddress).ilike(&pattern)),
+        );
+    }
+    if let Some(from) = query.from_date.as_deref().filter(|v| !v.is_empty()) {
+        select = select.filter(Expr::cust_with_values(
+            r#""createdAt" >= $1::timestamptz"#,
+            [from],
+        ));
+    }
+    if let Some(to) = query.to_date.as_deref().filter(|v| !v.is_empty()) {
+        select = select.filter(Expr::cust_with_values(
+            r#""createdAt" <= $1::timestamptz"#,
+            [to],
+        ));
+    }
+    let devices = select
+        .order_by_desc(device::Column::CreatedAt)
+        .all(orm)
+        .await?;
+
+    let mut rows = Vec::with_capacity(devices.len());
+    for device_model in devices {
+        let interfaces = device_interface::Entity::find()
+            .filter(device_interface::Column::DeviceId.eq(&device_model.device_id))
+            .order_by_asc(device_interface::Column::Id)
+            .all(orm)
+            .await?;
+        let mut value = device_json(&device_model);
+        value["interfaces"] =
+            serde_json::Value::Array(interfaces.iter().map(interface_json).collect());
+        rows.push(value);
+    }
+    Ok(rows)
 }
