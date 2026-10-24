@@ -54,7 +54,7 @@ impl AppState {
             config.module_enabled(Module::Reports).then(|| {
                 ReportService::new(
                     config.reports.clone(),
-                    Arc::new(PostgresReportDataSource::new(database.pool().clone())),
+                    Arc::new(PostgresReportDataSource::new(database.orm().clone())),
                     metrics.clone(),
                 )
                 .with_event_publisher(event_publisher.clone())

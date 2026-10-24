@@ -1,4 +1,4 @@
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct TestPreparation {
     pub test_id: String,
     pub device_type: String,
@@ -13,7 +13,7 @@ pub struct TestPreparation {
     pub artifacts: serde_json::Value,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct TestPreparationCase {
     pub test_case_id: i64,
     pub script_file: String,

@@ -31,6 +31,7 @@ pub(super) async fn session(
     user_name: String,
     mut socket: WebSocket,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "session");
     let banner = format!(
         "\x1b[1mRACER Management Console v1.0\x1b[0m\r\n\
          \x1b[2mHardware Testing & Automation\x1b[0m\r\n\r\n\
@@ -84,14 +85,34 @@ pub(super) async fn session(
             }
             event = events.recv() => {
                 let Ok(event) = event else { continue };
-                if event.event != "test_execution_update"
-                {
+                // Dashboard Socket.IO uses camelCase `testExecution`; WebCLI expects the
+                // legacy nested shape `{ type: "test_execution", testId, update }`.
+                if event.event != "testExecution" {
                     continue;
                 }
-                let mut payload = event.payload;
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert("type".to_owned(), serde_json::Value::String("test_execution".to_owned()));
-                }
+                let test_id = event
+                    .payload
+                    .get("testId")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let update_type = event
+                    .payload
+                    .get("type")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let data = event
+                    .payload
+                    .get("data")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let payload = serde_json::json!({
+                    "type": "test_execution",
+                    "testId": test_id,
+                    "update": {
+                        "type": update_type,
+                        "data": data,
+                    },
+                });
                 if socket.send(Message::Text(payload.to_string().into())).await.is_err() {
                     break;
                 }
@@ -106,6 +127,7 @@ async fn run_test(
     command: &str,
     socket: &mut WebSocket,
 ) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "run_test");
     let args = command.split_whitespace().skip(1).collect::<Vec<_>>();
     let mut parsed = match parse_run_test_args(&args) {
         Ok(parsed) => parsed,
@@ -132,16 +154,7 @@ async fn run_test(
         let Some(database) = &state.database else {
             return cli_error("device persistence is unavailable");
         };
-        let types = match sqlx::query_scalar::<_, String>(
-            r#"SELECT DISTINCT "deviceType" FROM devices
-               WHERE "deletedAt" IS NULL AND status::text = 'approved'
-                 AND "deviceFamily" = $1 AND "deviceType" IS NOT NULL
-               ORDER BY "deviceType""#,
-        )
-        .bind(&family)
-        .fetch_all(database.pool())
-        .await
-        {
+        let types = match load_device_types(database.orm(), &family).await {
             Ok(types) => types,
             Err(error) => return cli_error(error),
         };
@@ -183,7 +196,7 @@ async fn run_test(
             sort_order: Some("desc".to_owned()),
             ..BuildListQuery::default()
         };
-        let builds = match crate::devices::build_store::list_builds(database.pool(), &query).await {
+        let builds = match crate::devices::build_store::list_builds(database.orm(), &query).await {
             Ok(builds) => builds.builds,
             Err(error) => return cli_error(error),
         };
@@ -347,6 +360,7 @@ async fn interactive_selection(
     plan_id: u64,
     scope: &str,
 ) -> Result<ExecutionSelection, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "interactive_selection");
     if scope == "all" {
         return Ok(all_selection(plan_id));
     }
@@ -435,6 +449,7 @@ async fn prompt_string(
     message: &str,
     choices: Option<Vec<serde_json::Value>>,
 ) -> Result<String, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "prompt_string");
     let value = prompt_value(socket, prompt_type, message, choices).await?;
     value
         .as_str()
@@ -449,6 +464,7 @@ async fn prompt_value(
     message: &str,
     choices: Option<Vec<serde_json::Value>>,
 ) -> Result<serde_json::Value, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "prompt_value");
     let id = format!("prompt-{}", uuid::Uuid::new_v4().simple());
     send_cli(socket, &format!("\r\n{message}"))
         .await
@@ -508,10 +524,12 @@ async fn prompt_value(
 }
 
 fn choice(label: &str, value: &str) -> serde_json::Value {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "choice");
     serde_json::json!({"label": label, "value": value})
 }
 
 fn value_strings(value: &serde_json::Value) -> Result<Vec<String>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "value_strings");
     value
         .as_array()
         .ok_or_else(|| "Prompt returned an invalid selection".to_owned())?
@@ -527,10 +545,12 @@ fn value_strings(value: &serde_json::Value) -> Result<Vec<String>, String> {
 }
 
 fn cancelled() -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "cancelled");
     "\x1b[90mTest execution cancelled\x1b[0m".to_owned()
 }
 
 fn all_selection(plan_id: u64) -> ExecutionSelection {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "all_selection");
     ExecutionSelection::All {
         plan_id: plan_id.to_string(),
         plan_name: None,
@@ -539,6 +559,7 @@ fn all_selection(plan_id: u64) -> ExecutionSelection {
 }
 
 fn partial_selection(plan_id: u64, suites: Vec<ExecutionSuiteSelection>) -> ExecutionSelection {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "partial_selection");
     ExecutionSelection::Partial {
         plan_id: plan_id.to_string(),
         plan_name: None,
@@ -556,6 +577,7 @@ struct RunTestArgs {
 }
 
 fn parse_run_test_args(args: &[&str]) -> Result<RunTestArgs, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "parse_run_test_args");
     let value_flags = [
         "--suites",
         "-s",
@@ -625,6 +647,7 @@ fn parse_run_test_args(args: &[&str]) -> Result<RunTestArgs, String> {
 }
 
 fn comma_ids(value: &str) -> Result<Vec<String>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "comma_ids");
     let ids = value
         .split(',')
         .map(str::trim)
@@ -637,6 +660,7 @@ fn comma_ids(value: &str) -> Result<Vec<String>, String> {
 }
 
 fn case_selections(value: &str) -> Result<Vec<ExecutionSuiteSelection>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "case_selections");
     let mut selections = Vec::<ExecutionSuiteSelection>::new();
     for token in value
         .split(',')
@@ -673,6 +697,7 @@ fn case_selections(value: &str) -> Result<Vec<ExecutionSuiteSelection>, String> 
 }
 
 async fn execute(state: &AppState, command: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "execute");
     if command.is_empty() {
         return String::new();
     }
@@ -688,15 +713,15 @@ async fn execute(state: &AppState, command: &str) -> String {
     let mut parts = command.split_whitespace();
     match parts.next() {
         Some("racer-list-devices") | Some("racer-list-devices-summary") => {
-            list_devices(database.pool(), false).await
+            list_devices(database.orm(), false).await
         }
-        Some("racer-available-devices") => list_devices(database.pool(), true).await,
-        Some("racer-device-stats") => device_stats(database.pool()).await,
+        Some("racer-available-devices") => list_devices(database.orm(), true).await,
+        Some("racer-device-stats") => device_stats(database.orm()).await,
         Some("racer-get-device") => match parts.next() {
-            Some(device_id) => device_detail(database.pool(), device_id).await,
+            Some(device_id) => device_detail(database.orm(), device_id).await,
             None => "\x1b[31m Error: device id is required\x1b[0m".to_owned(),
         },
-        Some("racer-list-builds") => list_builds(database.pool(), parts.collect()).await,
+        Some("racer-list-builds") => list_builds(database.orm(), parts.collect()).await,
         Some("racer-list-test-plans") => list_test_plans(state, parts.collect()).await,
         Some("racer-list-test-suites") => list_test_suites(state, parts.collect()).await,
         Some("racer-list-test-cases") => list_test_cases(state, parts.collect()).await,
@@ -705,7 +730,8 @@ async fn execute(state: &AppState, command: &str) -> String {
     }
 }
 
-async fn list_builds(pool: &sqlx::PgPool, args: Vec<&str>) -> String {
+async fn list_builds(orm: &sea_orm::DatabaseConnection, args: Vec<&str>) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_builds");
     let parsed = match parse_build_args(&args) {
         Ok(parsed) => parsed,
         Err(error) => return cli_error(error),
@@ -720,7 +746,7 @@ async fn list_builds(pool: &sqlx::PgPool, args: Vec<&str>) -> String {
         sort_order: Some("desc".to_owned()),
         ..BuildListQuery::default()
     };
-    match crate::devices::build_store::list_builds(pool, &query).await {
+    match crate::devices::build_store::list_builds(orm, &query).await {
         Ok(builds) if builds.builds.is_empty() => "\x1b[2mNo builds found\x1b[0m".to_owned(),
         Ok(builds) => format_builds(&builds.builds),
         Err(error) => cli_error(error.to_string()),
@@ -728,6 +754,7 @@ async fn list_builds(pool: &sqlx::PgPool, args: Vec<&str>) -> String {
 }
 
 async fn list_test_plans(state: &AppState, args: Vec<&str>) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_test_plans");
     let filter = match flag_value(&args, "--filter", "-f") {
         Ok(value) => value,
         Err(error) => return cli_error(error),
@@ -750,6 +777,7 @@ async fn list_test_plans(state: &AppState, args: Vec<&str>) -> String {
 }
 
 async fn list_test_suites(state: &AppState, args: Vec<&str>) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_test_suites");
     let Some(plan_id) = positive_id(args.first().copied()) else {
         return cli_error("planId must be a positive integer");
     };
@@ -771,6 +799,7 @@ async fn list_test_suites(state: &AppState, args: Vec<&str>) -> String {
 }
 
 async fn list_test_cases(state: &AppState, args: Vec<&str>) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_test_cases");
     let Some(plan_id) = positive_id(args.first().copied()) else {
         return cli_error("planId must be a positive integer");
     };
@@ -806,6 +835,7 @@ struct BuildArgs {
 }
 
 fn parse_build_args(args: &[&str]) -> Result<BuildArgs, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "parse_build_args");
     let positional = args
         .iter()
         .enumerate()
@@ -836,6 +866,7 @@ fn parse_build_args(args: &[&str]) -> Result<BuildArgs, String> {
 }
 
 fn flag_value(args: &[&str], long: &str, short: &str) -> Result<Option<String>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "flag_value");
     let Some(index) = args
         .iter()
         .position(|value| *value == long || *value == short)
@@ -849,12 +880,14 @@ fn flag_value(args: &[&str], long: &str, short: &str) -> Result<Option<String>, 
 }
 
 fn positive_id(value: Option<&str>) -> Option<u64> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "positive_id");
     value
         .and_then(|value| value.parse().ok())
         .filter(|id| *id > 0)
 }
 
 fn format_builds(builds: &[serde_json::Value]) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "format_builds");
     let mut output =
         "ID                 VERSION       FAMILY       TYPE         TAG          STATUS\r\n"
             .to_owned();
@@ -889,33 +922,64 @@ fn format_builds(builds: &[serde_json::Value]) -> String {
 }
 
 fn cli_error(error: impl std::fmt::Display) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "cli_error");
     format!("\x1b[31m Error: {error}\x1b[0m")
 }
 
-async fn list_devices(pool: &sqlx::PgPool, available_only: bool) -> String {
-    let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, String)>(
-        r#"SELECT "deviceId", COALESCE("deviceName", "deviceId"),
-              "deviceType", "deviceFamily", COALESCE(state::text, 'unknown')
-           FROM devices
-           WHERE "deletedAt" IS NULL AND (NOT $1 OR state::text = 'free')
-           ORDER BY "deviceName" ASC LIMIT 10000"#,
-    )
-    .bind(available_only)
-    .fetch_all(pool)
-    .await;
+async fn load_device_types(
+    orm: &sea_orm::DatabaseConnection,
+    family: &str,
+) -> Result<Vec<String>, sea_orm::DbErr> {
+    use crate::persistence::entity::device;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let mut types: Vec<String> = device::Entity::find()
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(device::Column::DeviceFamily.eq(family))
+        .filter(device::Column::DeviceType.is_not_null())
+        .all(orm)
+        .await?
+        .into_iter()
+        .filter_map(|d| d.device_type)
+        .collect();
+    types.sort();
+    types.dedup();
+    Ok(types)
+}
+
+async fn list_devices(orm: &sea_orm::DatabaseConnection, available_only: bool) -> String {
+    use crate::persistence::entity::device;
+    use crate::devices::postgres::json_models::device_state_str;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+    let _api_trace =
+        crate::observability::ApiTrace::enter("socket::routes::web_cli", "list_devices");
+    let mut select = device::Entity::find().filter(device::Column::DeletedAt.is_null());
+    if available_only {
+        select = select.filter(device::Column::State.eq(device::DeviceState::Free));
+    }
+    let rows = select
+        .order_by_asc(device::Column::DeviceName)
+        .limit(10_000)
+        .all(orm)
+        .await;
     match rows {
         Ok(rows) => {
             let mut output =
                 "ID                 Name                 Type         Family       State\r\n"
                     .to_owned();
             output.push_str(&"-".repeat(78));
-            for (id, name, device_type, family, state) in rows {
+            for device in rows {
+                let name = device
+                    .device_name
+                    .clone()
+                    .unwrap_or_else(|| device.device_id.clone());
+                let state = device_state_str(device.state.as_ref()).unwrap_or("unknown");
                 output.push_str(&format!(
                     "\r\n{:<18} {:<20} {:<12} {:<12} {}",
-                    truncate(&id, 18),
+                    truncate(&device.device_id, 18),
                     truncate(&name, 20),
-                    truncate(device_type.as_deref().unwrap_or(""), 12),
-                    truncate(family.as_deref().unwrap_or(""), 12),
+                    truncate(device.device_type.as_deref().unwrap_or(""), 12),
+                    truncate(device.device_family.as_deref().unwrap_or(""), 12),
                     state
                 ));
             }
@@ -925,22 +989,36 @@ async fn list_devices(pool: &sqlx::PgPool, available_only: bool) -> String {
     }
 }
 
-async fn device_stats(pool: &sqlx::PgPool) -> String {
-    let rows = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(
-        r#"SELECT COALESCE("deviceType", 'Unknown'), count(*)::bigint,
-                  count(*) FILTER (WHERE state::text = 'free')::bigint,
-                  count(*) FILTER (WHERE state::text = 'busy')::bigint,
-                  count(*) FILTER (WHERE state::text IN ('not_reachable', 'faulty'))::bigint
-           FROM devices WHERE "deletedAt" IS NULL
-           GROUP BY "deviceType" ORDER BY "deviceType""#,
-    )
-    .fetch_all(pool)
-    .await;
+async fn device_stats(orm: &sea_orm::DatabaseConnection) -> String {
+    use crate::persistence::entity::device;
+    use crate::devices::postgres::json_models::device_state_str;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let _api_trace =
+        crate::observability::ApiTrace::enter("socket::routes::web_cli", "device_stats");
+    let rows = device::Entity::find()
+        .filter(device::Column::DeletedAt.is_null())
+        .all(orm)
+        .await;
     match rows {
         Ok(rows) => {
+            let mut by_type: BTreeMap<String, (i64, i64, i64, i64)> = BTreeMap::new();
+            for device in rows {
+                let key = device
+                    .device_type
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_owned());
+                let entry = by_type.entry(key).or_insert((0, 0, 0, 0));
+                entry.0 += 1;
+                match device_state_str(device.state.as_ref()) {
+                    Some("free") => entry.1 += 1,
+                    Some("busy") => entry.2 += 1,
+                    Some("not_reachable" | "faulty") => entry.3 += 1,
+                    _ => {}
+                }
+            }
             let mut output = "Type         Total      Free       Busy       Offline\r\n".to_owned();
             output.push_str(&"-".repeat(56));
-            for (device_type, total, free, busy, offline) in rows {
+            for (device_type, (total, free, busy, offline)) in by_type {
                 output.push_str(&format!(
                     "\r\n{:<12} {:<10} {:<10} {:<10} {offline}",
                     truncate(&device_type, 12),
@@ -955,23 +1033,40 @@ async fn device_stats(pool: &sqlx::PgPool) -> String {
     }
 }
 
-async fn device_detail(pool: &sqlx::PgPool, device_id: &str) -> String {
-    let row = sqlx::query_scalar::<_, serde_json::Value>(
-        r#"SELECT to_jsonb(device) || jsonb_build_object(
-               'interfaces', COALESCE((
-                   SELECT jsonb_agg(to_jsonb(interface) ORDER BY interface.id)
-                   FROM device_interfaces interface WHERE interface."deviceId" = device."deviceId"
-               ), '[]'::jsonb),
-               'heartbeatData', (
-                   SELECT heartbeat.data FROM heartbeats heartbeat
-                   WHERE heartbeat."deviceId" = device."deviceId"
-                   ORDER BY heartbeat.timestamp DESC LIMIT 1
-               ))
-           FROM devices device
-           WHERE device."deviceId" = $1 AND device."deletedAt" IS NULL"#,
-    )
-    .bind(device_id)
-    .fetch_optional(pool)
+async fn device_detail(orm: &sea_orm::DatabaseConnection, device_id: &str) -> String {
+    use crate::devices::postgres::json_models::{device_json, interface_json};
+    use crate::persistence::entity::{device, device_interface, heartbeat};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+    let _api_trace =
+        crate::observability::ApiTrace::enter("socket::routes::web_cli", "device_detail");
+    let row = async {
+        let Some(device_model) = device::Entity::find()
+            .filter(device::Column::DeviceId.eq(device_id))
+            .filter(device::Column::DeletedAt.is_null())
+            .one(orm)
+            .await?
+        else {
+            return Ok::<_, sea_orm::DbErr>(None);
+        };
+        let interfaces = device_interface::Entity::find()
+            .filter(device_interface::Column::DeviceId.eq(device_id))
+            .order_by_asc(device_interface::Column::Id)
+            .all(orm)
+            .await?
+            .iter()
+            .map(interface_json)
+            .collect::<Vec<_>>();
+        let heartbeat_data = heartbeat::Entity::find()
+            .filter(heartbeat::Column::DeviceId.eq(device_id))
+            .order_by_desc(heartbeat::Column::Timestamp)
+            .one(orm)
+            .await?
+            .map(|hb| hb.data);
+        let mut value = device_json(&device_model);
+        value["interfaces"] = serde_json::Value::Array(interfaces);
+        value["heartbeatData"] = heartbeat_data.unwrap_or(serde_json::Value::Null);
+        Ok(Some(value))
+    }
     .await;
     match row {
         Ok(Some(row)) => serde_json::to_string_pretty(&row).unwrap_or_default(),
@@ -981,14 +1076,17 @@ async fn device_detail(pool: &sqlx::PgPool, device_id: &str) -> String {
 }
 
 fn truncate(value: &str, width: usize) -> &str {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "truncate");
     value.get(..width).unwrap_or(value)
 }
 
 async fn send_cli(socket: &mut WebSocket, output: &str) -> Result<(), axum::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "send_cli");
     send_json(socket, serde_json::json!({"type": "cli", "output": output})).await
 }
 
 async fn send_json(socket: &mut WebSocket, value: serde_json::Value) -> Result<(), axum::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "send_json");
     socket.send(Message::Text(value.to_string().into())).await
 }
 
@@ -998,12 +1096,14 @@ mod tests {
 
     #[test]
     fn table_values_are_width_bounded() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "table_values_are_width_bounded");
         assert_eq!(truncate("123456", 4), "1234");
         assert_eq!(truncate("abc", 4), "abc");
     }
 
     #[test]
     fn build_arguments_are_bounded_and_parse_legacy_flags() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "build_arguments_are_bounded_and_parse_legacy_flags");
         let parsed = parse_build_args(&["Gen4", "h3", "--limit", "20", "--flagged"]).unwrap();
         assert_eq!(parsed.family.as_deref(), Some("Gen4"));
         assert_eq!(parsed.device_type.as_deref(), Some("h3"));
@@ -1014,6 +1114,7 @@ mod tests {
 
     #[test]
     fn build_table_preserves_frontend_fields() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "build_table_preserves_frontend_fields");
         let output = format_builds(&[serde_json::json!({
             "id": "build-1", "version": "1.2.3", "deviceFamily": "Gen4",
             "deviceType": "h3", "tag": null, "isFaulty": true
@@ -1025,6 +1126,7 @@ mod tests {
 
     #[test]
     fn run_test_arguments_build_all_and_partial_selections() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "run_test_arguments_build_all_and_partial_selections");
         let all = parse_run_test_args(&["Gen4", "h3", "build-1", "6", "--all", "--logs"]).unwrap();
         assert!(all.logs);
         assert!(matches!(
@@ -1042,6 +1144,7 @@ mod tests {
 
     #[test]
     fn case_spec_groups_cases_under_their_suite() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::web_cli", "case_spec_groups_cases_under_their_suite");
         let selections = case_selections("30:38,39,31:101,102").unwrap();
         assert_eq!(selections.len(), 2);
         assert_eq!(selections[0].suite_id, "30");

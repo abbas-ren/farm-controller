@@ -13,6 +13,7 @@ pub async fn export_tests(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_export_handlers", "export_tests");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

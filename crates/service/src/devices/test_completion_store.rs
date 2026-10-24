@@ -1,14 +1,42 @@
-use sqlx::PgPool;
+use sea_orm::{
+    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
+    Statement, sea_query::Expr,
+};
+
+use crate::persistence::entity::test_execution;
 
 use super::{error::DeviceRepositoryError, repository_types::TestCompletionTarget};
 
+#[derive(Debug, FromQueryResult)]
+struct TestCompletionTargetRow {
+    status: String,
+    device_family: Option<String>,
+    mac_address: Option<String>,
+    device_type: String,
+    build_version: Option<String>,
+    build_id: Option<String>,
+    created_by: Option<String>,
+    gen5_controller_ip: Option<String>,
+    uart_port: Option<String>,
+    gen4_controller_ip: Option<String>,
+    relay_serial: Option<String>,
+    relay_channel: Option<i32>,
+}
+
 pub(crate) async fn test_completion_target(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     test_id: &str,
     device_id: &str,
 ) -> Result<Option<TestCompletionTarget>, DeviceRepositoryError> {
-    Ok(sqlx::query_as::<_, TestCompletionTarget>(
-                r#"SELECT COALESCE(test.status::text, 'not_executed') AS status,
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::test_completion_store",
+        "test_completion_target",
+    );
+    // Complex LATERAL join over controller mappings — keep as Statement.
+    Ok(
+        TestCompletionTargetRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            r#"SELECT COALESCE(test.status::text, 'not_executed') AS status,
                          device."deviceFamily" AS device_family,
                          device."macAddress" AS mac_address, test."deviceType" AS device_type,
                          test."buildVersion" AS build_version, test."buildId"::text AS build_id,
@@ -43,25 +71,45 @@ pub(crate) async fn test_completion_target(
                      WHERE test."testId" = $1
                      ORDER BY relay_channel."updatedAt" DESC NULLS LAST
                      LIMIT 1"#,
+            [test_id.into(), device_id.into()],
+        ))
+        .one(orm)
+        .await?
+        .map(|row| TestCompletionTarget {
+            status: row.status,
+            device_family: row.device_family,
+            mac_address: row.mac_address,
+            device_type: row.device_type,
+            build_version: row.build_version,
+            build_id: row.build_id,
+            created_by: row.created_by,
+            gen5_controller_ip: row.gen5_controller_ip,
+            uart_port: row.uart_port,
+            gen4_controller_ip: row.gen4_controller_ip,
+            relay_serial: row.relay_serial,
+            relay_channel: row.relay_channel,
+        }),
     )
-    .bind(test_id)
-        .bind(device_id)
-        .fetch_optional(pool)
-    .await?)
 }
 
 pub(crate) async fn store_rtos_log_path(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     test_id: &str,
     path: &str,
 ) -> Result<(), DeviceRepositoryError> {
-    sqlx::query(
-        r#"UPDATE test_executions SET "rtosLogPath" = $2, "updatedAt" = now()
-           WHERE "testId" = $1"#,
-    )
-    .bind(test_id)
-    .bind(path)
-    .execute(pool)
-    .await?;
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::test_completion_store",
+        "store_rtos_log_path",
+    );
+    let now = chrono::Utc::now();
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::RtosLogPath,
+            Expr::value(Some(path.to_owned())),
+        )
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(test_id))
+        .exec(orm)
+        .await?;
     Ok(())
 }

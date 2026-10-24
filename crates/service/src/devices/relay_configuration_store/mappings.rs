@@ -3,6 +3,7 @@ use serde_json::{Map, Value};
 use super::super::VoltageLevel;
 
 fn normalized_mapping_key(value: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "normalized_mapping_key");
     value
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
@@ -11,6 +12,7 @@ fn normalized_mapping_key(value: &str) -> String {
 }
 
 fn matching_mapping_key(mappings: &Map<String, Value>, mac: &str) -> Option<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "matching_mapping_key");
     let normalized_mac = normalized_mapping_key(mac);
     mappings
         .keys()
@@ -19,6 +21,7 @@ fn matching_mapping_key(mappings: &Map<String, Value>, mac: &str) -> Option<Stri
 }
 
 pub(super) fn clear_gpio_mapping(mappings: &mut Value, mac: &str) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "clear_gpio_mapping");
     let Some(mappings) = mappings.as_object_mut() else {
         return;
     };
@@ -45,6 +48,7 @@ pub(super) fn upsert_gpio_mapping(
     gpio_default_level: VoltageLevel,
     relay_default_level: VoltageLevel,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "upsert_gpio_mapping");
     let gpio = gpio.unwrap_or_default();
     if gpio.trim().is_empty() {
         clear_gpio_mapping(mappings, mac);
@@ -87,6 +91,7 @@ mod tests {
 
     #[test]
     fn gpio_updates_preserve_uart_and_power_mapping() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::relay_configuration_store::mappings", "gpio_updates_preserve_uart_and_power_mapping");
         let mut mappings = json!({"AA-BB": {
             "uart": "ttyUSB0",
             "power": "P1",

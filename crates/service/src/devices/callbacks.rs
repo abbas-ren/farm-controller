@@ -16,6 +16,7 @@ use axum::{
 use tracing::info;
 
 pub(super) fn callback_client() -> reqwest::Client {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "callback_client");
     crate::external_http::client(DEVICE_CALLBACK_TIMEOUT)
         .expect("static device callback HTTP policy is valid")
 }
@@ -44,6 +45,7 @@ pub async fn register_controller(
     State(state): State<Arc<AppState>>,
     Json(registration): Json<ControllerRegistration>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "register_controller");
     let Some(repository) = &state.device_repository else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -143,6 +145,7 @@ pub async fn mapping_gen5(
     headers: HeaderMap,
     Json(callback): Json<MappingCallback>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "mapping_gen5");
     let caller_ip = callback.ip.clone().or_else(|| {
         headers
             .get("x-forwarded-for")
@@ -196,6 +199,7 @@ pub async fn flash_confirm(
     State(state): State<Arc<AppState>>,
     Json(flashing_status): Json<IplFlashingStatus>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "flash_confirm");
     flash_confirmation_response(&state, "x5h", flashing_status).await
 }
 
@@ -223,6 +227,7 @@ pub async fn flash_confirm_gen4(
     State(state): State<Arc<AppState>>,
     Json(flashing_status): Json<IplFlashingStatus>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "flash_confirm_gen4");
     info!(
         "Received flash confirmation for Gen4 device: {} status: {:?} completed: {} message: {} generation: {} percentage: {}",
         flashing_status.mac,
@@ -249,6 +254,7 @@ where
     F: FnOnce(Arc<dyn DeviceRepository>) -> Fut,
     Fut: std::future::Future<Output = Result<(), DeviceRepositoryError>>,
 {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "callback_response");
     let Some(repository) = state.device_repository.clone() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -272,6 +278,7 @@ async fn flash_confirmation_response(
     device_type: &str,
     flashing_status: IplFlashingStatus,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "flash_confirmation_response");
     let Some(repository) = state.device_repository.as_ref() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -287,14 +294,28 @@ async fn flash_confirmation_response(
             info!("\nFlash confirmation result received: {:?}\n", result);
             if let Some(execution) = result.cancelled_execution {
                 let test_id = execution.test_id;
-                // let created_by = execution.created_by;
+                let fail_message =
+                    "IPL flash confirmation failed. Test execution cancelled";
+                if let Err(error) = crate::devices::test_log::append_test_log(
+                    &state,
+                    &test_id,
+                    fail_message,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        %error,
+                        test_id = %test_id,
+                        "failed to append IPL failure test log"
+                    );
+                }
                 if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
                     FrontendMessagePayload::TestExecutionUpdate {
                         build_id: Some(execution.build_id),
                         test_id: test_id.clone(),
                         status: Some(TestStatus::Cancelled),
                         progress: None,
-                        message: None,
+                        message: Some(fail_message.to_owned()),
                         cancel_requested: None,
                     },
                 )) {
@@ -318,7 +339,28 @@ async fn flash_confirmation_response(
             if let Some(progress) = result.progress {
                 let test_id = progress.test_id;
                 let build_id = progress.build_id;
-                // let created_by = progress.created_by;
+                let log_message = if progress.message.is_empty() {
+                    if progress.completed {
+                        "Got flash confirmation success, waiting for device to come back online..."
+                            .to_owned()
+                    } else {
+                        format!(
+                            "IPL flash progress: {}%",
+                            progress.percentage
+                        )
+                    }
+                } else {
+                    progress.message.clone()
+                };
+                if let Err(error) = crate::devices::test_log::append_test_log(
+                    &state,
+                    &test_id,
+                    &log_message,
+                )
+                .await
+                {
+                    tracing::warn!(%error, test_id = %test_id, "failed to append IPL progress log");
+                }
                 if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
                     FrontendMessagePayload::TestExecutionUpdate {
                         build_id: Some(build_id),
@@ -329,7 +371,7 @@ async fn flash_confirmation_response(
                             TestStatus::InProgress
                         }),
                         progress: Some(progress.percentage as u64),
-                        message: Some(progress.message.clone()),
+                        message: Some(log_message),
                         cancel_requested: None,
                     },
                 )) {
@@ -351,6 +393,7 @@ async fn flash_confirmation_response(
 }
 
 fn parse_tty_entry(value: Option<&serde_json::Value>) -> Result<Option<TtyEntry>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::callbacks", "parse_tty_entry");
     match value {
         None | Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::String(value)) => serde_json::from_str(value)

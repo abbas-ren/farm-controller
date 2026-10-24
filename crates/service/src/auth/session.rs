@@ -12,6 +12,7 @@ pub async fn authorize_request(
     headers: &HeaderMap,
     required_role: Option<&str>,
 ) -> Result<HeaderMap, AuthorizationError> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::session", "authorize_request");
     let Some(access_token) = bearer_header(headers, axum::http::header::AUTHORIZATION)
         .or_else(|| cookie_value(headers, "accessToken"))
     else {
@@ -68,6 +69,7 @@ pub async fn authorize_request(
 
 /// Extracts the subject claim from a bearer token or access-token cookie.
 pub(crate) fn token_subject(headers: &HeaderMap) -> Option<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::session", "token_subject");
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
     let token = bearer_header(headers, axum::http::header::AUTHORIZATION)
@@ -82,6 +84,7 @@ pub(crate) fn token_subject(headers: &HeaderMap) -> Option<String> {
 }
 
 fn bearer_header(headers: &HeaderMap, name: axum::http::HeaderName) -> Option<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::session", "bearer_header");
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
@@ -96,6 +99,7 @@ fn bearer_header(headers: &HeaderMap, name: axum::http::HeaderName) -> Option<St
 }
 
 fn refresh_token(headers: &HeaderMap) -> Option<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::session", "refresh_token");
     ["refreshtoken", "x-refresh-token"]
         .into_iter()
         .find_map(|name| bearer_header(headers, axum::http::HeaderName::from_static(name)))
@@ -103,6 +107,7 @@ fn refresh_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn cookie_value(headers: &HeaderMap, expected_name: &str) -> Option<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::session", "cookie_value");
     headers
         .get(axum::http::header::COOKIE)
         .and_then(|value| value.to_str().ok())
@@ -122,6 +127,7 @@ pub(super) fn append_cookie(
     max_age: u64,
     secure: bool,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::session", "append_cookie");
     let secure_attribute = if secure { "; Secure" } else { "" };
     let cookie = format!(
         "{name}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure_attribute}"

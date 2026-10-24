@@ -12,6 +12,7 @@ use crate::{
 use super::repository_types::{BuildUploadFinalization, BuildUploadResult};
 
 pub(crate) fn user_id(headers: &HeaderMap) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "user_id");
     headers
         .get("x-user-id")
         .and_then(|value| value.to_str().ok())
@@ -23,6 +24,7 @@ pub(crate) fn user_id(headers: &HeaderMap) -> String {
 }
 
 pub(crate) fn progress(state: &AppState, _user_id: &str, upload_id: &str, percent: u64) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "progress");
     publish(
         state,
         ServerEvent::frontend(FrontendMessagePayload::UploadProgress {
@@ -33,6 +35,7 @@ pub(crate) fn progress(state: &AppState, _user_id: &str, upload_id: &str, percen
 }
 
 pub(crate) fn failure(state: &AppState, _user_id: &str, upload_id: &str, message: &str) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "failure");
     publish(
         state,
         ServerEvent::frontend(FrontendMessagePayload::UploadError {
@@ -47,6 +50,7 @@ pub(crate) async fn completed(
     request: &BuildUploadFinalization,
     result: BuildUploadResult,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "completed");
     if let Err(error) =
         crate::workers::prepare_uploaded_build(state, &result.release, &request.user_id).await
     {
@@ -106,6 +110,7 @@ pub(crate) async fn completed(
 }
 
 fn publish(state: &AppState, event: ServerEvent) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::upload_events", "publish");
     if let Err(error) = state.event_publisher.publish(event) {
         tracing::warn!(%error, "failed to publish build upload event");
     }

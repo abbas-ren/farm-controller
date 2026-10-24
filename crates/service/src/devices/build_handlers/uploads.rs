@@ -48,6 +48,7 @@ pub async fn upload_custom(
     headers: HeaderMap,
     multipart: Multipart,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::uploads", "upload_custom");
     upload_multipart(state, headers, multipart, true).await
 }
 
@@ -73,6 +74,7 @@ pub async fn upload_official(
     headers: HeaderMap,
     multipart: Multipart,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::uploads", "upload_official");
     upload_multipart(state, headers, multipart, false).await
 }
 
@@ -82,6 +84,7 @@ async fn upload_multipart(
     mut multipart: Multipart,
     is_custom: bool,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::uploads", "upload_multipart");
     let required_role = (!is_custom).then_some("admin");
     let response_headers = match auth::authorize_request(&state, &headers, required_role).await {
         Ok(headers) => headers,
@@ -249,6 +252,7 @@ pub async fn init_upload(
     headers: HeaderMap,
     payload: Result<Json<BuildUploadInitRequest>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::uploads", "init_upload");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

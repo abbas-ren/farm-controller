@@ -16,6 +16,7 @@ pub async fn builds_for_device(
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_inventory_handlers", "builds_for_device");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -45,6 +46,7 @@ pub async fn builds_for_device_type(
     headers: HeaderMap,
     Query(query): Query<BuildsQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_inventory_handlers", "builds_for_device_type");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -72,6 +74,7 @@ pub async fn configure_artifacts(
     headers: HeaderMap,
     Json(request): Json<DeviceTypeFolderRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_inventory_handlers", "configure_artifacts");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

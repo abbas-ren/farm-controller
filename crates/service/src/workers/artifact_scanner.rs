@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     config::ArtifactCleanup,
+    persistence::entity::{device_type_folder, release},
     socket::types::{farm::ServerEvent, frontend::FrontendMessagePayload},
     state::AppState,
 };
@@ -20,6 +21,8 @@ use super::{
     artifact_preparation::{prepare_artifacts, safe_segment},
     build_preparation::enqueue_official_build,
 };
+
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect, Set, sea_query::Expr};
 
 #[derive(Clone, Debug, Serialize)]
 struct ArtifactInfo {
@@ -358,38 +361,40 @@ async fn persist_results(
     let mut seen = HashSet::new();
     for result in results {
         seen.insert((result.folder_name.clone(), result.version.clone()));
-        let folder = sqlx::query_as::<_, (String, String)>(
-            r#"SELECT "deviceType", "deviceFamily" FROM device_type_folders
-               WHERE "folderName" = $1"#,
-        )
-        .bind(&result.folder_name)
-        .fetch_optional(database.pool())
-        .await
-        .map_err(|error| error.to_string())?;
+        let folder = device_type_folder::Entity::find()
+            .filter(device_type_folder::Column::FolderName.eq(&result.folder_name))
+            .select_only()
+            .column(device_type_folder::Column::DeviceType)
+            .column(device_type_folder::Column::DeviceFamily)
+            .into_tuple::<(String, String)>()
+            .one(database.orm())
+            .await
+            .map_err(|error| error.to_string())?;
         let Some((device_type, device_family)) = folder else {
             tracing::warn!(folder = %result.folder_name, version = %result.version, "skipping artifact folder without a device mapping");
             continue;
         };
         let artifacts =
             serde_json::to_value(&result.artifacts).map_err(|error| error.to_string())?;
-        let existing = sqlx::query_as::<_, (Uuid, String, String, serde_json::Value)>(
-            r#"SELECT id, "uploadedBy", "buildType"::text, artifacts
-               FROM releases WHERE "folderName" = $1 AND version = $2"#,
-        )
-        .bind(&result.folder_name)
-        .bind(&result.version)
-        .fetch_optional(database.pool())
-        .await
-        .map_err(|error| error.to_string())?;
-        if let Some((release_id, uploaded_by, build_type, existing_artifacts)) = existing {
-            sqlx::query(
-                r#"UPDATE releases SET "lastScannedAt" = now(), "updatedAt" = now()
-                   WHERE id = $1"#,
-            )
-            .bind(release_id)
-            .execute(database.pool())
+        let existing = release::Entity::find()
+            .filter(release::Column::FolderName.eq(&result.folder_name))
+            .filter(release::Column::Version.eq(&result.version))
+            .one(database.orm())
             .await
             .map_err(|error| error.to_string())?;
+        if let Some(existing_release) = existing {
+            let release_id = existing_release.id;
+            let uploaded_by = existing_release.uploaded_by;
+            let build_type = existing_release.build_type;
+            let existing_artifacts = existing_release.artifacts;
+            let now = Utc::now();
+            release::Entity::update_many()
+                .col_expr(release::Column::LastScannedAt, Expr::value(Some(now)))
+                .col_expr(release::Column::UpdatedAt, Expr::value(now))
+                .filter(release::Column::Id.eq(release_id))
+                .exec(database.orm())
+                .await
+                .map_err(|error| error.to_string())?;
             if uploaded_by != "system"
                 || (!artifact_metadata_changed(&existing_artifacts, &result.artifacts)
                     && required_local_artifacts_exist(
@@ -406,20 +411,19 @@ async fn persist_results(
                 release_id,
                 &device_type,
                 &device_family,
-                build_type == "official",
+                build_type == release::BuildType::Official,
             )
             .await
             {
                 Ok(local_artifacts) => {
-                    sqlx::query(
-                        r#"UPDATE releases SET artifacts = $2, "updatedAt" = now()
-                           WHERE id = $1"#,
-                    )
-                    .bind(release_id)
-                    .bind(local_artifacts)
-                    .execute(database.pool())
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    let now = Utc::now();
+                    release::Entity::update_many()
+                        .col_expr(release::Column::Artifacts, Expr::value(local_artifacts))
+                        .col_expr(release::Column::UpdatedAt, Expr::value(now))
+                        .filter(release::Column::Id.eq(release_id))
+                        .exec(database.orm())
+                        .await
+                        .map_err(|error| error.to_string())?;
                 }
                 Err(error) => {
                     tracing::error!(%error, folder = %result.folder_name, version = %result.version, "failed to refresh scanned build");
@@ -428,32 +432,37 @@ async fn persist_results(
             continue;
         }
         let release_id = Uuid::new_v4();
-        let build_type = if is_custom_version(&result.version) {
-            "custom"
+        let is_official = !is_custom_version(&result.version);
+        let build_type = if is_official {
+            release::BuildType::Official
         } else {
-            "official"
+            release::BuildType::Custom
         };
-        sqlx::query(
-            r#"INSERT INTO releases
-                  (id, "folderName", version, artifacts, "lastScannedAt", tag,
-                   "uploadedBy", "buildType", "deviceFamily", "deviceType",
-                   "createdAt", "updatedAt")
-               VALUES ($1, $2, $3, $4, now(), $5, 'system',
-                       $6::"enum_releases_buildType", $7, $8, now(), now())
-               ON CONFLICT ("folderName", version) DO NOTHING"#,
-        )
-        .bind(release_id)
-        .bind(&result.folder_name)
-        .bind(&result.version)
-        .bind(&artifacts)
-        .bind(format!(
-            "system-{}",
-            &Uuid::new_v4().simple().to_string()[..8]
-        ))
-        .bind(build_type)
-        .bind(&device_family)
-        .bind(&device_type)
-        .execute(database.pool())
+        let build_type_label = if is_official { "official" } else { "custom" };
+        let now = Utc::now();
+        release::Entity::insert(release::ActiveModel {
+            id: Set(release_id),
+            folder_name: Set(result.folder_name.clone()),
+            version: Set(result.version.clone()),
+            artifacts: Set(artifacts),
+            last_scanned_at: Set(Some(now)),
+            tag: Set(format!(
+                "system-{}",
+                &Uuid::new_v4().simple().to_string()[..8]
+            )),
+            uploaded_by: Set("system".to_owned()),
+            build_type: Set(build_type),
+            device_family: Set(device_family.clone()),
+            device_type: Set(device_type.clone()),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        })
+        .on_conflict_do_nothing_on([
+            release::Column::FolderName,
+            release::Column::Version,
+        ])
+        .exec(database.orm())
         .await
         .map_err(|error| error.to_string())?;
         match prepare_scanned_build(
@@ -463,20 +472,19 @@ async fn persist_results(
             release_id,
             &device_type,
             &device_family,
-            build_type == "official",
+            is_official,
         )
         .await
         {
             Ok(local_artifacts) => {
-                sqlx::query(
-                    r#"UPDATE releases SET artifacts = $2, "updatedAt" = now()
-                       WHERE id = $1"#,
-                )
-                .bind(release_id)
-                .bind(local_artifacts)
-                .execute(database.pool())
-                .await
-                .map_err(|error| error.to_string())?;
+                let now = Utc::now();
+                release::Entity::update_many()
+                    .col_expr(release::Column::Artifacts, Expr::value(local_artifacts))
+                    .col_expr(release::Column::UpdatedAt, Expr::value(now))
+                    .filter(release::Column::Id.eq(release_id))
+                    .exec(database.orm())
+                    .await
+                    .map_err(|error| error.to_string())?;
             }
             Err(error) => {
                 tracing::error!(%error, folder = %result.folder_name, version = %result.version, "failed to prepare scanned build");
@@ -488,7 +496,7 @@ async fn persist_results(
                 version: result.version.clone(),
                 device_type: device_type.to_owned(),
                 device_family: device_family.to_owned(),
-                build_type: build_type.to_owned(),
+                build_type: build_type_label.to_owned(),
             },
         ));
     }
@@ -745,29 +753,38 @@ async fn cleanup_removed(state: &AppState, seen: &HashSet<(String, String)>) -> 
         return Ok(());
     }
     let database = state.database.as_ref().expect("worker requires database");
-    let rows = sqlx::query_as::<_, (Uuid, String, String)>(
-        r#"SELECT id, "folderName", version FROM releases
-           WHERE "uploadedBy" = 'system' AND "lastScannedAt" IS NOT NULL"#,
-    )
-    .fetch_all(database.pool())
-    .await
-    .map_err(|error| error.to_string())?;
+    let rows = release::Entity::find()
+        .filter(release::Column::UploadedBy.eq("system"))
+        .filter(release::Column::LastScannedAt.is_not_null())
+        .select_only()
+        .column(release::Column::Id)
+        .column(release::Column::FolderName)
+        .column(release::Column::Version)
+        .into_tuple::<(Uuid, String, String)>()
+        .all(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
     for (id, folder, version) in rows {
         if seen.contains(&(folder, version)) {
             continue;
         }
         match cleanup {
             ArtifactCleanup::Soft => {
-                sqlx::query(r#"UPDATE releases SET "lastScannedAt" = NULL, "updatedAt" = now() WHERE id = $1"#)
-                    .bind(id)
-                    .execute(database.pool())
+                let now = Utc::now();
+                release::Entity::update_many()
+                    .col_expr(
+                        release::Column::LastScannedAt,
+                        Expr::value(Option::<DateTime<Utc>>::None),
+                    )
+                    .col_expr(release::Column::UpdatedAt, Expr::value(now))
+                    .filter(release::Column::Id.eq(id))
+                    .exec(database.orm())
                     .await
                     .map_err(|error| error.to_string())?;
             }
             ArtifactCleanup::Delete => {
-                sqlx::query("DELETE FROM releases WHERE id = $1")
-                    .bind(id)
-                    .execute(database.pool())
+                release::Entity::delete_by_id(id)
+                    .exec(database.orm())
                     .await
                     .map_err(|error| error.to_string())?;
             }

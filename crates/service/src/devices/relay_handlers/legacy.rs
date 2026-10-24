@@ -6,6 +6,7 @@ pub(crate) async fn configure_legacy_relay(
     headers: HeaderMap,
     payload: Result<Json<LegacyRelayConfiguration>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "configure_legacy_relay");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -56,6 +57,7 @@ pub(crate) async fn fresh_legacy_relay(
     headers: HeaderMap,
     payload: Result<Json<LegacyRelayConfiguration>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "fresh_legacy_relay");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -88,6 +90,7 @@ pub(crate) async fn remap_legacy_relay(
     headers: HeaderMap,
     payload: Result<Json<LegacyRelayRemapRequest>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "remap_legacy_relay");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -139,6 +142,7 @@ pub(crate) async fn legacy_relay_conflicts(
     headers: HeaderMap,
     Query(query): Query<LegacyRelayConflictQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "legacy_relay_conflicts");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -159,6 +163,7 @@ pub(crate) async fn legacy_relays(
     headers: HeaderMap,
     Query(query): Query<LegacyRelayListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "legacy_relays");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -175,6 +180,7 @@ pub(crate) async fn legacy_relay_channels(
     headers: HeaderMap,
     Query(query): Query<LegacyRelayChannelListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "legacy_relay_channels");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -191,6 +197,7 @@ pub(crate) async fn legacy_relay_channel_by_id(
     headers: HeaderMap,
     Path(channel_id): Path<Uuid>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "legacy_relay_channel_by_id");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -212,6 +219,7 @@ pub(crate) async fn legacy_relay_by_id(
     headers: HeaderMap,
     Path(relay_id): Path<Uuid>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "legacy_relay_by_id");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -229,6 +237,7 @@ pub(crate) async fn delete_legacy_relay_channel(
     headers: HeaderMap,
     Path(channel_id): Path<Uuid>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "delete_legacy_relay_channel");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -250,6 +259,7 @@ pub(crate) async fn delete_legacy_relay(
     headers: HeaderMap,
     Path(relay_id): Path<Uuid>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::legacy", "delete_legacy_relay");
     let (response_headers, repository) = match super::legacy_repository(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,

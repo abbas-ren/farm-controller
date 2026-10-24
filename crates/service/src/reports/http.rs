@@ -19,6 +19,7 @@ use super::{
 };
 
 pub fn router() -> Router<Arc<AppState>> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::http", "router");
     Router::new()
         .route("/report", post(enqueue_report))
         .route("/report/{job_id}", get(report_status))
@@ -31,6 +32,7 @@ pub async fn enqueue_report(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ReportRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::http", "enqueue_report");
     let Some(service) = &state.reports else {
         return report_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -76,6 +78,7 @@ pub async fn report_status(
     State(state): State<Arc<AppState>>,
     AxumPath(job_id): AxumPath<Uuid>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::http", "report_status");
     let Some(service) = &state.reports else {
         return report_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -95,6 +98,7 @@ pub async fn upload_confluence(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConfluenceUploadRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::http", "upload_confluence");
     let Some(service) = &state.reports else {
         return report_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -125,6 +129,7 @@ pub async fn upload_confluence(
 }
 
 fn report_error(status: StatusCode, code: &str, message: &str) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::http", "report_error");
     (
         status,
         Json(ErrorResponse {

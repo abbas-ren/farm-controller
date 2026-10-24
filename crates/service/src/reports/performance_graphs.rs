@@ -39,6 +39,7 @@ pub(super) async fn write(
     request: &ReportRequest,
     cases: &[TestCaseRecord],
 ) -> io::Result<()> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "write");
     let current_dir = current_root.join("performance_commands_results");
     if !current_dir.is_dir() {
         return Err(io::Error::new(
@@ -282,6 +283,7 @@ pub(super) async fn write(
 }
 
 fn normalized_capability(value: f64, old: f64, new: f64, target: f64) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "normalized_capability");
     let target = if target > 0.0 {
         target
     } else {
@@ -291,6 +293,7 @@ fn normalized_capability(value: f64, old: f64, new: f64, target: f64) -> f64 {
 }
 
 fn fixed_labels(category: &str) -> &'static [&'static str] {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "fixed_labels");
     match category {
         "Network" => &["netperf", "iperf3"],
         "Storage" => &[
@@ -330,6 +333,7 @@ fn fixed_labels(category: &str) -> &'static [&'static str] {
 }
 
 fn ordered_values(category: &str, entries: &[MetricEntry]) -> (Vec<String>, Vec<f64>, Vec<f64>) {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "ordered_values");
     if matches!(category, "DMA" | "GPU") {
         return (
             vec![fixed_labels(category)[0].to_owned()],
@@ -363,6 +367,7 @@ fn ordered_values(category: &str, entries: &[MetricEntry]) -> (Vec<String>, Vec<
 }
 
 fn average(values: impl Iterator<Item = f64>) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "average");
     let values = values.collect::<Vec<_>>();
     if values.is_empty() {
         0.0
@@ -377,6 +382,7 @@ mod tests {
 
     #[test]
     fn categories_follow_legacy_aliases() {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs", "categories_follow_legacy_aliases");
         assert_eq!(canonical_category("File System"), Some("Storage"));
         assert_eq!(canonical_category("systembench"), Some("CPU"));
         assert_eq!(canonical_category("custom"), None);

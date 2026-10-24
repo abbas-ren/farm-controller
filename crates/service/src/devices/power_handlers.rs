@@ -19,6 +19,7 @@ pub async fn toggle_device_power(
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::power_handlers", "toggle_device_power");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -130,6 +131,7 @@ pub async fn toggle_device_power(
 }
 
 pub(super) fn device_power_event(device_id: &str, power: &str) -> ServerEvent {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::power_handlers", "device_power_event");
     ServerEvent::frontend(FrontendMessagePayload::DevicePowerUpdate {
         device_id: device_id.to_owned(),
         power: DevicePower::from(power),
@@ -142,6 +144,7 @@ pub async fn reboot_device(
     State(state): State<Arc<AppState>>,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::power_handlers", "reboot_device");
     let Some(repository) = state.device_repository.clone() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,

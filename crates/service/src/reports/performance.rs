@@ -11,6 +11,7 @@ pub(crate) async fn write_performance_comparisons(
     current_root: &Path,
     request: &ReportRequest,
 ) -> Result<(), std::io::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance", "write_performance_comparisons");
     let current = current_root.join("performance_commands_results");
     if !current.is_dir() {
         return Err(std::io::Error::new(
@@ -168,6 +169,7 @@ fn render_performance_comparison(
     old_label: &str,
     new_label: &str,
 ) -> Result<(), std::io::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance", "render_performance_comparison");
     use plotters::prelude::*;
 
     let path = path.to_string_lossy().into_owned();
@@ -215,6 +217,7 @@ fn render_performance_comparison(
 }
 
 pub(crate) fn performance_metrics(content: &str) -> (HashMap<String, f64>, String) {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance", "performance_metrics");
     let lines = content.lines().collect::<Vec<_>>();
     let mut metrics = HashMap::new();
     let mut command = "Unknown".to_owned();

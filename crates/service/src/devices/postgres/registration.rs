@@ -7,7 +7,8 @@ impl DeviceRegistrationRepository for PostgresDeviceRepository {
         test_id: &str,
         device_id: &str,
     ) -> Result<Option<TestCompletionTarget>, DeviceRepositoryError> {
-        test_completion_store::test_completion_target(&self.pool, test_id, device_id).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "test_completion_target");
+        test_completion_store::test_completion_target(self.orm(), test_id, device_id).await
     }
 
     async fn store_rtos_log_path(
@@ -15,35 +16,40 @@ impl DeviceRegistrationRepository for PostgresDeviceRepository {
         test_id: &str,
         path: &str,
     ) -> Result<(), DeviceRepositoryError> {
-        test_completion_store::store_rtos_log_path(&self.pool, test_id, path).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "store_rtos_log_path");
+        test_completion_store::store_rtos_log_path(self.orm(), test_id, path).await
     }
 
     async fn mark_device_flashing(
         &self,
         device_id: &str,
     ) -> Result<Option<DeviceFlashingResult>, DeviceRepositoryError> {
-        flashing_store::mark_device_flashing(&self.pool, device_id).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "mark_device_flashing");
+        flashing_store::mark_device_flashing(self.orm(), device_id).await
     }
 
     async fn export_devices(
         &self,
         query: &DeviceCsvQuery,
     ) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
-        device_export_store::export_devices(&self.pool, query).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "export_devices");
+        device_export_store::export_devices(self.orm(), query).await
     }
 
     async fn register_device(
         &self,
         registration: &DeviceRegistration,
     ) -> Result<repository_types::DeviceRegistrationResult, DeviceRepositoryError> {
-        device_registration_store::register_device(&self.pool, registration).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "register_device");
+        device_registration_store::register_device(self.orm(), registration).await
     }
 
     async fn register_controller(
         &self,
         registration: &ControllerRegistration,
     ) -> Result<RegistrationResult, DeviceRepositoryError> {
-        registration_store::register_controller(&self.pool, registration).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "register_controller");
+        registration_store::register_controller(self.orm(), registration).await
     }
 
     async fn save_gen5_mapping(
@@ -53,7 +59,8 @@ impl DeviceRegistrationRepository for PostgresDeviceRepository {
         status: CallbackStatus,
         tty_entry: Option<&TtyEntry>,
     ) -> Result<(), DeviceRepositoryError> {
-        callback_store::save_gen5_mapping(&self.pool, caller_ip, mac, status, tty_entry).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "save_gen5_mapping");
+        callback_store::save_gen5_mapping(self.orm(), caller_ip, mac, status, tty_entry).await
     }
 
     async fn confirm_flash(
@@ -61,6 +68,7 @@ impl DeviceRegistrationRepository for PostgresDeviceRepository {
         device_type: &str,
         status: &IplFlashingStatus,
     ) -> Result<FlashConfirmationResult, DeviceRepositoryError> {
-        callback_store::confirm_flash(&self.pool, device_type, status).await
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::registration", "confirm_flash");
+        callback_store::confirm_flash(self.orm(), device_type, status).await
     }
 }

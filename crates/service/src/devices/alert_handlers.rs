@@ -20,6 +20,7 @@ async fn context(
     headers: &HeaderMap,
     role: Option<&str>,
 ) -> Result<(HeaderMap, Arc<dyn DeviceRepository>), Box<axum::response::Response>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "context");
     let response_headers = auth::authorize_request(state, headers, role)
         .await
         .map_err(|error| Box::new(error.into_response()))?;
@@ -34,6 +35,7 @@ async fn context(
 }
 
 fn positive_page(value: Option<&str>, default: i64) -> i64 {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "positive_page");
     value
         .and_then(|value| value.parse().ok())
         .filter(|value| *value > 0)
@@ -41,6 +43,7 @@ fn positive_page(value: Option<&str>, default: i64) -> i64 {
 }
 
 fn alert_date(value: Option<&str>) -> Option<DateTime<Utc>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "alert_date");
     let value = value?;
     if let Ok(value) = DateTime::parse_from_rfc3339(value) {
         return Some(value.with_timezone(&Utc));
@@ -57,6 +60,7 @@ pub(crate) async fn admin_alerts(
     headers: HeaderMap,
     Query(query): Query<AdminAlertListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "admin_alerts");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -88,6 +92,7 @@ pub(crate) async fn all_alerts(
     headers: HeaderMap,
     Query(query): Query<AllAlertListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "all_alerts");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -112,6 +117,7 @@ pub(crate) async fn mark_single_read(
     headers: HeaderMap,
     Path(alert_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "mark_single_read");
     let (response_headers, repository) = match context(&state, &headers, None).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -137,6 +143,7 @@ pub(crate) async fn mark_read(
     headers: HeaderMap,
     Path(alert_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "mark_read");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -156,6 +163,7 @@ pub(crate) async fn mark_all_read(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_handlers", "mark_all_read");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,

@@ -26,12 +26,14 @@ impl KeycloakIdentityProvider {
     }
 
     pub(super) fn endpoint(&self, path: &str) -> Result<Url, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "endpoint");
         self.base_url
             .join(path)
             .map_err(|error| IdentityError::upstream(StatusCode::BAD_GATEWAY, error.to_string()))
     }
 
     fn client_secret(&self) -> Result<&str, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "client_secret");
         self.config.client_secret.as_deref().ok_or_else(|| {
             IdentityError::upstream(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -44,6 +46,7 @@ impl KeycloakIdentityProvider {
         &self,
         form: &[(&str, &str)],
     ) -> Result<T, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "token_request");
         let url = self.endpoint(&format!(
             "realms/{}/protocol/openid-connect/token",
             self.config.realm
@@ -59,6 +62,7 @@ impl KeycloakIdentityProvider {
     }
 
     pub(super) async fn client_token(&self) -> Result<String, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "client_token");
         let response: transport::ClientTokenResponse = self
             .token_request(&[
                 ("grant_type", "client_credentials"),
@@ -74,6 +78,7 @@ impl KeycloakIdentityProvider {
         username: &str,
         password: &str,
     ) -> Result<transport::TokenResponse, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "password_token");
         self.token_request(&[
             ("client_id", &self.config.client_id),
             ("client_secret", self.client_secret()?),
@@ -89,6 +94,7 @@ impl KeycloakIdentityProvider {
         &self,
         token: &str,
     ) -> Result<transport::IntrospectionResponse, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "introspect");
         let url = self.endpoint(&format!(
             "realms/{}/protocol/openid-connect/token/introspect",
             self.config.realm
@@ -112,6 +118,7 @@ impl KeycloakIdentityProvider {
         &self,
         refresh_token: &str,
     ) -> Result<RefreshedTokens, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "refresh");
         let response: transport::TokenResponse = self
             .token_request(&[
                 ("grant_type", "refresh_token"),
@@ -132,6 +139,7 @@ impl KeycloakIdentityProvider {
         path: &str,
         token: &str,
     ) -> Result<T, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "get_bearer");
         self.get_bearer_url(self.endpoint(path)?, token).await
     }
 
@@ -140,6 +148,7 @@ impl KeycloakIdentityProvider {
         url: Url,
         token: &str,
     ) -> Result<T, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::client", "get_bearer_url");
         let response = self
             .client
             .get(url)

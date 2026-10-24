@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub(crate) fn new_execution_event(test_id: &str, _user_id: &str) -> ServerEvent {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::events", "new_execution_event");
     ServerEvent::frontend(FrontendMessagePayload::TestExecution {
         test_id: test_id.to_owned(),
         r#type: TestExecutionUpdateType::New,

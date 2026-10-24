@@ -1,8 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
+use chrono::Utc;
+use sea_orm::{
+    ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    QuerySelect, Statement, TransactionTrait,
+    sea_query::{Expr, LockType},
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    persistence::entity::{device_action_queue, release, test_execution},
     socket::helpers::{build_failure_event, test_failure_events},
     state::AppState,
     workers::types::{ActionTransition, StaleAction},
@@ -26,7 +33,7 @@ async fn run_cycle(state: &AppState) {
     let Some(database) = &state.database else {
         return;
     };
-    let mut transaction = match database.pool().begin().await {
+    let transaction = match database.orm().begin().await {
         Ok(transaction) => transaction,
         Err(error) => {
             record_failure(state, &error, "failed to start watchdog transaction");
@@ -35,8 +42,10 @@ async fn run_cycle(state: &AppState) {
     };
     let timeout_minutes =
         i64::try_from(state.config.workers.device_action_stale_timeout_minutes).unwrap_or(i64::MAX);
-    let batch_size = i64::from(state.config.workers.device_action_watchdog_batch_size);
-    let actions = match sqlx::query_as::<_, StaleAction>(
+    let batch_size = u64::from(state.config.workers.device_action_watchdog_batch_size);
+    // Join + interval timeout + SKIP LOCKED — keep as Statement.
+    let actions = match StaleAction::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT action.id, action.type::text AS job_type, action."testId" AS test_id,
                   action."releaseId" AS release_id, action."targetDeviceId" AS device_id,
                   action."deviceType" AS device_type, action."userId" AS user_id,
@@ -50,10 +59,9 @@ async fn run_cycle(state: &AppState) {
            ORDER BY action."updatedAt" ASC
            LIMIT $2
            FOR UPDATE OF action SKIP LOCKED"#,
-    )
-    .bind(timeout_minutes)
-    .bind(batch_size)
-    .fetch_all(&mut *transaction)
+        [timeout_minutes.into(), (batch_size as i64).into()],
+    ))
+    .all(&transaction)
     .await
     {
         Ok(actions) => actions,
@@ -65,21 +73,24 @@ async fn run_cycle(state: &AppState) {
     };
 
     let mut transitions = Vec::with_capacity(actions.len());
+    let now = Utc::now();
     for action in actions {
-        if let Err(error) = sqlx::query(
-            r#"UPDATE device_action_queue SET status = 'cancelled', "updatedAt" = now()
-               WHERE id = $1"#,
-        )
-        .bind(action.id)
-        .execute(&mut *transaction)
-        .await
+        if let Err(error) = device_action_queue::Entity::update_many()
+            .col_expr(
+                device_action_queue::Column::Status,
+                Expr::value(device_action_queue::QueueJobStatus::Cancelled),
+            )
+            .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(device_action_queue::Column::Id.eq(action.id))
+            .exec(&transaction)
+            .await
         {
             let _ = transaction.rollback().await;
             record_failure(state, &error, "failed to cancel stale action");
             return;
         }
         let transition = if action.job_type == "test" {
-            match fail_test_action(&mut transaction, action, timeout_minutes).await {
+            match fail_test_action(&transaction, action, timeout_minutes).await {
                 Ok(transition) => transition,
                 Err(error) => {
                     let _ = transaction.rollback().await;
@@ -88,7 +99,7 @@ async fn run_cycle(state: &AppState) {
                 }
             }
         } else {
-            match fail_flash_action(&mut transaction, action).await {
+            match fail_flash_action(&transaction, action).await {
                 Ok(transition) => transition,
                 Err(error) => {
                     let _ = transaction.rollback().await;
@@ -119,31 +130,62 @@ async fn run_cycle(state: &AppState) {
 }
 
 async fn fail_test_action(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction: &sea_orm::DatabaseTransaction,
     action: StaleAction,
     timeout_minutes: i64,
-) -> Result<ActionTransition, sqlx::Error> {
+) -> Result<ActionTransition, sea_orm::DbErr> {
     let Some(test_id) = action.test_id else {
         return Ok(ActionTransition { events: Vec::new() });
     };
-    sqlx::query(
-        r#"UPDATE test_executions
-           SET status = 'failed', "executionPhase" = 'COMPLETE_FAILED',
-               "cancelRequested" = true, "cancelRequestedAt" = now(),
-               "cancelRequestedBy" = 'System', "cancelHandled" = true,
-               "cancelPreserve" = true,
-               "cancelSystemReason" = $2,
-               "startedAt" = COALESCE("startedAt", now()), "endedAt" = now(),
-               "updatedAt" = now()
-           WHERE "testId" = $1
-             AND status::text NOT IN ('cancelled', 'completed', 'failed')"#,
-    )
-    .bind(&test_id)
-    .bind(format!(
-        "stale queue timeout after {timeout_minutes} minute(s)"
-    ))
-    .execute(&mut **transaction)
-    .await?;
+    let now = Utc::now();
+    let reason = format!("stale queue timeout after {timeout_minutes} minute(s)");
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::Status,
+            Expr::value(Some(test_execution::TestStatus::Failed)),
+        )
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+        )
+        .col_expr(
+            test_execution::Column::CancelRequested,
+            Expr::value(Some(true)),
+        )
+        .col_expr(
+            test_execution::Column::CancelRequestedAt,
+            Expr::value(Some(now)),
+        )
+        .col_expr(
+            test_execution::Column::CancelRequestedBy,
+            Expr::value(Some("System".to_owned())),
+        )
+        .col_expr(
+            test_execution::Column::CancelHandled,
+            Expr::value(Some(true)),
+        )
+        .col_expr(
+            test_execution::Column::CancelPreserve,
+            Expr::value(Some(true)),
+        )
+        .col_expr(
+            test_execution::Column::CancelSystemReason,
+            Expr::value(Some(reason)),
+        )
+        .col_expr(
+            test_execution::Column::StartedAt,
+            Expr::cust(r#"COALESCE("startedAt", now())"#),
+        )
+        .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(&test_id))
+        .filter(test_execution::Column::Status.is_not_in([
+            test_execution::TestStatus::Cancelled,
+            test_execution::TestStatus::Completed,
+            test_execution::TestStatus::Failed,
+        ]))
+        .exec(transaction)
+        .await?;
     let build_id = action.build_id.unwrap_or_default();
     let owner = action.created_by.unwrap_or(action.user_id);
     Ok(ActionTransition {
@@ -152,32 +194,39 @@ async fn fail_test_action(
 }
 
 async fn fail_flash_action(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction: &sea_orm::DatabaseTransaction,
     action: StaleAction,
-) -> Result<ActionTransition, sqlx::Error> {
+) -> Result<ActionTransition, sea_orm::DbErr> {
     let release_id = match action.release_id {
         Some(release_id) => Some(release_id),
         None => {
-            sqlx::query_scalar::<_, uuid::Uuid>(
-                r#"SELECT id FROM releases
-                   WHERE "testedDeviceId" = $1 AND status::text = 'testing'
-                   ORDER BY "updatedAt" DESC LIMIT 1 FOR UPDATE"#,
-            )
-            .bind(action.device_id.as_deref())
-            .fetch_optional(&mut **transaction)
-            .await?
+            release::Entity::find()
+                .filter(release::Column::TestedDeviceId.eq(action.device_id.as_deref()))
+                .filter(release::Column::Status.eq(release::ReleaseTestStatus::Testing))
+                .order_by_desc(release::Column::UpdatedAt)
+                .limit(1)
+                .lock(LockType::Update)
+                .select_only()
+                .column(release::Column::Id)
+                .into_tuple::<uuid::Uuid>()
+                .one(transaction)
+                .await?
         }
     };
     let Some(release_id) = release_id else {
         return Ok(ActionTransition { events: Vec::new() });
     };
-    sqlx::query(
-        r#"UPDATE releases SET status = 'failed', "isFaulty" = true, "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(release_id)
-    .execute(&mut **transaction)
-    .await?;
+    let now = Utc::now();
+    release::Entity::update_many()
+        .col_expr(
+            release::Column::Status,
+            Expr::value(Some(release::ReleaseTestStatus::Failed)),
+        )
+        .col_expr(release::Column::IsFaulty, Expr::value(Some(true)))
+        .col_expr(release::Column::UpdatedAt, Expr::value(now))
+        .filter(release::Column::Id.eq(release_id))
+        .exec(transaction)
+        .await?;
     Ok(ActionTransition {
         events: vec![build_failure_event(
             release_id,
@@ -189,7 +238,7 @@ async fn fail_flash_action(
     })
 }
 
-fn record_failure(state: &AppState, error: &sqlx::Error, message: &str) {
+fn record_failure(state: &AppState, error: &sea_orm::DbErr, message: &str) {
     state
         .metrics
         .record_worker_run("device_action_watchdog", "failure");

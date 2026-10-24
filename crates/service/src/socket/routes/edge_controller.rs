@@ -17,6 +17,7 @@ pub(crate) async fn controller_session(
     controller_id: String,
     mut socket: WebSocket,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::edge_controller", "controller_session");
     tracing::info!(controller_id, "device controller WebSocket connected");
     while let Some(message) = socket.recv().await {
         let bytes = match message {
@@ -41,6 +42,7 @@ pub(crate) async fn process_heartbeat(
     controller_id: &str,
     bytes: &[u8],
 ) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::edge_controller", "process_heartbeat");
     let heartbeat: ControllerHeartbeat =
         serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     if heartbeat.message_type != "heartbeat" {

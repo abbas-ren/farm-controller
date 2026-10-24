@@ -10,7 +10,7 @@ pub struct RelaySyncJob {
     pub relay_id: Option<uuid::Uuid>,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct ExpiredRelayConfiguration {
     pub id: Uuid,
     pub device_mac: String,

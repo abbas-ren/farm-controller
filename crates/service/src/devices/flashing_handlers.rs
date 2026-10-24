@@ -39,6 +39,7 @@ pub async fn mark_device_flashing(
     State(state): State<Arc<AppState>>,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "mark_device_flashing");
     let Some(repository) = &state.device_repository else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -79,6 +80,7 @@ pub async fn mark_device_flashing(
 }
 
 async fn start_rtos_capture(target: &RtosCaptureTarget) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "start_rtos_capture");
     let url = reqwest::Url::parse(&format!(
         "http://{}:{EDGE_CONTROLLER_PORT}/rtos/start",
         target.controller_ip
@@ -97,6 +99,7 @@ async fn start_rtos_capture(target: &RtosCaptureTarget) -> Result<(), String> {
 }
 
 fn rtos_start_payload(target: &RtosCaptureTarget) -> serde_json::Value {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "rtos_start_payload");
     serde_json::json!({
         "mac": target.mac_address,
         "gen": target.generation,
@@ -112,6 +115,7 @@ mod tests {
 
     #[test]
     fn gen4_rtos_payload_preserves_relay_mapping() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::flashing_handlers", "gen4_rtos_payload_preserves_relay_mapping");
         let payload = rtos_start_payload(&RtosCaptureTarget {
             controller_ip: "192.0.2.1".to_owned(),
             mac_address: "00:11:22:33:44:55".to_owned(),

@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     devices::{EDGE_CONTROLLER_PORT, RELAY_CONTROLLER_TIMEOUT, RelayControllerAction},
+    persistence::entity::pending_relay_config,
     socket::{
         helpers::relay_timeout_event,
         types::{
@@ -18,6 +19,12 @@ use crate::{
     },
     state::AppState,
     workers::types::{ExpiredRelayConfiguration, RelaySyncJob, RelaySyncService},
+};
+
+use sea_orm::{
+    ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter, Statement,
+    TransactionTrait,
+    sea_query::Expr,
 };
 
 impl RelaySyncService {
@@ -239,7 +246,7 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
     let Some(database) = &state.database else {
         return;
     };
-    let mut transaction = match database.pool().begin().await {
+    let transaction = match database.orm().begin().await {
         Ok(transaction) => transaction,
         Err(error) => {
             state
@@ -252,7 +259,9 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
     let timeout_seconds =
         i64::try_from(state.config.workers.relay_config_timeout_seconds).unwrap_or(i64::MAX);
     let batch_size = i64::from(state.config.workers.relay_config_batch_size);
-    let expired = match sqlx::query_as::<_, ExpiredRelayConfiguration>(
+    // Join pending configs with relay channel/relay + FOR UPDATE SKIP LOCKED.
+    let expired = match ExpiredRelayConfiguration::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT pending.id, pending."deviceMac" AS device_mac,
                   pending."channelNo" AS channel_number,
                   relay.id AS relay_id,
@@ -265,10 +274,9 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
            ORDER BY pending."createdAt" ASC
            LIMIT $2
            FOR UPDATE OF pending SKIP LOCKED"#,
-    )
-    .bind(timeout_seconds)
-    .bind(batch_size)
-    .fetch_all(&mut *transaction)
+        [timeout_seconds.into(), batch_size.into()],
+    ))
+    .all(&transaction)
     .await
     {
         Ok(expired) => expired,
@@ -289,14 +297,20 @@ async fn run_relay_configuration_timeout_cycle(state: &AppState) {
         return;
     }
     let ids: Vec<Uuid> = expired.iter().map(|pending| pending.id).collect();
-    if let Err(error) = sqlx::query(
-        r#"UPDATE pending_relay_configs
-           SET status = 'failed', "updatedAt" = now()
-           WHERE id = ANY($1) AND status = 'pending'"#,
-    )
-    .bind(&ids)
-    .execute(&mut *transaction)
-    .await
+    let now = chrono::Utc::now();
+    if let Err(error) = pending_relay_config::Entity::update_many()
+        .col_expr(
+            pending_relay_config::Column::Status,
+            Expr::value(pending_relay_config::PendingRelayConfigStatus::Failed),
+        )
+        .col_expr(pending_relay_config::Column::UpdatedAt, Expr::value(now))
+        .filter(pending_relay_config::Column::Id.is_in(ids))
+        .filter(
+            pending_relay_config::Column::Status
+                .eq(pending_relay_config::PendingRelayConfigStatus::Pending),
+        )
+        .exec(&transaction)
+        .await
     {
         let _ = transaction.rollback().await;
         state

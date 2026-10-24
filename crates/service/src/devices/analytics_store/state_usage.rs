@@ -1,78 +1,93 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sea_orm::{
+    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, Statement,
+};
+
+use crate::persistence::entity::device;
 
 use super::super::{
     DeviceStateAnalytics, DeviceStateDetailedAnalytics, DeviceStateDetailedItem,
     error::DeviceRepositoryError,
 };
 
-#[derive(sqlx::FromRow)]
-struct StateCountRow {
-    state: String,
-    count: i64,
-}
-
-#[derive(sqlx::FromRow)]
-struct StateDetailRow {
-    device_family: String,
-    device_id: String,
-    device_type: String,
-    state: String,
+#[derive(Debug, FromQueryResult)]
+struct JsonRow {
+    value: serde_json::Value,
 }
 
 pub(crate) async fn device_state_counts(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
 ) -> Result<DeviceStateAnalytics, DeviceRepositoryError> {
-    let rows = sqlx::query_as::<_, StateCountRow>(
-        r#"SELECT COALESCE(state::text, 'unknown') AS state, count(*) AS count
-           FROM devices WHERE status::text = 'approved' AND "deletedAt" IS NULL
-              GROUP BY COALESCE(state::text, 'unknown')
-              ORDER BY COALESCE(state::text, 'unknown') ASC"#,
-    )
-    .fetch_all(pool)
-    .await?;
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::analytics_store::state_usage",
+        "device_state_counts",
+    );
+    let rows = device::Entity::find()
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(device::Column::DeletedAt.is_null())
+        .all(orm)
+        .await?;
+    let mut state_count: BTreeMap<String, i64> = BTreeMap::new();
+    for row in &rows {
+        let state = device_state_str(row.state.as_ref())
+            .unwrap_or("unknown")
+            .to_owned();
+        *state_count.entry(state).or_insert(0) += 1;
+    }
     Ok(DeviceStateAnalytics {
-        total: rows.iter().map(|row| row.count).sum(),
-        state_count: rows.into_iter().map(|row| (row.state, row.count)).collect(),
+        total: rows.len() as i64,
+        state_count,
     })
 }
 
 pub(crate) async fn device_state_details(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
 ) -> Result<DeviceStateDetailedAnalytics, DeviceRepositoryError> {
-    let rows = sqlx::query_as::<_, StateDetailRow>(
-        r#"SELECT COALESCE("deviceFamily", 'Unknown') AS device_family,
-             "deviceId" AS device_id, COALESCE("deviceType", 'Unknown') AS device_type,
-             COALESCE(state::text, 'unknown') AS state
-           FROM devices WHERE status::text = 'approved' AND "deletedAt" IS NULL
-           ORDER BY COALESCE("deviceFamily", 'Unknown') ASC, "deviceId" ASC"#,
-    )
-    .fetch_all(pool)
-    .await?;
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::analytics_store::state_usage",
+        "device_state_details",
+    );
+    let rows = device::Entity::find()
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(device::Column::DeletedAt.is_null())
+        .order_by_asc(device::Column::DeviceFamily)
+        .order_by_asc(device::Column::DeviceId)
+        .all(orm)
+        .await?;
     let mut analytics: BTreeMap<String, Vec<DeviceStateDetailedItem>> = BTreeMap::new();
     for row in rows {
-        analytics
-            .entry(row.device_family)
-            .or_default()
-            .push(DeviceStateDetailedItem {
-                device_id: row.device_id,
-                device_type: row.device_type,
-                state: row.state,
-            });
+        let family = row
+            .device_family
+            .clone()
+            .unwrap_or_else(|| "Unknown".to_owned());
+        analytics.entry(family).or_default().push(DeviceStateDetailedItem {
+            device_id: row.device_id,
+            device_type: row.device_type.unwrap_or_else(|| "Unknown".to_owned()),
+            state: device_state_str(row.state.as_ref())
+                .unwrap_or("unknown")
+                .to_owned(),
+        });
     }
     Ok(DeviceStateDetailedAnalytics(analytics))
 }
 
 pub(crate) async fn device_usage(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     device_id: Option<&str>,
     device_family: Option<&str>,
 ) -> Result<serde_json::Value, DeviceRepositoryError> {
-    Ok(sqlx::query_scalar(
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::analytics_store::state_usage",
+        "device_usage",
+    );
+    // Windowed duration aggregation over state-change history — keep as Statement.
+    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"WITH selected_devices AS (
                  SELECT "deviceId" FROM devices
                  WHERE status::text = 'approved' AND "deletedAt" IS NULL
@@ -117,13 +132,27 @@ pub(crate) async fn device_usage(
                      'busy', COALESCE(sum(duration_seconds) FILTER (WHERE state = 'busy'), 0),
                      'not_reachable', COALESCE(sum(duration_seconds) FILTER (WHERE state = 'not_reachable'), 0),
                      'free', COALESCE(sum(duration_seconds) FILTER (WHERE state = 'free'), 0),
-                     'faulty', COALESCE(sum(duration_seconds) FILTER (WHERE state = 'faulty'), 0)))
+                     'faulty', COALESCE(sum(duration_seconds) FILTER (WHERE state = 'faulty'), 0))) AS value
              FROM combined"#,
-    )
-    .bind(start)
-    .bind(end)
-    .bind(device_id)
-    .bind(device_family)
-    .fetch_one(pool)
-    .await?)
+        [
+            start.into(),
+            end.into(),
+            device_id.map(str::to_owned).into(),
+            device_family.map(str::to_owned).into(),
+        ],
+    ))
+    .one(orm)
+    .await?
+    .map(|row| row.value)
+    .unwrap_or_else(|| serde_json::json!({})))
+}
+
+fn device_state_str(state: Option<&device::DeviceState>) -> Option<&'static str> {
+    state.map(|s| match s {
+        device::DeviceState::Busy => "busy",
+        device::DeviceState::NotReachable => "not_reachable",
+        device::DeviceState::Free => "free",
+        device::DeviceState::Faulty => "faulty",
+        device::DeviceState::Unknown => "unknown",
+    })
 }

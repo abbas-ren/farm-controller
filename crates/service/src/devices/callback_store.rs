@@ -1,8 +1,19 @@
-use sqlx::PgPool;
+use chrono::Utc;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend,
+    DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set,
+    Statement, TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
+};
 use tracing::info;
-use uuid::Uuid;
 
-use crate::devices::{FlashExecutionProgress, IplFlashingStatus};
+use crate::{
+    devices::{FlashExecutionProgress, IplFlashingStatus},
+    persistence::entity::{
+        device, device_action_queue, device_controller, device_state_change, log_entry,
+        test_execution,
+    },
+};
 
 use super::{
     CallbackStatus, TtyEntry,
@@ -12,24 +23,21 @@ use super::{
 };
 
 pub(crate) async fn save_gen5_mapping(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     caller_ip: &str,
     mac: &str,
     status: CallbackStatus,
     tty_entry: Option<&TtyEntry>,
 ) -> Result<(), DeviceRepositoryError> {
-    let mut transaction = pool.begin().await?;
-    let mappings = sqlx::query_scalar::<_, serde_json::Value>(
-        r#"
-        SELECT mappings FROM device_controllers
-        WHERE "ipAddress" = $1
-        FOR UPDATE
-        "#,
-    )
-    .bind(caller_ip)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    let Some(mappings) = mappings else {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::callback_store", "save_gen5_mapping");
+    let transaction = orm.begin().await?;
+    let controller = device_controller::Entity::find()
+        .filter(device_controller::Column::IpAddress.eq(caller_ip))
+        .lock(LockType::Update)
+        .one(&transaction)
+        .await?;
+    let Some(controller) = controller else {
         transaction.commit().await?;
         return Ok(());
     };
@@ -38,65 +46,73 @@ pub(crate) async fn save_gen5_mapping(
         CallbackStatus::Success => {
             if let Some(tty_entry) = tty_entry {
                 let normalized_mac = normalize_mapping_mac(mac)?;
-                let mapping = serde_json::json!({
-                    normalized_mac: {"uart": tty_entry.uart, "power": tty_entry.power}
-                });
-                sqlx::query(
-                    r#"
-                    UPDATE device_controllers
-                    SET mappings = mappings || $2::jsonb, "updatedAt" = now()
-                    WHERE "ipAddress" = $1
-                    "#,
-                )
-                .bind(caller_ip)
-                .bind(sqlx::types::Json(mapping))
-                .execute(&mut *transaction)
+                let mut mappings = controller.mappings.clone();
+                if let Some(object) = mappings.as_object_mut() {
+                    object.insert(
+                        normalized_mac,
+                        serde_json::json!({"uart": tty_entry.uart, "power": tty_entry.power}),
+                    );
+                } else {
+                    mappings = serde_json::json!({
+                        normalized_mac: {"uart": tty_entry.uart, "power": tty_entry.power}
+                    });
+                }
+                let now = Utc::now();
+                device_controller::ActiveModel {
+                    device_controller_id: Set(controller.device_controller_id.clone()),
+                    mappings: Set(mappings),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .update(&transaction)
                 .await?;
             }
-            sqlx::query(
-                r#"
-                UPDATE gen5_mapping_queue SET
-                    status = 'completed', "lastError" = NULL,
-                    "failureDcIp" = NULL, "baselineMappingCount" = NULL,
-                    "nextRetryAt" = NULL, "retryScheduleIndex" = NULL,
-                    "updatedAt" = now()
-                WHERE id = (
-                    SELECT id FROM gen5_mapping_queue
-                    WHERE lower("macAddress") = lower($1)
-                      AND status IN ('waiting', 'failure_polling')
-                    ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED
-                )
-                "#,
-            )
-            .bind(mac)
-            .execute(&mut *transaction)
-            .await?;
+            // SKIP LOCKED claim inside UPDATE — irreducible as Entity.
+            transaction
+                .execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    r#"
+                    UPDATE gen5_mapping_queue SET
+                        status = 'completed', "lastError" = NULL,
+                        "failureDcIp" = NULL, "baselineMappingCount" = NULL,
+                        "nextRetryAt" = NULL, "retryScheduleIndex" = NULL,
+                        "updatedAt" = now()
+                    WHERE id = (
+                        SELECT id FROM gen5_mapping_queue
+                        WHERE lower("macAddress") = lower($1)
+                          AND status IN ('waiting', 'failure_polling')
+                        ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED
+                    )
+                    "#,
+                    [mac.into()],
+                ))
+                .await?;
         }
         CallbackStatus::Failure => {
-            let baseline_count = mappings
+            let baseline_count = controller
+                .mappings
                 .as_object()
                 .map_or(0_i32, |value| value.len() as i32);
-            sqlx::query(
-                r#"
-                UPDATE gen5_mapping_queue SET
-                    status = 'failure_polling', "failureDcIp" = $2,
-                    "baselineMappingCount" = $3,
-                    "nextRetryAt" = now() + interval '5 minutes',
-                    "retryScheduleIndex" = 0,
-                    "lastError" = 'Device controller reported mapping failure',
-                    "updatedAt" = now()
-                WHERE id = (
-                    SELECT id FROM gen5_mapping_queue
-                    WHERE lower("macAddress") = lower($1) AND status = 'waiting'
-                    ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED
-                )
-                "#,
-            )
-            .bind(mac)
-            .bind(caller_ip)
-            .bind(baseline_count)
-            .execute(&mut *transaction)
-            .await?;
+            transaction
+                .execute_raw(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    r#"
+                    UPDATE gen5_mapping_queue SET
+                        status = 'failure_polling', "failureDcIp" = $2,
+                        "baselineMappingCount" = $3,
+                        "nextRetryAt" = now() + interval '5 minutes',
+                        "retryScheduleIndex" = 0,
+                        "lastError" = 'Device controller reported mapping failure',
+                        "updatedAt" = now()
+                    WHERE id = (
+                        SELECT id FROM gen5_mapping_queue
+                        WHERE lower("macAddress") = lower($1) AND status = 'waiting'
+                        ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED
+                    )
+                    "#,
+                    [mac.into(), caller_ip.into(), baseline_count.into()],
+                ))
+                .await?;
         }
     }
     transaction.commit().await?;
@@ -104,30 +120,38 @@ pub(crate) async fn save_gen5_mapping(
 }
 
 pub(crate) async fn confirm_flash(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     device_type: &str,
     flashing_status: &IplFlashingStatus,
 ) -> Result<FlashConfirmationResult, DeviceRepositoryError> {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::callback_store", "confirm_flash");
     info!(
         "\nStarting flash confirmation for device_type: {}, flashing_status: {:?}\n",
         device_type, flashing_status
     );
-    let mut transaction = pool.begin().await?;
+    let transaction = orm.begin().await?;
     let mut result = FlashConfirmationResult::default();
-    let job = sqlx::query_as::<_, (Uuid, Option<String>, Option<String>)>(
-        r#"
-        SELECT id, "targetDeviceId", "testId"
-        FROM device_action_queue
-        WHERE lower("deviceType") = lower($1)
-          AND status = 'waiting' AND ("iplFlashConfirm" = false OR "iplFlashConfirm" IS NULL)
-        ORDER BY "createdAt" ASC
-        LIMIT 1 FOR UPDATE SKIP LOCKED
-        "#,
-    )
-    .bind(device_type)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if let Some((job_id, device_id, test_id)) = job {
+    let job = device_action_queue::Entity::find()
+        .filter(Expr::cust_with_values(
+            r#"lower("deviceType") = lower($1)"#,
+            [device_type],
+        ))
+        .filter(device_action_queue::Column::Status.eq(device_action_queue::QueueJobStatus::Waiting))
+        .filter(
+            Condition::any()
+                .add(device_action_queue::Column::IplFlashConfirm.eq(false))
+                .add(device_action_queue::Column::IplFlashConfirm.is_null()),
+        )
+        .order_by_asc(device_action_queue::Column::CreatedAt)
+        .limit(1)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .one(&transaction)
+        .await?;
+    if let Some(job) = job {
+        let job_id = job.id;
+        let device_id = job.target_device_id.clone();
+        let test_id = job.test_id.clone();
         match flashing_status.status {
             CallbackStatus::Success => {
                 info!(
@@ -135,57 +159,42 @@ pub(crate) async fn confirm_flash(
                     job_id
                 );
                 if flashing_status.completed {
-                    sqlx::query(
-                        r#"
-                        UPDATE device_action_queue
-                        SET "iplFlashConfirm" = true, "updatedAt" = now()
-                        WHERE id = $1
-                        "#,
-                    )
-                    .bind(job_id)
-                    .execute(&mut *transaction)
+                    let now = Utc::now();
+                    device_action_queue::ActiveModel {
+                        id: Set(job_id),
+                        ipl_flash_confirm: Set(Some(true)),
+                        updated_at: Set(now),
+                        ..Default::default()
+                    }
+                    .update(&transaction)
                     .await?;
 
                     if let Some(test_id) = test_id.as_deref() {
-                        sqlx::query(
-                            r#"INSERT INTO log_entries
-                                (type, "referenceId", data, level, timestamp,
-                                "createdAt", "updatedAt")
-                            VALUES ('test', $1, jsonb_build_object('message', $2::text),
-                                    'info', now(), now(), now())"#,
-                        )
-                        .bind(test_id)
-                        .bind(
+                        insert_test_log(
+                            &transaction,
+                            test_id,
                             "Got flash confirmation success, waiting for device to come back online...",
                         )
-                        .execute(&mut *transaction)
                         .await?;
                     }
                 }
 
                 if let Some(test_id) = test_id.as_deref()
-                    && let Some((build_id, created_by)) =
-                        sqlx::query_as::<_, (String, Option<String>)>(
-                            r#"SELECT "buildId"::text, "createdBy" FROM test_executions
-                           WHERE "testId" = $1
-                             AND status::text NOT IN ('cancelled', 'completed', 'failed')
-                           LIMIT 1"#,
-                        )
-                        .bind(test_id)
-                        .fetch_optional(&mut *transaction)
-                        .await?
+                    && let Some(execution) = active_execution(&transaction, test_id).await?
                 {
                     info!(
                         "\nUpdating flash execution progress for test_id: {}, build_id: {}\n",
-                        test_id, build_id
+                        test_id, execution.build_id
                     );
                     result.progress = Some(FlashExecutionProgress {
                         test_id: test_id.to_owned(),
-                        build_id: build_id.to_owned(),
+                        build_id: execution.build_id,
                         completed: flashing_status.completed,
                         percentage: flashing_status.percentage,
                         message: flashing_status.message.clone(),
-                        created_by: created_by.unwrap_or_else(|| "system".to_owned()),
+                        created_by: execution
+                            .created_by
+                            .unwrap_or_else(|| "system".to_owned()),
                     });
                 }
             }
@@ -194,70 +203,58 @@ pub(crate) async fn confirm_flash(
                     "\nFlash confirmation failure received for job_id: {}\n",
                     job_id
                 );
-                sqlx::query(
-                    r#"
-                    UPDATE device_action_queue
-                    SET "iplFlashConfirm" = false, status = 'cancelled', "updatedAt" = now()
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(job_id)
-                .execute(&mut *transaction)
+                let now = Utc::now();
+                device_action_queue::ActiveModel {
+                    id: Set(job_id),
+                    ipl_flash_confirm: Set(Some(false)),
+                    status: Set(device_action_queue::QueueJobStatus::Cancelled),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .update(&transaction)
                 .await?;
                 if let Some(test_id) = test_id.as_deref() {
-                    if let Some((build_id, created_by)) =
-                        sqlx::query_as::<_, (String, Option<String>)>(
-                            r#"UPDATE test_executions
-                           SET status = 'cancelled', "executionPhase" = 'COMPLETE_CANCELLED',
-                               "endedAt" = now(), "updatedAt" = now()
-                           WHERE "testId" = $1
-                             AND status::text NOT IN ('cancelled', 'completed', 'failed')
-                           RETURNING "buildId"::text, "createdBy""#,
-                        )
-                        .bind(test_id)
-                        .fetch_optional(&mut *transaction)
-                        .await?
-                    {
+                    if let Some(execution) = cancel_active_execution(&transaction, test_id).await? {
                         result.cancelled_execution = Some(FlashCancelledExecution {
                             test_id: test_id.to_owned(),
-                            build_id,
-                            created_by: created_by.unwrap_or_else(|| "system".to_owned()),
+                            build_id: execution.build_id,
+                            created_by: execution
+                                .created_by
+                                .unwrap_or_else(|| "system".to_owned()),
                         });
                     }
-                    sqlx::query(
-                        r#"INSERT INTO log_entries
-                              (type, "referenceId", data, level, timestamp,
-                               "createdAt", "updatedAt")
-                           VALUES ('test', $1, jsonb_build_object('message', $2::text),
-                                   'info', now(), now(), now())"#,
+                    insert_test_log(
+                        &transaction,
+                        test_id,
+                        "IPL flash confirmation failed. Test execution cancelled",
                     )
-                    .bind(test_id)
-                    .bind("IPL flash confirmation failed. Test execution cancelled")
-                    .execute(&mut *transaction)
                     .await?;
                 }
                 if let Some(device_id) = device_id {
                     info!("\nReleasing device with device_id: {}\n", device_id);
-                    let freed = sqlx::query_scalar::<_, String>(
-                        r#"
-                        UPDATE devices SET state = 'free', "stateUpdatedAt" = now(),
-                                           upgrading = false, flashing = false,
-                                           "updatedAt" = now()
-                        WHERE "deviceId" = $1
-                        RETURNING "deviceId"
-                        "#,
-                    )
-                    .bind(&device_id)
-                    .fetch_optional(&mut *transaction)
-                    .await?;
-                    if freed.is_some() {
-                        sqlx::query(
-                            r#"INSERT INTO device_state_change
-                                  ("deviceId", state, "changedAt", "createdAt", "updatedAt")
-                               VALUES ($1, 'free', now(), now(), now())"#,
+                    let updated = device::Entity::update_many()
+                        .col_expr(
+                            device::Column::State,
+                            Expr::value(Some(device::DeviceState::Free)),
                         )
-                        .bind(&device_id)
-                        .execute(&mut *transaction)
+                        .col_expr(device::Column::StateUpdatedAt, Expr::current_timestamp())
+                        .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
+                        .col_expr(device::Column::Flashing, Expr::value(Some(false)))
+                        .col_expr(device::Column::UpdatedAt, Expr::current_timestamp())
+                        .filter(device::Column::DeviceId.eq(&device_id))
+                        .exec(&transaction)
+                        .await?;
+                    if updated.rows_affected > 0 {
+                        let now = Utc::now();
+                        device_state_change::ActiveModel {
+                            device_id: Set(device_id.clone()),
+                            state: Set(device_state_change::DeviceStateChangeState::Free),
+                            changed_at: Set(now),
+                            created_at: Set(now),
+                            updated_at: Set(now),
+                            ..Default::default()
+                        }
+                        .insert(&transaction)
                         .await?;
                         result.freed_device_id = Some(device_id);
                     }
@@ -267,4 +264,81 @@ pub(crate) async fn confirm_flash(
     }
     transaction.commit().await?;
     Ok(result)
+}
+
+#[derive(Debug, FromQueryResult)]
+struct ExecutionProgressRow {
+    build_id: String,
+    created_by: Option<String>,
+}
+
+async fn active_execution(
+    transaction: &impl ConnectionTrait,
+    test_id: &str,
+) -> Result<Option<ExecutionProgressRow>, DeviceRepositoryError> {
+    Ok(test_execution::Entity::find()
+        .filter(test_execution::Column::TestId.eq(test_id))
+        .filter(test_execution::Column::Status.is_not_in([
+            test_execution::TestStatus::Cancelled,
+            test_execution::TestStatus::Completed,
+            test_execution::TestStatus::Failed,
+        ]))
+        .select_only()
+        .column(test_execution::Column::BuildId)
+        .column(test_execution::Column::CreatedBy)
+        .into_model::<ExecutionProgressRow>()
+        .one(transaction)
+        .await?)
+}
+
+async fn cancel_active_execution(
+    transaction: &impl ConnectionTrait,
+    test_id: &str,
+) -> Result<Option<ExecutionProgressRow>, DeviceRepositoryError> {
+    let execution = active_execution(transaction, test_id).await?;
+    let Some(execution) = execution else {
+        return Ok(None);
+    };
+    let now = Utc::now();
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::Status,
+            Expr::value(Some(test_execution::TestStatus::Cancelled)),
+        )
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            Expr::value(Some(test_execution::ExecutionPhase::CompleteCancelled)),
+        )
+        .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(test_id))
+        .filter(test_execution::Column::Status.is_not_in([
+            test_execution::TestStatus::Cancelled,
+            test_execution::TestStatus::Completed,
+            test_execution::TestStatus::Failed,
+        ]))
+        .exec(transaction)
+        .await?;
+    Ok(Some(execution))
+}
+
+async fn insert_test_log(
+    transaction: &impl ConnectionTrait,
+    test_id: &str,
+    message: &str,
+) -> Result<(), DeviceRepositoryError> {
+    let now = Utc::now();
+    log_entry::ActiveModel {
+        r#type: Set(log_entry::LogEntryType::Test),
+        reference_id: Set(test_id.to_owned()),
+        data: Set(serde_json::json!({"message": message})),
+        level: Set(log_entry::LogEntryLevel::Info),
+        timestamp: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(transaction)
+    .await?;
+    Ok(())
 }

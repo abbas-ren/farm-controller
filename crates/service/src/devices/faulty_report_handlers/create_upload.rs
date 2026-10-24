@@ -11,6 +11,7 @@ pub(crate) async fn create(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::create_upload", "create");
     let (response_headers, repository) = match context(&state, &headers, None).await {
         Ok(context) => context,
         Err(response) => return *response,

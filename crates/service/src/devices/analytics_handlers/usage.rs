@@ -6,6 +6,7 @@ pub(crate) async fn daily_device_usage(
     headers: HeaderMap,
     Query(query): Query<DeviceUsageQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::usage", "daily_device_usage");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -40,6 +41,7 @@ pub(crate) async fn device_usage_summary(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::usage", "device_usage_summary");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -107,10 +109,12 @@ pub(crate) async fn device_usage_summary(
 }
 
 fn day_bounds(day: NaiveDate) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::usage", "day_bounds");
     day_range(day, day)
 }
 
 fn day_range(start: NaiveDate, end: NaiveDate) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::usage", "day_range");
     let start = start.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc();
     let end = end
         .checked_add_days(Days::new(1))
@@ -128,6 +132,7 @@ fn with_period(
     end_key: &str,
     end: NaiveDate,
 ) -> serde_json::Value {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::usage", "with_period");
     if let Some(object) = usage.as_object_mut() {
         object.insert(start_key.to_owned(), serde_json::json!(start.to_string()));
         object.insert(end_key.to_owned(), serde_json::json!(end.to_string()));

@@ -3,6 +3,7 @@
 use crate::auth::RegistrationRequest;
 
 pub(super) fn validate_registration(request: &RegistrationRequest) -> Result<(), &'static str> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::validation", "validate_registration");
     let valid_username = (3..=30).contains(&request.username.len())
         && request
             .username

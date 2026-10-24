@@ -6,6 +6,7 @@ pub(super) fn signin_result(
     user_info: UserInfo,
     roles: Vec<KeycloakRole>,
 ) -> SigninResult {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mapping", "signin_result");
     SigninResult {
         access_token: token.access_token,
         refresh_token: token.refresh_token,
@@ -25,6 +26,7 @@ pub(super) fn managed_user(
     fallback_id: Option<&str>,
     roles: Vec<KeycloakRole>,
 ) -> ManagedUser {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mapping", "managed_user");
     ManagedUser {
         id: user
             .id
@@ -42,6 +44,7 @@ pub(super) fn pending_registration_response(
     user_id: &str,
     request: &RegistrationRequest,
 ) -> serde_json::Value {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::mapping", "pending_registration_response");
     serde_json::json!({
         "id": user_id,
         "username": request.username,

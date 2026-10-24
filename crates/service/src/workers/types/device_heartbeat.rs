@@ -1,6 +1,6 @@
 use super::common::DeviceState;
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct StaleDevice {
     pub device_id: String,
     pub previous_state: String,

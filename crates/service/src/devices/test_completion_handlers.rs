@@ -47,6 +47,7 @@ pub async fn test_completed(
     Path(device_id): Path<String>,
     Query(query): Query<TestCompletionQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "test_completed");
     let test_id = query
         .test_id
         .chars()
@@ -96,6 +97,7 @@ async fn collect_rtos_log(
     test_id: &str,
     target: &TestCompletionTarget,
 ) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "collect_rtos_log");
     let Some((controller_ip, payload)) = rtos_request(target) else {
         return Ok(());
     };
@@ -141,6 +143,7 @@ async fn collect_rtos_log(
 }
 
 fn rtos_request(target: &TestCompletionTarget) -> Option<(&str, serde_json::Value)> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "rtos_request");
     let family = target
         .device_family
         .as_deref()?
@@ -175,6 +178,7 @@ async fn request_rtos_log(
     url: reqwest::Url,
     payload: &serde_json::Value,
 ) -> Result<Vec<u8>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "request_rtos_log");
     let response = client
         .post(url)
         .header(reqwest::header::ACCEPT, "application/octet-stream")
@@ -196,6 +200,7 @@ fn rtos_log_path(
     target: &TestCompletionTarget,
     test_id: &str,
 ) -> Result<PathBuf, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "rtos_log_path");
     let mut path = root.to_path_buf();
     for segment in [
         target.device_type.as_str(),
@@ -219,6 +224,7 @@ fn rtos_log_path(
 }
 
 fn next_uart_port(port: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "next_uart_port");
     let split = port
         .char_indices()
         .rev()
@@ -232,6 +238,7 @@ fn next_uart_port(port: &str) -> String {
 }
 
 fn is_terminal(status: &str) -> bool {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "is_terminal");
     matches!(status, "completed" | "cancelled" | "failed")
 }
 
@@ -241,6 +248,7 @@ fn rtos_log_event(
     path: &str,
     _user_id: &str,
 ) -> ServerEvent {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "rtos_log_event");
     ServerEvent::frontend(FrontendMessagePayload::TestExecution {
         test_id: test_id.to_owned(),
         r#type: TestExecutionUpdateType::RtosLog,
@@ -278,6 +286,7 @@ mod tests {
 
     #[test]
     fn gen5_request_uses_the_adjacent_rtos_uart() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "gen5_request_uses_the_adjacent_rtos_uart");
         let target = target();
         let (controller, payload) = rtos_request(&target).unwrap();
         assert_eq!(controller, "192.0.2.10");
@@ -287,6 +296,7 @@ mod tests {
 
     #[test]
     fn rtos_artifact_path_is_scoped_and_rejects_traversal() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "rtos_artifact_path_is_scoped_and_rejects_traversal");
         let root = FsPath::new("/test-results");
         assert_eq!(
             rtos_log_path(root, &target(), "test-1").unwrap(),
@@ -297,6 +307,7 @@ mod tests {
 
     #[test]
     fn rtos_event_targets_the_execution_owner() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::test_completion_handlers", "rtos_event_targets_the_execution_owner");
         let event = rtos_log_event("test-1", Some("build-1"), "/tmp/rtos.log", "user-1");
         assert_eq!(event.event, "test_execution");
         assert_eq!(event.payload["type"], "rtos_log");

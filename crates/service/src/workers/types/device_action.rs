@@ -24,7 +24,7 @@ pub struct AssignedAction {
     pub ip_address: String,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct Gen4IplTarget {
     pub controller_ip: String,
     pub relay_serial: String,

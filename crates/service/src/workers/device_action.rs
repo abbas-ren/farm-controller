@@ -19,8 +19,9 @@ use crate::{
 use super::test_preconditions;
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, ExprTrait, JoinType, QueryFilter, QueryOrder,
-    QuerySelect, RelationTrait, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, ExprTrait, FromQueryResult,
+    JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Set, Statement,
+    TransactionTrait,
     sea_query::{Expr, LockBehavior, LockType},
 };
 
@@ -60,6 +61,21 @@ async fn run_cycle(state: &AppState) {
         for event in assignment_events(&assigned) {
             let _ = state.event_publisher.publish(event);
         }
+        if let Some(test_id) = assigned.action.test_id.as_deref() {
+            let message = if assigned.action.ipl_flash_confirm == Some(true) {
+                format!(
+                    "Resuming test execution on device {} after IPL confirmation",
+                    assigned.device_id
+                )
+            } else {
+                format!("Starting test execution on device {}", assigned.device_id)
+            };
+            if let Err(error) =
+                crate::devices::test_log::append_test_log(state, test_id, &message).await
+            {
+                tracing::warn!(%error, %test_id, "failed to append assignment test log");
+            }
+        }
         info!(action_id = %assigned.action.id, worker = "device_action", "dispatching action");
         match dispatch(state, &assigned).await {
             Ok(()) => {
@@ -68,6 +84,14 @@ async fn run_cycle(state: &AppState) {
             }
             Err(error) => {
                 tracing::error!(%error, action_id = %assigned.action.id, worker = "device_action", "device dispatch failed");
+                if let Some(test_id) = assigned.action.test_id.as_deref() {
+                    let message = format!("Device dispatch failed: {error}");
+                    if let Err(log_error) =
+                        crate::devices::test_log::append_test_log(state, test_id, &message).await
+                    {
+                        tracing::warn!(%log_error, %test_id, "failed to append dispatch failure log");
+                    }
+                }
                 if let Ok(events) = fail_dispatch(state, &assigned, &error).await {
                     for event in events {
                         let _ = state.event_publisher.publish(event);
@@ -121,18 +145,44 @@ async fn assign_next(state: &AppState) -> Result<Option<AssignedAction>, sea_orm
                 .add(device_action_queue::Column::Type.ne(device_action_queue::QueueJobType::Test))
                 .add(
                     sea_orm::Condition::all()
+                        // First assignment: fresh job still waiting in queue.
+                        // Post-IPL requeue: status is already in_progress and phase is
+                        // REQUEUE_AFTER_IPL_CONFIRMATION (legacy allowed these via
+                        // iplFlashConfirm alone).
                         .add(
-                            test_execution::Column::Status
-                                .eq(test_execution::TestStatus::NotExecuted),
+                            sea_orm::Condition::any()
+                                .add(
+                                    sea_orm::Condition::all()
+                                        .add(
+                                            test_execution::Column::Status
+                                                .eq(test_execution::TestStatus::NotExecuted),
+                                        )
+                                        .add(
+                                            test_execution::Column::ExecutionPhase.eq(
+                                                test_execution::ExecutionPhase::QueueTestExecution,
+                                            ),
+                                        ),
+                                )
+                                .add(
+                                    sea_orm::Condition::all()
+                                        .add(
+                                            device_action_queue::Column::IplFlashConfirm.eq(true),
+                                        )
+                                        .add(
+                                            test_execution::Column::Status
+                                                .eq(test_execution::TestStatus::InProgress),
+                                        )
+                                        .add(
+                                            test_execution::Column::ExecutionPhase.eq(
+                                                test_execution::ExecutionPhase::RequeueAfterIplConfirmation,
+                                            ),
+                                        ),
+                                ),
                         )
                         .add(
                             sea_orm::Condition::any()
                                 .add(test_execution::Column::CancelRequested.eq(false))
                                 .add(test_execution::Column::CancelRequested.is_null()),
-                        )
-                        .add(
-                            test_execution::Column::ExecutionPhase
-                                .eq(test_execution::ExecutionPhase::QueueTestExecution),
                         )
                         .add(
                             sea_orm::Condition::any()
@@ -403,15 +453,16 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
             .await
             .map_err(|error| error.to_string())?;
         if let Some(database) = &state.database {
-            sqlx::query(
-                r#"UPDATE test_executions SET "executionPhase" = 'SEND_FLASH_REQUEST',
-                                               "updatedAt" = now()
-                   WHERE "testId" = $1"#,
-            )
-            .bind(test_id)
-            .execute(database.pool())
-            .await
-            .map_err(|error| error.to_string())?;
+            test_execution::Entity::update_many()
+                .col_expr(
+                    test_execution::Column::ExecutionPhase,
+                    Expr::value(Some(test_execution::ExecutionPhase::SendFlashRequest)),
+                )
+                .col_expr(test_execution::Column::UpdatedAt, Expr::value(chrono::Utc::now()))
+                .filter(test_execution::Column::TestId.eq(test_id))
+                .exec(database.orm())
+                .await
+                .map_err(|error| error.to_string())?;
         }
         (
             "test-execution",
@@ -456,15 +507,28 @@ async fn dispatch(state: &AppState, assigned: &AssignedAction) -> Result<(), Str
                 if let Some(test_id) = assigned.action.test_id.as_deref()
                     && let Some(database) = &state.database
                 {
-                    sqlx::query(
-                        r#"UPDATE test_executions SET "executionPhase" = 'WAIT_FOR_DEVICE_BOOT',
-                                                       "updatedAt" = now()
-                           WHERE "testId" = $1"#,
-                    )
-                    .bind(test_id)
-                    .execute(database.pool())
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    test_execution::Entity::update_many()
+                        .col_expr(
+                            test_execution::Column::ExecutionPhase,
+                            Expr::value(Some(test_execution::ExecutionPhase::WaitForDeviceBoot)),
+                        )
+                        .col_expr(
+                            test_execution::Column::UpdatedAt,
+                            Expr::value(chrono::Utc::now()),
+                        )
+                        .filter(test_execution::Column::TestId.eq(test_id))
+                        .exec(database.orm())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let message = format!(
+                        "Test execution request sent to device {} ({})",
+                        assigned.device_id, assigned.ip_address
+                    );
+                    if let Err(error) =
+                        crate::devices::test_log::append_test_log(state, test_id, &message).await
+                    {
+                        tracing::warn!(%error, %test_id, "failed to append test-execution dispatch log");
+                    }
                 }
                 return Ok(());
             }
@@ -481,16 +545,19 @@ async fn is_gen4_device(state: &AppState, device_id: &str) -> Result<bool, Strin
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable for Gen4 IPL".to_owned())?;
-    sqlx::query_scalar::<_, bool>(
-        r#"SELECT replace(lower(COALESCE("deviceFamily", '')), ' ', '') = 'gen4'
-           FROM devices
-           WHERE "deviceId" = $1 AND "deletedAt" IS NULL"#,
-    )
-    .bind(device_id)
-    .fetch_optional(database.pool())
-    .await
-    .map(|value| value.unwrap_or(false))
-    .map_err(|error| error.to_string())
+    let family = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .select_only()
+        .column(device::Column::DeviceFamily)
+        .into_tuple::<Option<String>>()
+        .one(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(family
+        .flatten()
+        .map(|value| value.to_lowercase().replace(' ', "") == "gen4")
+        .unwrap_or(false))
 }
 
 async fn resolve_gen4_ipl_target(
@@ -501,7 +568,9 @@ async fn resolve_gen4_ipl_target(
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable for Gen4 IPL".to_owned())?;
-    sqlx::query_as::<_, Gen4IplTarget>(
+    // LATERAL jsonb_each + regexp_replace MAC match — irreducible Entity API.
+    Gen4IplTarget::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT dc."ipAddress" AS controller_ip,
              r."serialNumber" AS relay_serial, rc."channelNumber" AS channel_number,
              COALESCE(d."macAddress", d."deviceId") AS device_mac,
@@ -519,9 +588,9 @@ async fn resolve_gen4_ipl_target(
            WHERE d."deviceId" = $1 AND d."deletedAt" IS NULL
              AND replace(lower(COALESCE(d."deviceFamily", '')), ' ', '') = 'gen4'
            ORDER BY rc."updatedAt" DESC LIMIT 1"#,
-    )
-    .bind(device_id)
-    .fetch_optional(database.pool())
+        [device_id.into()],
+    ))
+    .one(database.orm())
     .await
     .map_err(|error| error.to_string())
 }
@@ -600,82 +669,120 @@ async fn request_gen4_ipl(
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable for Gen4 IPL".to_owned())?;
-    let mut transaction = database
-        .pool()
+    let transaction = database
+        .orm()
         .begin()
         .await
         .map_err(|error| error.to_string())?;
-    sqlx::query(
-        r#"UPDATE device_action_queue SET status = 'waiting', "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(assigned.action.id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    if let Some(test_id) = assigned.action.test_id.as_deref() {
-        sqlx::query(
-            r#"UPDATE test_executions SET "executionPhase" = 'WAIT_FOR_IPL_CONFIRMATION',
-                   "updatedAt" = now() WHERE "testId" = $1"#,
+    let now = chrono::Utc::now();
+    device_action_queue::Entity::update_many()
+        .col_expr(
+            device_action_queue::Column::Status,
+            Expr::value(device_action_queue::QueueJobStatus::Waiting),
         )
-        .bind(test_id)
-        .execute(&mut *transaction)
+        .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(device_action_queue::Column::Id.eq(assigned.action.id))
+        .exec(&transaction)
         .await
         .map_err(|error| error.to_string())?;
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        test_execution::Entity::update_many()
+            .col_expr(
+                test_execution::Column::ExecutionPhase,
+                Expr::value(Some(test_execution::ExecutionPhase::WaitForIplConfirmation)),
+            )
+            .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+            .filter(test_execution::Column::TestId.eq(test_id))
+            .exec(&transaction)
+            .await
+            .map_err(|error| error.to_string())?;
     }
     transaction
         .commit()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        let message = format!(
+            "IPL flashing requested for device {} via controller {}",
+            assigned.device_id, target.controller_ip
+        );
+        if let Err(error) = crate::devices::test_log::append_test_log(state, test_id, &message).await
+        {
+            tracing::warn!(%error, %test_id, "failed to append Gen4 IPL request log");
+        }
+    }
+    Ok(())
 }
 
 async fn fail_dispatch(
     state: &AppState,
     assigned: &AssignedAction,
     error: &str,
-) -> Result<Vec<ServerEvent>, sqlx::Error> {
+) -> Result<Vec<ServerEvent>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
-    let mut transaction = database.pool().begin().await?;
-    sqlx::query(
-        r#"UPDATE device_action_queue SET status = 'cancelled', "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(assigned.action.id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"UPDATE devices SET state = 'free', "stateUpdatedAt" = now(), "updatedAt" = now()
-           WHERE "deviceId" = $1"#,
-    )
-    .bind(&assigned.device_id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"INSERT INTO device_state_change
-              ("deviceId", state, "changedAt", "createdAt", "updatedAt")
-           VALUES ($1, 'free', now(), now(), now())"#,
-    )
-    .bind(&assigned.device_id)
-    .execute(&mut *transaction)
-    .await?;
-    if let Some(test_id) = assigned.action.test_id.as_deref() {
-        sqlx::query(
-            r#"UPDATE test_executions SET status = 'failed',
-                       "executionPhase" = 'COMPLETE_FAILED', "endedAt" = now(),
-                       "updatedAt" = now() WHERE "testId" = $1"#,
+    let transaction = database.orm().begin().await?;
+    let now = chrono::Utc::now();
+
+    device_action_queue::Entity::update_many()
+        .col_expr(
+            device_action_queue::Column::Status,
+            Expr::value(device_action_queue::QueueJobStatus::Cancelled),
         )
-        .bind(test_id)
-        .execute(&mut *transaction)
+        .col_expr(device_action_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(device_action_queue::Column::Id.eq(assigned.action.id))
+        .exec(&transaction)
         .await?;
-    } else if let Some(release_id) = assigned.action.release_id {
-        sqlx::query(
-            r#"UPDATE releases SET status = 'failed', "isFaulty" = true, "updatedAt" = now()
-               WHERE id = $1"#,
+
+    device::Entity::update_many()
+        .col_expr(
+            device::Column::State,
+            Expr::value(Some(device::DeviceState::Free)),
         )
-        .bind(release_id)
-        .execute(&mut *transaction)
+        .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
+        .col_expr(device::Column::UpdatedAt, Expr::value(now))
+        .filter(device::Column::DeviceId.eq(&assigned.device_id))
+        .exec(&transaction)
         .await?;
+
+    device_state_change::ActiveModel {
+        device_id: Set(assigned.device_id.clone()),
+        state: Set(device_state_change::DeviceStateChangeState::Free),
+        changed_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
     }
+    .insert(&transaction)
+    .await?;
+
+    if let Some(test_id) = assigned.action.test_id.as_deref() {
+        test_execution::Entity::update_many()
+            .col_expr(
+                test_execution::Column::Status,
+                Expr::value(Some(test_execution::TestStatus::Failed)),
+            )
+            .col_expr(
+                test_execution::Column::ExecutionPhase,
+                Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+            )
+            .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
+            .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+            .filter(test_execution::Column::TestId.eq(test_id))
+            .exec(&transaction)
+            .await?;
+    } else if let Some(release_id) = assigned.action.release_id {
+        release::Entity::update_many()
+            .col_expr(
+                release::Column::Status,
+                Expr::value(Some(release::ReleaseTestStatus::Failed)),
+            )
+            .col_expr(release::Column::IsFaulty, Expr::value(Some(true)))
+            .col_expr(release::Column::UpdatedAt, Expr::value(now))
+            .filter(release::Column::Id.eq(release_id))
+            .exec(&transaction)
+            .await?;
+    }
+
     transaction.commit().await?;
     Ok(dispatch_failure_events(assigned, error))
 }
@@ -725,15 +832,13 @@ mod tests {
                 .map(|event| event.event.as_str())
                 .collect::<Vec<_>>(),
             vec![
-                "device_state_update",
-                "test_execution",
-                "test_execution_update",
-                "build_performance_update",
-                "build_performance_update",
-                "build_performance_update"
+                "deviceStateUpdate",
+                "testExecution",
+                "testExecutionUpdate",
+                "buildPerformanceUpdate",
             ]
         );
-        assert_eq!(events[1].payload["data"]["status"], "in_progress");
+        assert_eq!(events[1].payload["data"]["status"], "inProgress");
     }
 
     #[test]

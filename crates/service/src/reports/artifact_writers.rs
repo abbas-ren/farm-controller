@@ -12,6 +12,7 @@ pub(crate) async fn append_log(
     level: &str,
     message: &str,
 ) -> Result<(), std::io::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "append_log");
     use tokio::io::AsyncWriteExt;
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
@@ -26,6 +27,7 @@ pub(crate) async fn write_suite_artifacts(
     root: &Path,
     cases: &[TestCaseRecord],
 ) -> Result<(), std::io::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "write_suite_artifacts");
     for (suite, text_name, html_name) in [
         (
             "sanity",
@@ -110,6 +112,7 @@ pub(crate) async fn write_suite_artifacts(
 }
 
 pub(crate) async fn write_sanity_analysis(root: &Path) -> Result<(), std::io::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "write_sanity_analysis");
     let results = root.join("sanity_commands_results");
     if !results.is_dir() {
         return Err(std::io::Error::new(
@@ -200,12 +203,14 @@ pub(crate) async fn write_sanity_analysis(root: &Path) -> Result<(), std::io::Er
 }
 
 pub(crate) fn file_name(path: Option<&str>, test_case_id: i64) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "file_name");
     path.and_then(|value| Path::new(value).file_name())
         .and_then(|value| value.to_str())
         .map_or_else(|| format!("test_{test_case_id}_result.txt"), str::to_owned)
 }
 
 pub(crate) fn jira_cell(value: Option<&str>) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "jira_cell");
     let value = value.unwrap_or("").trim();
     if value.starts_with("http://") || value.starts_with("https://") {
         let escaped = escape_html(value);
@@ -216,6 +221,7 @@ pub(crate) fn jira_cell(value: Option<&str>) -> String {
 }
 
 pub(crate) fn escape_html(value: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "escape_html");
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -225,6 +231,7 @@ pub(crate) fn escape_html(value: &str) -> String {
 }
 
 pub(crate) fn report_artifact_href(report_url: Option<&str>, relative_path: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "report_artifact_href");
     report_url.map_or_else(
         || relative_path.to_owned(),
         |url| format!("{}/{relative_path}", url.trim_end_matches('/')),
@@ -232,6 +239,7 @@ pub(crate) fn report_artifact_href(report_url: Option<&str>, relative_path: &str
 }
 
 pub(crate) fn parse_first_number(value: &str) -> Option<f64> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::artifact_writers", "parse_first_number");
     Regex::new(r"([0-9]+(?:\.[0-9]+)?)")
         .expect("static regex")
         .captures(value)

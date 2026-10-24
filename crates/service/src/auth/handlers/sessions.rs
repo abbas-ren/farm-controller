@@ -36,6 +36,7 @@ pub async fn signin(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SigninRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::sessions", "signin");
     let username = payload.email_or_username.trim();
     let password = payload.password.trim();
     if username.is_empty() || password.is_empty() {
@@ -99,6 +100,7 @@ pub async fn signin(
     responses((status = 200, description = "Token is active", body = ValidationResponse), (status = 401, description = "Token is missing, inactive, or cannot be refreshed", body = AuthErrorResponse), (status = 502, description = "Keycloak unavailable", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse))
 )]
 pub async fn validate(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::sessions", "validate");
     validate_headers(state, headers, None, "Authenticated").await
 }
 
@@ -112,6 +114,7 @@ pub async fn validate(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
     responses((status = 200, description = "Token has the admin role", body = ValidationResponse), (status = 401, description = "Token is invalid", body = AuthErrorResponse), (status = 403, description = "Admin role is absent", body = AuthErrorResponse), (status = 502, description = "Keycloak unavailable", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse))
 )]
 pub async fn validate_admin(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::sessions", "validate_admin");
     validate_headers(state, headers, Some("admin"), "Authorized as Admin").await
 }
 
@@ -125,6 +128,7 @@ pub async fn validate_admin(State(state): State<Arc<AppState>>, headers: HeaderM
     responses((status = 200, description = "Token has the user role", body = ValidationResponse), (status = 401, description = "Token is invalid", body = AuthErrorResponse), (status = 403, description = "User role is absent", body = AuthErrorResponse), (status = 502, description = "Keycloak unavailable", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse))
 )]
 pub async fn validate_user(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::sessions", "validate_user");
     validate_headers(state, headers, Some("user"), "Authorized as User").await
 }
 
@@ -134,6 +138,7 @@ async fn validate_headers(
     required_role: Option<&str>,
     success_message: &'static str,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::sessions", "validate_headers");
     match authorize_request(&state, &headers, required_role).await {
         Ok(response_headers) => (
             StatusCode::OK,

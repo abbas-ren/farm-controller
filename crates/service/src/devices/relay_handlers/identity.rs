@@ -20,6 +20,7 @@ struct EdgeRelayIdentity {
 }
 
 fn valid_relay_identity(request: &RelayIdentityUpdateRequest) -> bool {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "valid_relay_identity");
     let serial_valid = request.serial_number.as_deref().is_none_or(|serial| {
         !serial.is_empty()
             && serial.len() <= 255
@@ -45,6 +46,7 @@ mod identity_validation_tests {
 
     #[test]
     fn vid_pid_is_required_and_serial_is_optional() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "vid_pid_is_required_and_serial_is_optional");
         assert!(valid_relay_identity(&RelayIdentityUpdateRequest {
             serial_number: None,
             vid_pid: "0403:6001".to_owned(),
@@ -67,6 +69,7 @@ pub(crate) async fn update_relay_identity(
     Path(relay_id): Path<Uuid>,
     payload: Result<Json<RelayIdentityUpdateRequest>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "update_relay_identity");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -183,6 +186,7 @@ pub(crate) async fn relay_device_state(
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::identity", "relay_device_state");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

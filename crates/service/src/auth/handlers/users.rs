@@ -19,6 +19,7 @@ async fn authorized_managed_users(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(HeaderMap, Vec<ManagedUser>), IdentityError> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "authorized_managed_users");
     let response_headers = authorize_request(state, headers, Some("admin"))
         .await
         .map_err(|error| IdentityError::upstream(error.status, error.message))?;
@@ -34,6 +35,7 @@ async fn authorized_managed_users(
 
 #[utoipa::path(get, path = "/api/v1/auth/users", tag = "Authentication", summary = "List approved and pending users", description = "Administrator view that partitions Keycloak users by the configured approved-user realm role.", security(("bearer_auth" = [])), responses((status = 200, description = "Approved and pending users", body = ManagedUsersResponse), (status = 401, description = "Authentication required", body = AuthErrorResponse), (status = 403, description = "Administrator role required", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
 pub async fn all_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "all_users");
     let (response_headers, users) = match authorized_managed_users(&state, &headers).await {
         Ok(result) => result,
         Err(error) => return legacy_error(error.status, &error.message),
@@ -53,6 +55,7 @@ pub async fn all_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -
 
 #[utoipa::path(get, path = "/api/v1/auth/users/active", tag = "Authentication", summary = "List active approved users", description = "Returns only Keycloak users carrying the configured approved-user realm role.", security(("bearer_auth" = [])), responses((status = 200, description = "Approved users", body = ActiveUsersResponse), (status = 401, description = "Authentication required", body = AuthErrorResponse), (status = 403, description = "Administrator role required", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse)))]
 pub async fn active_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "active_users");
     let (response_headers, users) = match authorized_managed_users(&state, &headers).await {
         Ok(result) => result,
         Err(error) => return legacy_error(error.status, &error.message),
@@ -78,6 +81,7 @@ pub async fn user_by_id(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "user_by_id");
     let Some(provider) = &state.identity_provider else {
         return legacy_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -96,6 +100,7 @@ pub async fn delete_user(
     headers: HeaderMap,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "delete_user");
     let response_headers = match authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -127,6 +132,7 @@ pub async fn delete_user(
     responses((status = 200, description = "Pending users", body = ActiveUsersResponse), (status = 401, description = "Invalid session", body = AuthErrorResponse), (status = 403, description = "Admin role required", body = AuthErrorResponse), (status = 502, description = "Keycloak request failed", body = AuthErrorResponse), (status = 503, description = "Authentication is disabled", body = AuthErrorResponse))
 )]
 pub async fn pending_users(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::users", "pending_users");
     let response_headers = match authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

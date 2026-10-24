@@ -10,7 +10,13 @@ use russh_sftp::client::SftpSession;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
-use crate::{config::DeviceConfig, state::AppState};
+use crate::{
+    config::DeviceConfig,
+    persistence::entity::device_controller,
+    state::AppState,
+};
+
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr};
 
 struct SshClient {
     host: String,
@@ -115,17 +121,7 @@ pub(super) async fn prepare_and_distribute(
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable for IPL distribution".to_owned())?;
-    let controllers = sqlx::query_scalar::<_, String>(
-        r#"SELECT DISTINCT "ipAddress" FROM device_controllers
-           WHERE replace(lower("deviceFamily"), ' ', '') = $1
-             AND status::text = 'approved' AND state::text = 'active'
-             AND "deletedAt" IS NULL
-           ORDER BY "ipAddress""#,
-    )
-    .bind(family.database_token())
-    .fetch_all(database.pool())
-    .await
-    .map_err(|error| error.to_string())?;
+    let controllers = active_controllers(database.orm(), family).await?;
     if controllers.is_empty() {
         tracing::warn!(
             device_family,
@@ -401,7 +397,7 @@ pub(crate) async fn remove_build(
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable for IPL cleanup".to_owned())?;
-    let controllers = active_controllers(database.pool(), family).await?;
+    let controllers = active_controllers(database.orm(), family).await?;
     let remote_path = format!("{}/{}", target.remote_path.trim_end_matches('/'), version);
     let timeout = Duration::from_secs(state.config.device.ipl_transfer_timeout_seconds);
     let mut failures = Vec::new();
@@ -428,18 +424,30 @@ pub(crate) async fn remove_build(
     }
 }
 
-async fn active_controllers(pool: &sqlx::PgPool, family: IplFamily) -> Result<Vec<String>, String> {
-    sqlx::query_scalar::<_, String>(
-        r#"SELECT DISTINCT "ipAddress" FROM device_controllers
-           WHERE replace(lower("deviceFamily"), ' ', '') = $1
-             AND status::text = 'approved' AND state::text = 'active'
-             AND "deletedAt" IS NULL
-           ORDER BY "ipAddress""#,
-    )
-    .bind(family.database_token())
-    .fetch_all(pool)
-    .await
-    .map_err(|error| error.to_string())
+async fn active_controllers(
+    orm: &sea_orm::DatabaseConnection,
+    family: IplFamily,
+) -> Result<Vec<String>, String> {
+    device_controller::Entity::find()
+        .filter(Expr::cust_with_values(
+            "replace(lower(\"deviceFamily\"), ' ', '') = $1",
+            [family.database_token()],
+        ))
+        .filter(
+            device_controller::Column::Status.eq(device_controller::DeviceControllerStatus::Approved),
+        )
+        .filter(
+            device_controller::Column::State.eq(device_controller::DeviceControllerState::Active),
+        )
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .order_by_asc(device_controller::Column::IpAddress)
+        .select_only()
+        .column(device_controller::Column::IpAddress)
+        .distinct()
+        .into_tuple::<String>()
+        .all(orm)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn remove_remote_tree(sftp: &SftpSession, path: &str) -> Result<(), String> {

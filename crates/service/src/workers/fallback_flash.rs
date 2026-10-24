@@ -4,10 +4,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     devices::{DEVICE_COMMAND_RETRY_DELAY, EDGE_CONTROLLER_PORT},
+    persistence::entity::{fallback_update, log_entry, test_execution},
     state::AppState,
 };
 
-#[derive(Debug, sqlx::FromRow)]
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter,
+    Set, Statement, TransactionTrait, sea_query::Expr,
+};
+
+#[derive(Debug, FromQueryResult)]
 struct FallbackFlash {
     id: i32,
     device_id: String,
@@ -57,10 +63,12 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
-async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sqlx::Error> {
+async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
-    let mut transaction = database.pool().begin().await?;
-    let fallback = sqlx::query_as::<_, FallbackFlash>(
+    let transaction = database.orm().begin().await?;
+    // Join + FOR UPDATE SKIP LOCKED across fallback/devices/releases — keep as raw SQL.
+    let fallback = FallbackFlash::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT fallback.id, fallback."deviceId" AS device_id,
                   fallback."testId" AS test_id, fallback."fallbackPath" AS fallback_path,
                   device."ipAddress" AS ip_address, device."deviceType" AS device_type,
@@ -73,28 +81,35 @@ async fn claim_next(state: &AppState) -> Result<Option<FallbackFlash>, sqlx::Err
                          AND device."ipAddress" IS NOT NULL AND device."deviceType" IS NOT NULL
            ORDER BY fallback."createdAt" ASC
            LIMIT 1 FOR UPDATE OF fallback SKIP LOCKED"#,
-    )
-    .fetch_optional(&mut *transaction)
+        [],
+    ))
+    .one(&transaction)
     .await?;
     let Some(fallback) = fallback else {
         transaction.rollback().await?;
         return Ok(None);
     };
-    sqlx::query(
-        r#"UPDATE fallback_updates SET status = 'flashing', "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(fallback.id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"UPDATE test_executions
-           SET "executionPhase" = 'WAIT_FOR_FALLBACK_COMPLETION', "updatedAt" = now()
-           WHERE "testId" = $1"#,
-    )
-    .bind(&fallback.test_id)
-    .execute(&mut *transaction)
-    .await?;
+    let now = chrono::Utc::now();
+    fallback_update::Entity::update_many()
+        .col_expr(
+            fallback_update::Column::Status,
+            Expr::value(fallback_update::FallbackStatus::Flashing),
+        )
+        .col_expr(fallback_update::Column::UpdatedAt, Expr::value(now))
+        .filter(fallback_update::Column::Id.eq(fallback.id))
+        .exec(&transaction)
+        .await?;
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            Expr::value(Some(
+                test_execution::ExecutionPhase::WaitForFallbackCompletion,
+            )),
+        )
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(&fallback.test_id))
+        .exec(&transaction)
+        .await?;
     transaction.commit().await?;
     Ok(Some(fallback))
 }
@@ -134,35 +149,48 @@ fn flash_payload(fallback: &FallbackFlash, server_ip: &str, tftp_path: &str) -> 
     })
 }
 
-async fn fail(state: &AppState, fallback: &FallbackFlash, error: &str) -> Result<(), sqlx::Error> {
+async fn fail(
+    state: &AppState,
+    fallback: &FallbackFlash,
+    error: &str,
+) -> Result<(), sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
-    let mut transaction = database.pool().begin().await?;
-    sqlx::query(
-        r#"UPDATE fallback_updates SET status = 'failed', "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(fallback.id)
-    .execute(&mut *transaction)
+    let transaction = database.orm().begin().await?;
+    let now = chrono::Utc::now();
+    fallback_update::Entity::update_many()
+        .col_expr(
+            fallback_update::Column::Status,
+            Expr::value(fallback_update::FallbackStatus::Failed),
+        )
+        .col_expr(fallback_update::Column::UpdatedAt, Expr::value(now))
+        .filter(fallback_update::Column::Id.eq(fallback.id))
+        .exec(&transaction)
+        .await?;
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+        )
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(&fallback.test_id))
+        .exec(&transaction)
+        .await?;
+    log_entry::ActiveModel {
+        r#type: Set(log_entry::LogEntryType::Test),
+        reference_id: Set(fallback.test_id.clone()),
+        data: Set(serde_json::json!({
+            "message": format!("Fallback flash dispatch failed: {error}")
+        })),
+        level: Set(log_entry::LogEntryLevel::Error),
+        timestamp: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&transaction)
     .await?;
-    sqlx::query(
-        r#"UPDATE test_executions
-           SET "executionPhase" = 'COMPLETE_FAILED', "updatedAt" = now()
-           WHERE "testId" = $1"#,
-    )
-    .bind(&fallback.test_id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"INSERT INTO log_entries
-              (type, "referenceId", data, level, timestamp, "createdAt", "updatedAt")
-           VALUES ('test', $1, jsonb_build_object('message', $2::text), 'error',
-                   now(), now(), now())"#,
-    )
-    .bind(&fallback.test_id)
-    .bind(format!("Fallback flash dispatch failed: {error}"))
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await
+    transaction.commit().await?;
+    Ok(())
 }
 
 #[cfg(test)]

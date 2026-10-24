@@ -1,8 +1,13 @@
 //! Report test-case and terminal-status persistence boundary.
 
 use async_trait::async_trait;
-use sqlx::PgPool;
+use chrono::Utc;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, sea_query::Expr,
+};
 use uuid::Uuid;
+
+use crate::persistence::entity::{execution_report, test_case};
 
 use super::{ReportError, ReportStatus, TestCaseRecord};
 
@@ -16,36 +21,49 @@ pub trait ReportDataSource: Send + Sync {
         _status: ReportStatus,
         _error: Option<&str>,
     ) -> Result<(), ReportError> {
+        let _api_trace =
+            crate::observability::ApiTrace::enter("reports::data_source", "update_report_status");
         Ok(())
     }
 }
 
 pub struct PostgresReportDataSource {
-    pool: PgPool,
+    orm: DatabaseConnection,
 }
 
 impl PostgresReportDataSource {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(orm: DatabaseConnection) -> Self {
+        Self { orm }
     }
 }
 
 #[async_trait]
 impl ReportDataSource for PostgresReportDataSource {
     async fn test_cases(&self, test_id: &str) -> Result<Vec<TestCaseRecord>, ReportError> {
-        Ok(sqlx::query_as::<_, TestCaseRecord>(
-            r#"
-            SELECT "testCaseId" AS test_case_id, "suiteName" AS suite_name,
-                   result::text, comment, cmd AS command, "jiraDefect" AS jira_defect,
-                   "outputFilePath" AS output_file_path, labels
-            FROM testcase
-            WHERE "executionId" = $1
-            ORDER BY "suiteId", id
-            "#,
-        )
-        .bind(test_id)
-        .fetch_all(&self.pool)
-        .await?)
+        let _api_trace =
+            crate::observability::ApiTrace::enter("reports::data_source", "test_cases");
+        let rows = test_case::Entity::find()
+            .filter(test_case::Column::ExecutionId.eq(test_id))
+            .order_by_asc(test_case::Column::SuiteId)
+            .order_by_asc(test_case::Column::Id)
+            .all(&self.orm)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| TestCaseRecord {
+                test_case_id: row.test_case_id,
+                suite_name: row.suite_name,
+                result: row.result.map(|r| match r {
+                    test_case::TestResult::Pass => "PASS".to_owned(),
+                    test_case::TestResult::Fail => "FAIL".to_owned(),
+                }),
+                comment: row.comment,
+                command: row.cmd,
+                jira_defect: row.jira_defect,
+                output_file_path: row.output_file_path,
+                labels: row.labels,
+            })
+            .collect())
     }
 
     async fn update_report_status(
@@ -54,22 +72,24 @@ impl ReportDataSource for PostgresReportDataSource {
         status: ReportStatus,
         error: Option<&str>,
     ) -> Result<(), ReportError> {
+        let _api_trace =
+            crate::observability::ApiTrace::enter("reports::data_source", "update_report_status");
         let status = match status {
-            ReportStatus::Completed => "completed",
-            ReportStatus::Failed => "failed",
+            ReportStatus::Completed => execution_report::ExecutionReportStatus::Completed,
+            ReportStatus::Failed => execution_report::ExecutionReportStatus::Failed,
             _ => return Ok(()),
         };
-        sqlx::query(
-            r#"UPDATE execution_reports
-               SET status = $2::"enum_execution_reports_status", "uploadError" = $3,
-                   "updatedAt" = now()
-               WHERE id = $1"#,
-        )
-        .bind(report_id)
-        .bind(status)
-        .bind(error)
-        .execute(&self.pool)
-        .await?;
+        let now = Utc::now();
+        execution_report::Entity::update_many()
+            .col_expr(execution_report::Column::Status, Expr::value(status))
+            .col_expr(
+                execution_report::Column::UploadError,
+                Expr::value(error.map(str::to_owned)),
+            )
+            .col_expr(execution_report::Column::UpdatedAt, Expr::value(now))
+            .filter(execution_report::Column::Id.eq(report_id))
+            .exec(&self.orm)
+            .await?;
         Ok(())
     }
 }

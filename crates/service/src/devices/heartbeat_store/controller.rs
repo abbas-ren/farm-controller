@@ -1,144 +1,154 @@
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
+    sea_query::LockType,
+};
+use uuid::Uuid;
 
-use crate::devices::repository_types::ControllerHeartbeatResult;
+use crate::{
+    devices::repository_types::ControllerHeartbeatResult,
+    persistence::entity::{
+        alert, device_controller, device_controller_heartbeat, device_controller_metrics,
+    },
+};
 
 use super::super::{
     ControllerHeartbeat, error::DeviceRepositoryError, validation::normalized_controller_id,
 };
 
 pub(crate) async fn record_controller(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     heartbeat: &ControllerHeartbeat,
 ) -> Result<ControllerHeartbeatResult, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::heartbeat_store::controller",
+        "record_controller",
+    );
     let controller_id = normalized_controller_id(&heartbeat.uid)?;
     let timestamp = DateTime::<Utc>::from_timestamp(heartbeat.timestamp, 0).ok_or_else(|| {
         DeviceRepositoryError::Validation("heartbeat timestamp is out of range".to_owned())
     })?;
-    let mut transaction = pool.begin().await?;
-    let previous_state = sqlx::query_scalar::<_, String>(
-        r#"SELECT state::text FROM device_controllers
-           WHERE "deviceControllerId" = $1 AND "deletedAt" IS NULL FOR UPDATE"#,
-    )
-    .bind(&controller_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    let Some(previous_state) = previous_state else {
+    let transaction = orm.begin().await?;
+    let controller = device_controller::Entity::find()
+        .filter(device_controller::Column::DeviceControllerId.eq(&controller_id))
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .lock(LockType::Update)
+        .one(&transaction)
+        .await?;
+    let Some(controller) = controller else {
         transaction.commit().await?;
         return Ok(ControllerHeartbeatResult {
             state_changed: false,
             alert: None,
         });
     };
-    sqlx::query(
-        r#"
-        UPDATE device_controllers
-        SET state = 'active', "ipAddress" = $2, "updatedAt" = now()
-        WHERE "deviceControllerId" = $1
-        "#,
-    )
-    .bind(&controller_id)
-    .bind(&heartbeat.ip)
-    .execute(&mut *transaction)
+    let previous_state = match controller.state {
+        device_controller::DeviceControllerState::Active => "active",
+        device_controller::DeviceControllerState::NotReachable => "not-reachable",
+    };
+    let now = Utc::now();
+    device_controller::ActiveModel {
+        device_controller_id: Set(controller.device_controller_id.clone()),
+        state: Set(device_controller::DeviceControllerState::Active),
+        ip_address: Set(heartbeat.ip.clone()),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .update(&transaction)
     .await
     .map_err(|error| {
         tracing::error!(%error, controller_id, "failed to persist controller heartbeat state transition");
         error
     })?;
 
-    sqlx::query(
-        r#"
-        INSERT INTO device_controller_heartbeats
-            ("controllerId", timestamp, timeout, data)
-        VALUES ($1, $2, 0, $3)
-        "#,
-    )
-    .bind(&controller_id)
-    .bind(timestamp)
-    .bind(sqlx::types::Json(serde_json::to_value(heartbeat).map_err(
-        |error| DeviceRepositoryError::Validation(error.to_string()),
-    )?))
-    .execute(&mut *transaction)
+    device_controller_heartbeat::ActiveModel {
+        controller_id: Set(controller_id.clone()),
+        timestamp: Set(timestamp),
+        timeout: Set(0),
+        data: Set(serde_json::to_value(heartbeat).map_err(|error| {
+            DeviceRepositoryError::Validation(error.to_string())
+        })?),
+        ..Default::default()
+    }
+    .insert(&transaction)
     .await?;
 
-    let metrics_updated = sqlx::query(
-        r#"
-        UPDATE device_controller_metrics SET
-            "cpuCurrent" = $2, "cpuTotal" = $3, "cpuUsagePercent" = $4,
-            "memoryUsed" = $5, "memoryTotal" = $6, "memoryUsagePercent" = $7,
-            "networkUpload" = $8, "networkDownload" = $9,
-            "diskUsed" = $10, "diskTotal" = $11, "diskUsagePercent" = $12,
-            "collectedAt" = $13, "updatedAt" = now()
-        WHERE id = (
-            SELECT id FROM device_controller_metrics
-            WHERE "controllerId" = $1
-            ORDER BY "updatedAt" DESC, id DESC LIMIT 1 FOR UPDATE
-        )
-        "#,
-    )
-    .bind(&controller_id)
-    .bind(&heartbeat.cpu_current)
-    .bind(&heartbeat.cpu_total)
-    .bind(heartbeat.cpu_usage_percent)
-    .bind(&heartbeat.memory_used)
-    .bind(&heartbeat.memory_total)
-    .bind(heartbeat.memory_usage_percent)
-    .bind(&heartbeat.network_upload)
-    .bind(&heartbeat.network_download)
-    .bind(&heartbeat.disk_used)
-    .bind(&heartbeat.disk_total)
-    .bind(heartbeat.disk_usage_percent)
-    .bind(timestamp)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    if metrics_updated == 0 {
-        sqlx::query(
-            r#"
-            INSERT INTO device_controller_metrics (
-                "controllerId", "cpuCurrent", "cpuTotal", "cpuUsagePercent",
-                "memoryUsed", "memoryTotal", "memoryUsagePercent",
-                "networkUpload", "networkDownload", "diskUsed", "diskTotal",
-                "diskUsagePercent", "collectedAt", "createdAt", "updatedAt"
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),now())
-            "#,
-        )
-        .bind(&controller_id)
-        .bind(&heartbeat.cpu_current)
-        .bind(&heartbeat.cpu_total)
-        .bind(heartbeat.cpu_usage_percent)
-        .bind(&heartbeat.memory_used)
-        .bind(&heartbeat.memory_total)
-        .bind(heartbeat.memory_usage_percent)
-        .bind(&heartbeat.network_upload)
-        .bind(&heartbeat.network_download)
-        .bind(&heartbeat.disk_used)
-        .bind(&heartbeat.disk_total)
-        .bind(heartbeat.disk_usage_percent)
-        .bind(timestamp)
-        .execute(&mut *transaction)
+    let latest_metrics = device_controller_metrics::Entity::find()
+        .filter(device_controller_metrics::Column::ControllerId.eq(&controller_id))
+        .order_by_desc(device_controller_metrics::Column::UpdatedAt)
+        .order_by_desc(device_controller_metrics::Column::Id)
+        .limit(1)
+        .lock(LockType::Update)
+        .one(&transaction)
+        .await?;
+    if let Some(metrics) = latest_metrics {
+        device_controller_metrics::ActiveModel {
+            id: Set(metrics.id),
+            cpu_current: Set(heartbeat.cpu_current.clone()),
+            cpu_total: Set(heartbeat.cpu_total.clone()),
+            cpu_usage_percent: Set(heartbeat.cpu_usage_percent),
+            memory_used: Set(heartbeat.memory_used.clone()),
+            memory_total: Set(heartbeat.memory_total.clone()),
+            memory_usage_percent: Set(heartbeat.memory_usage_percent),
+            network_upload: Set(heartbeat.network_upload.clone()),
+            network_download: Set(heartbeat.network_download.clone()),
+            disk_used: Set(heartbeat.disk_used.clone()),
+            disk_total: Set(heartbeat.disk_total.clone()),
+            disk_usage_percent: Set(heartbeat.disk_usage_percent),
+            collected_at: Set(timestamp),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .update(&transaction)
+        .await?;
+    } else {
+        device_controller_metrics::ActiveModel {
+            controller_id: Set(controller_id.clone()),
+            cpu_current: Set(heartbeat.cpu_current.clone()),
+            cpu_total: Set(heartbeat.cpu_total.clone()),
+            cpu_usage_percent: Set(heartbeat.cpu_usage_percent),
+            memory_used: Set(heartbeat.memory_used.clone()),
+            memory_total: Set(heartbeat.memory_total.clone()),
+            memory_usage_percent: Set(heartbeat.memory_usage_percent),
+            network_upload: Set(heartbeat.network_upload.clone()),
+            network_download: Set(heartbeat.network_download.clone()),
+            disk_used: Set(heartbeat.disk_used.clone()),
+            disk_total: Set(heartbeat.disk_total.clone()),
+            disk_usage_percent: Set(heartbeat.disk_usage_percent),
+            collected_at: Set(timestamp),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&transaction)
         .await?;
     }
     let state_changed = previous_state != "active";
     let alert = if state_changed {
-        Some(
-            sqlx::query_scalar::<_, serde_json::Value>(
-                r#"INSERT INTO alerts
-                      (id, user_id, title, message, type, status, is_read,
-                       device_controller_id, data, created_at, updated_at)
-                   VALUES (gen_random_uuid(), 'ADMIN', 'Device Controller Online',
-                           'Device controller ' || $1 || ' changed from not reachable to online',
-                           'success', 'unread', false, $1,
-                           jsonb_build_object('deviceControllerId', $1,
-                                              'previousState', $2, 'state', 'active'),
-                           now(), now())
-                   RETURNING to_jsonb(alerts)"#,
-            )
-            .bind(&controller_id)
-            .bind(&previous_state)
-            .fetch_one(&mut *transaction)
-            .await?,
-        )
+        let inserted = alert::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            user_id: Set("ADMIN".to_owned()),
+            title: Set("Device Controller Online".to_owned()),
+            message: Set(format!(
+                "Device controller {controller_id} changed from not reachable to online"
+            )),
+            r#type: Set(alert::AlertType::Success),
+            status: Set(alert::AlertStatus::Unread),
+            is_read: Set(false),
+            device_controller_id: Set(Some(controller_id.clone())),
+            data: Set(Some(serde_json::json!({
+                "deviceControllerId": controller_id,
+                "previousState": previous_state,
+                "state": "active",
+            }))),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await?;
+        Some(controller_alert_json(&inserted))
     } else {
         None
     };
@@ -153,5 +163,29 @@ pub(crate) async fn record_controller(
     Ok(ControllerHeartbeatResult {
         state_changed,
         alert,
+    })
+}
+
+fn controller_alert_json(model: &alert::Model) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.id,
+        "user_id": model.user_id,
+        "title": model.title,
+        "message": model.message,
+        "type": match model.r#type {
+            alert::AlertType::Info => "info",
+            alert::AlertType::Success => "success",
+            alert::AlertType::Warning => "warning",
+            alert::AlertType::Error => "error",
+        },
+        "status": match model.status {
+            alert::AlertStatus::Unread => "unread",
+            alert::AlertStatus::Read => "read",
+        },
+        "is_read": model.is_read,
+        "device_controller_id": model.device_controller_id,
+        "data": model.data,
+        "created_at": model.created_at,
+        "updated_at": model.updated_at,
     })
 }

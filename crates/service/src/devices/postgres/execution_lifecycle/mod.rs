@@ -1,5 +1,8 @@
 use super::*;
 
+use crate::persistence::entity::test_execution;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
+
 mod cancellation;
 mod creation;
 mod logs;
@@ -10,6 +13,7 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         &self,
         execution: &ExecutionCreation,
     ) -> Result<serde_json::Value, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "create_test_execution");
         self.create_test_execution_inner(execution).await
     }
 
@@ -17,6 +21,7 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         &self,
         test_id: &str,
     ) -> Result<Option<String>, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "test_execution_build_version");
         self.test_execution_build_version_inner(test_id).await
     }
 
@@ -24,6 +29,7 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         &self,
         request: &LogCreateRequest,
     ) -> Result<serde_json::Value, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "create_log");
         self.create_log_inner(request).await
     }
 
@@ -32,6 +38,7 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         query: &LogListQuery,
         search: Option<&str>,
     ) -> Result<serde_json::Value, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "list_logs");
         self.list_logs_inner(query, search).await
     }
 
@@ -41,6 +48,7 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         limit: i64,
         offset: i64,
     ) -> Result<serde_json::Value, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "executions_by_build");
         self.executions_by_build_inner(build_id, limit, offset)
             .await
     }
@@ -49,6 +57,7 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         &self,
         test_id: &str,
     ) -> Result<Option<serde_json::Value>, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "test_results");
         self.test_results_inner(test_id).await
     }
 
@@ -57,17 +66,37 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         test_id: &str,
         status: &str,
     ) -> Result<bool, DeviceRepositoryError> {
-        let result = sqlx::query(
-            r#"UPDATE test_executions SET status = $2::"enum_test_executions_status",
-                   "startedAt" = CASE WHEN $2 = 'in_progress' THEN COALESCE("startedAt", now()) ELSE "startedAt" END,
-                   "endedAt" = CASE WHEN $2 IN ('completed', 'cancelled', 'failed') THEN now() ELSE NULL END,
-                   "updatedAt" = now() WHERE "testId" = $1"#,
-        )
-        .bind(test_id)
-        .bind(status)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() > 0)
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "update_execution_status");
+        let status_enum = parse_test_status(status)?;
+        let now = chrono::Utc::now();
+        let mut update = test_execution::Entity::update_many()
+            .col_expr(
+                test_execution::Column::Status,
+                Expr::value(Some(status_enum)),
+            )
+            .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+            .filter(test_execution::Column::TestId.eq(test_id));
+
+        if status == "in_progress" {
+            update = update.col_expr(
+                test_execution::Column::StartedAt,
+                Expr::cust("COALESCE(\"startedAt\", now())"),
+            );
+        }
+        if matches!(status, "completed" | "cancelled" | "failed") {
+            update = update.col_expr(
+                test_execution::Column::EndedAt,
+                Expr::value(Some(now)),
+            );
+        } else {
+            update = update.col_expr(
+                test_execution::Column::EndedAt,
+                Expr::value(Option::<chrono::DateTime<chrono::Utc>>::None),
+            );
+        }
+
+        let result = update.exec(self.orm()).await?;
+        Ok(result.rows_affected > 0)
     }
 
     async fn request_test_cancellation(
@@ -76,7 +105,23 @@ impl ExecutionLifecycleRepository for PostgresDeviceRepository {
         user_id: &str,
         nfs_host_path: &str,
     ) -> Result<Option<TestCancellationResult>, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "request_test_cancellation");
         self.request_test_cancellation_inner(test_id, user_id, nfs_host_path)
             .await
+    }
+}
+
+fn parse_test_status(status: &str) -> Result<test_execution::TestStatus, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::postgres::execution_lifecycle::mod", "parse_test_status");
+    match status {
+        "not_executed" => Ok(test_execution::TestStatus::NotExecuted),
+        "in_progress" => Ok(test_execution::TestStatus::InProgress),
+        "completed" => Ok(test_execution::TestStatus::Completed),
+        "queued" => Ok(test_execution::TestStatus::Queued),
+        "cancelled" => Ok(test_execution::TestStatus::Cancelled),
+        "failed" => Ok(test_execution::TestStatus::Failed),
+        _ => Err(DeviceRepositoryError::Validation(format!(
+            "invalid test status: {status}"
+        ))),
     }
 }

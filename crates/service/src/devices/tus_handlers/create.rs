@@ -33,6 +33,7 @@ pub async fn options(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::create", "options");
     let response_headers = match authorize(&state, &headers).await {
         Ok(headers) => headers,
         Err(response) => return *response,
@@ -69,6 +70,7 @@ pub async fn options_resource(
     headers: HeaderMap,
     AxumPath(_id): AxumPath<Uuid>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::create", "options_resource");
     options(State(state), headers).await
 }
 
@@ -101,6 +103,7 @@ pub async fn create(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::create", "create");
     let response_headers = match authorize(&state, &headers).await {
         Ok(headers) => headers,
         Err(response) => return *response,

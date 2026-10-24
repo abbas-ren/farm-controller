@@ -4,6 +4,7 @@ pub(super) async fn legacy_repository(
     state: &Arc<AppState>,
     headers: &HeaderMap,
 ) -> Result<(HeaderMap, Arc<dyn DeviceRepository>), Box<axum::response::Response>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::shared", "legacy_repository");
     let response_headers = auth::authorize_request(state, headers, Some("admin"))
         .await
         .map_err(|error| Box::new(error.into_response()))?;

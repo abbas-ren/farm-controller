@@ -7,7 +7,6 @@ use axum::{
     response::IntoResponse,
 };
 use serde::Serialize;
-use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::{auth, error::ErrorResponse, state::AppState};
@@ -17,7 +16,6 @@ use super::{
     UartConfigurationResponse, error_response,
 };
 
-#[derive(FromRow)]
 struct UartContext {
     device_id: String,
     device_mac: String,
@@ -27,6 +25,18 @@ struct UartContext {
     channel_number: Option<i32>,
     relay_channel_id: Option<Uuid>,
     relay_confirmed: bool,
+}
+
+#[derive(Debug)]
+enum UartLoadError {
+    NotFound,
+    Database(sea_orm::DbErr),
+}
+
+impl From<sea_orm::DbErr> for UartLoadError {
+    fn from(error: sea_orm::DbErr) -> Self {
+        Self::Database(error)
+    }
 }
 
 #[derive(Serialize)]
@@ -43,6 +53,7 @@ struct EdgeUartRequest<'a> {
 }
 
 fn normalized_vid_pid(value: &str) -> Option<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "normalized_vid_pid");
     let value = value.trim().to_ascii_lowercase();
     let (vid, pid) = value.split_once(':')?;
     (vid.len() == 4
@@ -54,59 +65,136 @@ fn normalized_vid_pid(value: &str) -> Option<String> {
     .then_some(value)
 }
 
+fn normalize_mac(value: &str) -> String {
+    value.to_ascii_lowercase().replace([':', '-'], "")
+}
+
+fn detect_generation(
+    device_family: Option<&str>,
+    device_type: Option<&str>,
+    controller_family: Option<&str>,
+) -> i16 {
+    let blob = format!(
+        "{} {} {}",
+        device_family.unwrap_or_default(),
+        device_type.unwrap_or_default(),
+        controller_family.unwrap_or_default()
+    )
+    .to_ascii_lowercase()
+    .replace(' ', "");
+    if blob.contains("gen3") {
+        3
+    } else if blob.contains("gen4") {
+        4
+    } else if blob.contains("gen5") {
+        5
+    } else {
+        0
+    }
+}
+
 async fn load_context(
     state: &AppState,
     request: &UartConfigurationRequest,
-) -> Result<UartContext, sqlx::Error> {
+) -> Result<UartContext, UartLoadError> {
+    use crate::persistence::entity::{
+        device, device_controller, pending_relay_config, relay, relay_channel,
+    };
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::uart_handlers", "load_context");
     let database = state
         .database
         .as_ref()
         .expect("database checked by handler");
-    sqlx::query_as::<_, UartContext>(
-        r#"SELECT d."deviceId" AS device_id,
-                  COALESCE(NULLIF(d."macAddress", ''), d."deviceId") AS device_mac,
-                  CASE
-                                        WHEN replace(lower(concat_ws(' ', d."deviceFamily", d."deviceType", dc."deviceFamily")), ' ', '') LIKE '%gen3%' THEN 3
-                                        WHEN replace(lower(concat_ws(' ', d."deviceFamily", d."deviceType", dc."deviceFamily")), ' ', '') LIKE '%gen4%' THEN 4
-                                        WHEN replace(lower(concat_ws(' ', d."deviceFamily", d."deviceType", dc."deviceFamily")), ' ', '') LIKE '%gen5%' THEN 5
-                    ELSE 0
-                  END::smallint AS generation,
-                  dc."ipAddress" AS controller_address,
-                  r."serialNumber" AS relay_serial,
-                  rc."channelNumber" AS channel_number,
-                  rc.id AS relay_channel_id,
-                  COALESCE((
-                    SELECT pending.status = 'confirmed'
-                    FROM pending_relay_configs pending
-                    WHERE pending."relayChannelId" = rc.id
-                      AND regexp_replace(lower(pending."deviceMac"), '[:-]', '', 'g') =
-                          regexp_replace(lower(COALESCE(NULLIF(d."macAddress", ''), d."deviceId")), '[:-]', '', 'g')
-                    ORDER BY pending."createdAt" DESC
-                    LIMIT 1
-                  ), false) AS relay_confirmed
-           FROM devices d
-           JOIN device_controllers dc
-             ON dc."deviceControllerId" = $2 AND dc."deletedAt" IS NULL
-           LEFT JOIN relays r
-             ON r.id = $3 AND r."deviceControllerId" = dc."deviceControllerId"
-            AND r."deletedAt" IS NULL
-           LEFT JOIN relay_channels rc
-             ON rc.id = $4 AND rc."relayId" = r.id AND rc."deviceId" = d."deviceId"
-            AND rc."deletedAt" IS NULL
-           WHERE d."deviceId" = $1 AND d."deletedAt" IS NULL"#,
-    )
-    .bind(request.device_id.trim())
-    .bind(request.controller_id.trim())
-    .bind(request.relay_id)
-    .bind(request.channel_id)
-    .fetch_one(database.pool())
-    .await
+    let orm = database.orm();
+    let device_id = request.device_id.trim();
+    let controller_id = request.controller_id.trim();
+
+    let device_model = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .one(orm)
+        .await?
+        .ok_or(UartLoadError::NotFound)?;
+    let controller = device_controller::Entity::find()
+        .filter(device_controller::Column::DeviceControllerId.eq(controller_id))
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .one(orm)
+        .await?
+        .ok_or(UartLoadError::NotFound)?;
+
+    let device_mac = device_model
+        .mac_address
+        .as_deref()
+        .filter(|mac| !mac.is_empty())
+        .unwrap_or(device_model.device_id.as_str())
+        .to_owned();
+    let generation = detect_generation(
+        device_model.device_family.as_deref(),
+        device_model.device_type.as_deref(),
+        controller.device_family.as_deref(),
+    );
+
+    let mut relay_serial = None;
+    let mut channel_number = None;
+    let mut relay_channel_id = None;
+    let mut relay_confirmed = false;
+
+    if let Some(relay_id) = request.relay_id {
+        let relay_model = relay::Entity::find_by_id(relay_id)
+            .filter(relay::Column::DeviceControllerId.eq(controller_id))
+            .filter(relay::Column::DeletedAt.is_null())
+            .one(orm)
+            .await?;
+        if let Some(relay_model) = relay_model {
+            relay_serial = Some(relay_model.serial_number);
+            if let Some(channel_id) = request.channel_id {
+                let channel = relay_channel::Entity::find_by_id(channel_id)
+                    .filter(relay_channel::Column::RelayId.eq(relay_id))
+                    .filter(relay_channel::Column::DeviceId.eq(device_id))
+                    .filter(relay_channel::Column::DeletedAt.is_null())
+                    .one(orm)
+                    .await?;
+                if let Some(channel) = channel {
+                    channel_number = Some(channel.channel_number);
+                    relay_channel_id = Some(channel.id);
+                    let normalized = normalize_mac(&device_mac);
+                    relay_confirmed = pending_relay_config::Entity::find()
+                        .filter(pending_relay_config::Column::RelayChannelId.eq(channel.id))
+                        .order_by_desc(pending_relay_config::Column::CreatedAt)
+                        .all(orm)
+                        .await?
+                        .into_iter()
+                        .find(|pending| normalize_mac(&pending.device_mac) == normalized)
+                        .is_some_and(|pending| {
+                            matches!(
+                                pending.status,
+                                pending_relay_config::PendingRelayConfigStatus::Confirmed
+                            )
+                        });
+                }
+            }
+        }
+    }
+
+    Ok(UartContext {
+        device_id: device_model.device_id,
+        device_mac,
+        generation,
+        controller_address: controller.ip_address,
+        relay_serial,
+        channel_number,
+        relay_channel_id,
+        relay_confirmed,
+    })
 }
 
 fn validate_context(
     context: &UartContext,
     request: &UartConfigurationRequest,
 ) -> Result<(u8, Option<u8>), &'static str> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "validate_context");
     let generation = u8::try_from(context.generation)
         .ok()
         .filter(|generation| matches!(generation, 3..=5))
@@ -147,6 +235,7 @@ pub(crate) async fn configure_uart(
     headers: HeaderMap,
     payload: Result<Json<UartConfigurationRequest>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "configure_uart");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -177,14 +266,14 @@ pub(crate) async fn configure_uart(
     }
     let context = match load_context(&state, &request).await {
         Ok(context) => context,
-        Err(sqlx::Error::RowNotFound) => {
+        Err(UartLoadError::NotFound) => {
             return error_response(
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "Device or controller was not found",
             );
         }
-        Err(error) => {
+        Err(UartLoadError::Database(error)) => {
             tracing::error!(%error, "failed to load UART configuration context");
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -273,7 +362,12 @@ pub(crate) async fn configure_uart(
     };
 
     let database = state.database.as_ref().expect("database checked above");
-    let mut transaction = match database.pool().begin().await {
+    use crate::persistence::entity::{device_controller, device_uart_mapping};
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait,
+        sea_query::OnConflict,
+    };
+    let transaction = match database.orm().begin().await {
         Ok(transaction) => transaction,
         Err(error) => {
             return error_response(
@@ -283,34 +377,47 @@ pub(crate) async fn configure_uart(
             );
         }
     };
-    if let Err(error) = sqlx::query(
-        r#"INSERT INTO device_uart_mappings
-             (id, "deviceId", "controllerId", "relayChannelId", "deviceMac", generation,
-              "requestedVidPid", tty, "usbSerial", interface, topology, connection, verified,
-              "verifiedAt", "createdAt", "updatedAt")
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,now(),now(),now())
-           ON CONFLICT ("deviceId") DO UPDATE SET
-             "controllerId"=EXCLUDED."controllerId", "relayChannelId"=EXCLUDED."relayChannelId",
-             "deviceMac"=EXCLUDED."deviceMac", generation=EXCLUDED.generation,
-             "requestedVidPid"=EXCLUDED."requestedVidPid", tty=EXCLUDED.tty,
-             "usbSerial"=EXCLUDED."usbSerial", interface=EXCLUDED.interface,
-             topology=EXCLUDED.topology, connection=EXCLUDED.connection, verified=true,
-             "verifiedAt"=now(), "updatedAt"=now()"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(&context.device_id)
-    .bind(request.controller_id.trim())
-    .bind(context.relay_channel_id)
-    .bind(&context.device_mac)
-    .bind(i16::from(generation))
-    .bind(&verified.vid_pid)
-    .bind(&verified.tty)
-    .bind(&verified.usb_serial)
-    .bind(i16::from(verified.interface))
-    .bind(&verified.topology)
-    .bind(&verified.connection)
-    .execute(&mut *transaction)
-    .await
+    let now = chrono::Utc::now();
+    let mapping_model = device_uart_mapping::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        device_id: Set(context.device_id.clone()),
+        controller_id: Set(request.controller_id.trim().to_owned()),
+        relay_channel_id: Set(context.relay_channel_id),
+        device_mac: Set(context.device_mac.clone()),
+        generation: Set(i16::from(generation)),
+        requested_vid_pid: Set(verified.vid_pid.clone()),
+        tty: Set(verified.tty.clone()),
+        usb_serial: Set(verified.usb_serial.clone()),
+        interface: Set(i16::from(verified.interface)),
+        topology: Set(verified.topology.clone()),
+        connection: Set(verified.connection.clone()),
+        verified: Set(true),
+        verified_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+    };
+    if let Err(error) = device_uart_mapping::Entity::insert(mapping_model)
+        .on_conflict(
+            OnConflict::column(device_uart_mapping::Column::DeviceId)
+                .update_columns([
+                    device_uart_mapping::Column::ControllerId,
+                    device_uart_mapping::Column::RelayChannelId,
+                    device_uart_mapping::Column::DeviceMac,
+                    device_uart_mapping::Column::Generation,
+                    device_uart_mapping::Column::RequestedVidPid,
+                    device_uart_mapping::Column::Tty,
+                    device_uart_mapping::Column::UsbSerial,
+                    device_uart_mapping::Column::Interface,
+                    device_uart_mapping::Column::Topology,
+                    device_uart_mapping::Column::Connection,
+                    device_uart_mapping::Column::Verified,
+                    device_uart_mapping::Column::VerifiedAt,
+                    device_uart_mapping::Column::UpdatedAt,
+                ])
+                .to_owned(),
+        )
+        .exec(&transaction)
+        .await
     {
         tracing::error!(%error, "failed to persist UART mapping");
         return error_response(
@@ -319,11 +426,8 @@ pub(crate) async fn configure_uart(
             "Failed to persist verified UART mapping",
         );
     }
-    let normalized_mac = context
-        .device_mac
-        .to_ascii_lowercase()
-        .replace([':', '-'], "");
-    let mapping = serde_json::json!({
+    let normalized_mac = normalize_mac(&context.device_mac);
+    let patch = serde_json::json!({
         normalized_mac: {
             "uart": verified.tty,
             "uartVidPid": verified.vid_pid,
@@ -332,15 +436,34 @@ pub(crate) async fn configure_uart(
             "generation": generation
         }
     });
-    if let Err(error) = sqlx::query(
-        r#"UPDATE device_controllers SET mappings = COALESCE(mappings, '{}'::jsonb) || $2::jsonb,
-             "updatedAt" = now() WHERE "deviceControllerId" = $1"#,
-    )
-    .bind(request.controller_id.trim())
-    .bind(sqlx::types::Json(mapping))
-    .execute(&mut *transaction)
-    .await
-    {
+    let controller_update = async {
+        let Some(controller) = device_controller::Entity::find()
+            .filter(
+                device_controller::Column::DeviceControllerId
+                    .eq(request.controller_id.trim()),
+            )
+            .one(&transaction)
+            .await?
+        else {
+            return Ok::<_, sea_orm::DbErr>(());
+        };
+        let mut mappings = if controller.mappings.is_null() {
+            serde_json::json!({})
+        } else {
+            controller.mappings.clone()
+        };
+        if let (Some(obj), Some(patch_obj)) = (mappings.as_object_mut(), patch.as_object()) {
+            for (key, value) in patch_obj {
+                obj.insert(key.clone(), value.clone());
+            }
+        }
+        let mut active: device_controller::ActiveModel = controller.into();
+        active.mappings = Set(mappings);
+        active.updated_at = Set(now);
+        active.update(&transaction).await?;
+        Ok(())
+    };
+    if let Err(error) = controller_update.await {
         tracing::error!(%error, "failed to update controller UART mapping");
         return error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -377,6 +500,7 @@ mod tests {
     }
 
     fn request() -> UartConfigurationRequest {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "request");
         UartConfigurationRequest {
             controller_id: "controller-1".into(),
             device_id: "device-1".into(),
@@ -388,6 +512,7 @@ mod tests {
 
     #[test]
     fn vid_pid_is_normalized_and_strictly_validated() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "vid_pid_is_normalized_and_strictly_validated");
         assert_eq!(
             normalized_vid_pid(" 0403:AbCd ").as_deref(),
             Some("0403:abcd")
@@ -398,6 +523,7 @@ mod tests {
 
     #[test]
     fn gen5_rejects_relay_fields_and_gen4_requires_confirmation() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::uart_handlers", "gen5_rejects_relay_fields_and_gen4_requires_confirmation");
         assert_eq!(
             validate_context(&context(5), &request()).unwrap(),
             (5, None)

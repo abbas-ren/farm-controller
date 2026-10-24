@@ -18,6 +18,7 @@ use axum::{
 };
 
 pub fn router() -> Router<Arc<AppState>> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::mod", "router");
     Router::new()
         .route("/ws", get(upgrade))
         .route("/api/v1/device/ws/send/message", post(send_user_message))

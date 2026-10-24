@@ -33,6 +33,7 @@ impl HeartbeatRepository for RegistrationRepository {
             alerts: Vec::new(),
             post_update_events: Vec::new(),
             deferred_cancellations: Vec::new(),
+            deferred_test_logs: Vec::new(),
         }))
     }
 }

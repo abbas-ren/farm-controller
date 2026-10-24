@@ -40,6 +40,7 @@ pub async fn qmetry_plan_cases(
     headers: HeaderMap,
     Path(plan_id): Path<u64>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "qmetry_plan_cases");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -73,6 +74,7 @@ pub async fn qmetry_suite_cases(
     headers: HeaderMap,
     Path((plan_id, suite_id)): Path<(u64, u64)>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "qmetry_suite_cases");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -106,6 +108,7 @@ pub async fn cases(
     headers: HeaderMap,
     Query(query): Query<TestCaseQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "cases");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -150,6 +153,7 @@ pub async fn suites(
     headers: HeaderMap,
     Query(query): Query<TestSuiteQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "suites");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -183,6 +187,7 @@ pub async fn plans(
     headers: HeaderMap,
     Query(query): Query<TestPlanQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_catalog_handlers", "plans");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

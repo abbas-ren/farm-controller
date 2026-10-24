@@ -4,21 +4,46 @@ use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{devices::EDGE_CONTROLLER_PORT, state::AppState};
+use crate::{
+    devices::EDGE_CONTROLLER_PORT,
+    persistence::entity::{device_controller, gen5_mapping_queue},
+    state::AppState,
+};
+
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, ExprTrait, QueryFilter, QueryOrder,
+    QuerySelect, Statement, TransactionTrait,
+    sea_query::{Expr, LockBehavior, LockType},
+};
 
 const MAX_INITIAL_ATTEMPTS: i32 = 5;
 const POLL_RETRY_SECONDS: i64 = 60;
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug)]
 struct MappingJob {
     id: Uuid,
     mac_address: String,
-    status: String,
+    status: gen5_mapping_queue::QueueJobStatus,
     retry_count: i32,
     failure_dc_ip: Option<String>,
     baseline_mapping_count: Option<i32>,
     retry_schedule_index: Option<i32>,
     created_at: DateTime<Utc>,
+}
+
+impl From<gen5_mapping_queue::Model> for MappingJob {
+    fn from(model: gen5_mapping_queue::Model) -> Self {
+        Self {
+            id: model.id,
+            mac_address: model.mac_address,
+            status: model.status,
+            retry_count: model.retry_count,
+            failure_dc_ip: model.failure_dc_ip,
+            baseline_mapping_count: model.baseline_mapping_count,
+            retry_schedule_index: model.retry_schedule_index,
+            created_at: model.created_at,
+        }
+    }
 }
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
@@ -45,7 +70,7 @@ async fn run_cycle(state: &AppState) {
                 break;
             }
         };
-        let result = if job.status == "queued" {
+        let result = if job.status == gen5_mapping_queue::QueueJobStatus::Queued {
             process_queued(state, &job).await
         } else {
             process_failure_poll(state, &job).await
@@ -62,51 +87,85 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
-async fn claim_next(state: &AppState) -> Result<Option<MappingJob>, sqlx::Error> {
+async fn claim_next(state: &AppState) -> Result<Option<MappingJob>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
-    let mut transaction = database.pool().begin().await?;
-    let job = sqlx::query_as::<_, MappingJob>(
-        r#"SELECT id, "macAddress" AS mac_address, status::text AS status,
-                  "retryCount" AS retry_count, "failureDcIp" AS failure_dc_ip,
-                  "baselineMappingCount" AS baseline_mapping_count,
-                  "retryScheduleIndex" AS retry_schedule_index,
-                  "createdAt" AS created_at
-           FROM gen5_mapping_queue
-           WHERE status::text = 'queued'
-              OR (status::text = 'failure_polling' AND "nextRetryAt" <= now())
-           ORDER BY CASE WHEN status::text = 'queued' THEN 0 ELSE 1 END,
-                    COALESCE("nextRetryAt", "createdAt") ASC
-           LIMIT 1 FOR UPDATE SKIP LOCKED"#,
-    )
-    .fetch_optional(&mut *transaction)
-    .await?;
-    let Some(job) = job else {
+    let transaction = database.orm().begin().await?;
+    let now = Utc::now();
+    let model = gen5_mapping_queue::Entity::find()
+        .filter(
+            sea_orm::Condition::any()
+                .add(
+                    gen5_mapping_queue::Column::Status
+                        .eq(gen5_mapping_queue::QueueJobStatus::Queued),
+                )
+                .add(
+                    sea_orm::Condition::all()
+                        .add(
+                            gen5_mapping_queue::Column::Status
+                                .eq(gen5_mapping_queue::QueueJobStatus::FailurePolling),
+                        )
+                        .add(gen5_mapping_queue::Column::NextRetryAt.lte(now)),
+                ),
+        )
+        .order_by_asc::<Expr>(
+            Expr::case(
+                Expr::col(gen5_mapping_queue::Column::Status)
+                    .eq(gen5_mapping_queue::QueueJobStatus::Queued),
+                0,
+            )
+            .finally(1)
+            .into(),
+        )
+        .order_by_asc::<Expr>(
+            Expr::cust("COALESCE(\"nextRetryAt\", \"createdAt\")").into(),
+        )
+        .limit(1)
+        .lock_with_behavior(LockType::Update, LockBehavior::SkipLocked)
+        .one(&transaction)
+        .await?;
+    let Some(model) = model else {
         transaction.rollback().await?;
         return Ok(None);
     };
-    if job.status == "queued" {
-        sqlx::query(
-            r#"UPDATE gen5_mapping_queue
-               SET status = 'running', "lastError" = NULL, "updatedAt" = now()
-               WHERE id = $1 AND status::text = 'queued'"#,
-        )
-        .bind(job.id)
-        .execute(&mut *transaction)
-        .await?;
+    let job = MappingJob::from(model);
+    if job.status == gen5_mapping_queue::QueueJobStatus::Queued {
+        gen5_mapping_queue::Entity::update_many()
+            .col_expr(
+                gen5_mapping_queue::Column::Status,
+                Expr::value(gen5_mapping_queue::QueueJobStatus::Running),
+            )
+            .col_expr(
+                gen5_mapping_queue::Column::LastError,
+                Expr::value(Option::<String>::None),
+            )
+            .col_expr(gen5_mapping_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(gen5_mapping_queue::Column::Id.eq(job.id))
+            .filter(
+                gen5_mapping_queue::Column::Status.eq(gen5_mapping_queue::QueueJobStatus::Queued),
+            )
+            .exec(&transaction)
+            .await?;
     } else {
         let lease_seconds =
             i64::try_from(state.config.workers.gen5_mapping_request_timeout_seconds)
                 .unwrap_or(i64::MAX)
                 + 5;
-        sqlx::query(
-            r#"UPDATE gen5_mapping_queue
-               SET "nextRetryAt" = now() + ($2 * interval '1 second'), "updatedAt" = now()
-               WHERE id = $1 AND status::text = 'failure_polling'"#,
-        )
-        .bind(job.id)
-        .bind(lease_seconds)
-        .execute(&mut *transaction)
-        .await?;
+        gen5_mapping_queue::Entity::update_many()
+            .col_expr(
+                gen5_mapping_queue::Column::NextRetryAt,
+                Expr::cust_with_values(
+                    "now() + ($1 * interval '1 second')",
+                    [lease_seconds],
+                ),
+            )
+            .col_expr(gen5_mapping_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(gen5_mapping_queue::Column::Id.eq(job.id))
+            .filter(
+                gen5_mapping_queue::Column::Status
+                    .eq(gen5_mapping_queue::QueueJobStatus::FailurePolling),
+            )
+            .exec(&transaction)
+            .await?;
     }
     transaction.commit().await?;
     Ok(Some(job))
@@ -118,15 +177,21 @@ async fn process_queued(state: &AppState, job: &MappingJob) -> Result<u32, Strin
         return Ok(1);
     }
     let database = state.database.as_ref().expect("worker requires database");
-    let controllers = sqlx::query_scalar::<_, String>(
-        r#"SELECT "ipAddress" FROM device_controllers
-           WHERE status::text = 'approved' AND state::text = 'active'
-             AND "deletedAt" IS NULL
-           ORDER BY "updatedAt" DESC"#,
-    )
-    .fetch_all(database.pool())
-    .await
-    .map_err(|error| error.to_string())?;
+    let controllers = device_controller::Entity::find()
+        .filter(
+            device_controller::Column::Status.eq(device_controller::DeviceControllerStatus::Approved),
+        )
+        .filter(
+            device_controller::Column::State.eq(device_controller::DeviceControllerState::Active),
+        )
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .order_by_desc(device_controller::Column::UpdatedAt)
+        .select_only()
+        .column(device_controller::Column::IpAddress)
+        .into_tuple::<String>()
+        .all(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
     if controllers.is_empty() {
         update_initial_failure(
             state,
@@ -142,15 +207,22 @@ async fn process_queued(state: &AppState, job: &MappingJob) -> Result<u32, Strin
             tracing::warn!(%error, controller_ip = controller, job_id = %job.id, "Gen5 mapping trigger failed");
         }
     }
-    sqlx::query(
-        r#"UPDATE gen5_mapping_queue
-           SET status = 'waiting', "lastError" = NULL, "updatedAt" = now()
-           WHERE id = $1 AND status::text = 'running'"#,
-    )
-    .bind(job.id)
-    .execute(database.pool())
-    .await
-    .map_err(|error| error.to_string())?;
+    let now = Utc::now();
+    gen5_mapping_queue::Entity::update_many()
+        .col_expr(
+            gen5_mapping_queue::Column::Status,
+            Expr::value(gen5_mapping_queue::QueueJobStatus::Waiting),
+        )
+        .col_expr(
+            gen5_mapping_queue::Column::LastError,
+            Expr::value(Option::<String>::None),
+        )
+        .col_expr(gen5_mapping_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(gen5_mapping_queue::Column::Id.eq(job.id))
+        .filter(gen5_mapping_queue::Column::Status.eq(gen5_mapping_queue::QueueJobStatus::Running))
+        .exec(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(1)
 }
 
@@ -163,23 +235,24 @@ async fn update_initial_failure(
     let database = state.database.as_ref().expect("worker requires database");
     let attempts = job.retry_count.saturating_add(1);
     let status = if force_cancel || attempts >= MAX_INITIAL_ATTEMPTS {
-        "cancelled"
+        gen5_mapping_queue::QueueJobStatus::Cancelled
     } else {
-        "queued"
+        gen5_mapping_queue::QueueJobStatus::Queued
     };
-    sqlx::query(
-        r#"UPDATE gen5_mapping_queue
-           SET status = $2::"enum_gen5_mapping_queue_status", "retryCount" = $3,
-               "lastError" = $4, "updatedAt" = now()
-           WHERE id = $1 AND status::text = 'running'"#,
-    )
-    .bind(job.id)
-    .bind(status)
-    .bind(attempts)
-    .bind(message)
-    .execute(database.pool())
-    .await
-    .map_err(|error| error.to_string())?;
+    let now = Utc::now();
+    gen5_mapping_queue::Entity::update_many()
+        .col_expr(gen5_mapping_queue::Column::Status, Expr::value(status))
+        .col_expr(gen5_mapping_queue::Column::RetryCount, Expr::value(attempts))
+        .col_expr(
+            gen5_mapping_queue::Column::LastError,
+            Expr::value(Some(message.to_owned())),
+        )
+        .col_expr(gen5_mapping_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(gen5_mapping_queue::Column::Id.eq(job.id))
+        .filter(gen5_mapping_queue::Column::Status.eq(gen5_mapping_queue::QueueJobStatus::Running))
+        .exec(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -208,18 +281,37 @@ async fn process_failure_poll(state: &AppState, job: &MappingJob) -> Result<u32,
             tracing::warn!(%error, %controller_ip, job_id = %job.id, "Gen5 mapping retrigger failed");
         }
         let database = state.database.as_ref().expect("worker requires database");
-        sqlx::query(
-            r#"UPDATE gen5_mapping_queue
-               SET status = 'waiting', "lastError" = NULL,
-                   "baselineMappingCount" = $2, "nextRetryAt" = NULL,
-                   "retryScheduleIndex" = NULL, "updatedAt" = now()
-               WHERE id = $1 AND status::text = 'failure_polling'"#,
-        )
-        .bind(job.id)
-        .bind(count)
-        .execute(database.pool())
-        .await
-        .map_err(|error| error.to_string())?;
+        let now = Utc::now();
+        gen5_mapping_queue::Entity::update_many()
+            .col_expr(
+                gen5_mapping_queue::Column::Status,
+                Expr::value(gen5_mapping_queue::QueueJobStatus::Waiting),
+            )
+            .col_expr(
+                gen5_mapping_queue::Column::LastError,
+                Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                gen5_mapping_queue::Column::BaselineMappingCount,
+                Expr::value(Some(count)),
+            )
+            .col_expr(
+                gen5_mapping_queue::Column::NextRetryAt,
+                Expr::value(Option::<DateTime<Utc>>::None),
+            )
+            .col_expr(
+                gen5_mapping_queue::Column::RetryScheduleIndex,
+                Expr::value(Option::<i32>::None),
+            )
+            .col_expr(gen5_mapping_queue::Column::UpdatedAt, Expr::value(now))
+            .filter(gen5_mapping_queue::Column::Id.eq(job.id))
+            .filter(
+                gen5_mapping_queue::Column::Status
+                    .eq(gen5_mapping_queue::QueueJobStatus::FailurePolling),
+            )
+            .exec(database.orm())
+            .await
+            .map_err(|error| error.to_string())?;
     } else {
         schedule_poll(state, job, None).await?;
     }
@@ -239,20 +331,35 @@ async fn schedule_poll(
         return cancel_and_delete_device(state, job, error.unwrap_or("Mapping retries exhausted"))
             .await;
     }
-    sqlx::query(
-        r#"UPDATE gen5_mapping_queue
-           SET "retryScheduleIndex" = $2,
-               "nextRetryAt" = now() + ($3 * interval '1 second'),
-               "lastError" = COALESCE($4, "lastError"), "updatedAt" = now()
-           WHERE id = $1 AND status::text = 'failure_polling'"#,
-    )
-    .bind(job.id)
-    .bind(next_index)
-    .bind(POLL_RETRY_SECONDS)
-    .bind(error)
-    .execute(database.pool())
-    .await
-    .map_err(|error| error.to_string())?;
+    let now = Utc::now();
+    let mut update = gen5_mapping_queue::Entity::update_many()
+        .col_expr(
+            gen5_mapping_queue::Column::RetryScheduleIndex,
+            Expr::value(Some(next_index)),
+        )
+        .col_expr(
+            gen5_mapping_queue::Column::NextRetryAt,
+            Expr::cust_with_values(
+                "now() + ($1 * interval '1 second')",
+                [POLL_RETRY_SECONDS],
+            ),
+        )
+        .col_expr(gen5_mapping_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(gen5_mapping_queue::Column::Id.eq(job.id))
+        .filter(
+            gen5_mapping_queue::Column::Status
+                .eq(gen5_mapping_queue::QueueJobStatus::FailurePolling),
+        );
+    if let Some(error) = error {
+        update = update.col_expr(
+            gen5_mapping_queue::Column::LastError,
+            Expr::value(Some(error.to_owned())),
+        );
+    }
+    update
+        .exec(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -262,33 +369,47 @@ async fn cancel_and_delete_device(
     message: &str,
 ) -> Result<(), String> {
     let database = state.database.as_ref().expect("worker requires database");
-    let mut transaction = database
-        .pool()
+    let transaction = database
+        .orm()
         .begin()
         .await
         .map_err(|error| error.to_string())?;
-    let updated = sqlx::query(
-        r#"UPDATE gen5_mapping_queue
-           SET status = 'cancelled', "lastError" = $2, "nextRetryAt" = NULL,
-               "updatedAt" = now()
-           WHERE id = $1 AND status::text = 'failure_polling'"#,
-    )
-    .bind(job.id)
-    .bind(message)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?
-    .rows_affected();
-    if updated > 0 {
-        sqlx::query(
-            r#"DELETE FROM devices
-               WHERE regexp_replace(lower("macAddress"), '[:-]', '', 'g') =
-                     regexp_replace(lower($1), '[:-]', '', 'g')"#,
+    let now = Utc::now();
+    let updated = gen5_mapping_queue::Entity::update_many()
+        .col_expr(
+            gen5_mapping_queue::Column::Status,
+            Expr::value(gen5_mapping_queue::QueueJobStatus::Cancelled),
         )
-        .bind(&job.mac_address)
-        .execute(&mut *transaction)
+        .col_expr(
+            gen5_mapping_queue::Column::LastError,
+            Expr::value(Some(message.to_owned())),
+        )
+        .col_expr(
+            gen5_mapping_queue::Column::NextRetryAt,
+            Expr::value(Option::<DateTime<Utc>>::None),
+        )
+        .col_expr(gen5_mapping_queue::Column::UpdatedAt, Expr::value(now))
+        .filter(gen5_mapping_queue::Column::Id.eq(job.id))
+        .filter(
+            gen5_mapping_queue::Column::Status
+                .eq(gen5_mapping_queue::QueueJobStatus::FailurePolling),
+        )
+        .exec(&transaction)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
+        .rows_affected;
+    if updated > 0 {
+        // MAC normalization match — keep as raw SQL.
+        transaction
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"DELETE FROM devices
+                   WHERE regexp_replace(lower("macAddress"), '[:-]', '', 'g') =
+                         regexp_replace(lower($1), '[:-]', '', 'g')"#,
+                [job.mac_address.clone().into()],
+            ))
+            .await
+            .map_err(|error| error.to_string())?;
     }
     transaction
         .commit()

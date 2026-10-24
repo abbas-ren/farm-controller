@@ -19,12 +19,14 @@ pub struct AuthorizationError {
 
 impl IntoResponse for AuthorizationError {
     fn into_response(self) -> Response {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::errors", "into_response");
         legacy_error(self.status, &self.message)
     }
 }
 
 impl IdentityError {
     pub(super) fn upstream(status: StatusCode, message: impl Into<String>) -> Self {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::errors", "upstream");
         Self {
             status,
             message: message.into(),
@@ -33,6 +35,7 @@ impl IdentityError {
 }
 
 pub(super) fn legacy_error(status: StatusCode, message: &str) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::errors", "legacy_error");
     (
         status,
         Json(serde_json::json!({ "success": false, "message": message })),

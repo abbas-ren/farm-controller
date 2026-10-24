@@ -16,6 +16,7 @@ pub async fn build_filters(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::queries", "build_filters");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -39,6 +40,7 @@ pub async fn build_by_id(
     headers: HeaderMap,
     Path(build_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::queries", "build_by_id");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -63,6 +65,7 @@ pub async fn list_builds(
     headers: HeaderMap,
     Query(query): Query<BuildListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::queries", "list_builds");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

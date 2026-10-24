@@ -11,6 +11,7 @@ pub(super) struct Benchmark {
 }
 
 pub(super) fn canonical_category(value: &str) -> Option<&'static str> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "canonical_category");
     match value.trim().to_ascii_lowercase().as_str() {
         "network" => Some("Network"),
         "storage" | "file system" | "filesystem" | "ufs" | "emmc" => Some("Storage"),
@@ -23,6 +24,7 @@ pub(super) fn canonical_category(value: &str) -> Option<&'static str> {
 }
 
 pub(super) fn identify_benchmark(command: &str) -> Option<Benchmark> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "identify_benchmark");
     let command = command.to_ascii_lowercase();
     [
         Benchmark {
@@ -81,6 +83,7 @@ pub(super) fn identify_benchmark(command: &str) -> Option<Benchmark> {
 }
 
 pub(super) fn derive_label(command: &str, benchmark: &str, raw_category: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "derive_label");
     let lower = command.to_ascii_lowercase();
     match benchmark {
         "sysbench" => ["cpu", "memory", "fileio", "mutex", "threads", "oltp"]
@@ -158,6 +161,7 @@ pub(super) fn derive_label(command: &str, benchmark: &str, raw_category: &str) -
 }
 
 pub(super) fn numbered_label(base: &str, sequence: usize, benchmark: Option<&str>) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "numbered_label");
     match benchmark {
         Some("stress-ng") => format!("{base} run{sequence}"),
         Some("sysbench") => format!("{base} v{sequence}"),
@@ -166,6 +170,7 @@ pub(super) fn numbered_label(base: &str, sequence: usize, benchmark: Option<&str
 }
 
 pub(super) fn metric_value(content: &str, benchmark: Option<Benchmark>) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "metric_value");
     match benchmark.map(|value| value.name) {
         Some("iperf3" | "iperf") => extract_iperf_mbps(content),
         Some("dhrystone") => extract_dhrystone(content),
@@ -176,6 +181,7 @@ pub(super) fn metric_value(content: &str, benchmark: Option<Benchmark>) -> f64 {
 }
 
 fn extract_iperf_mbps(content: &str) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_iperf_mbps");
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
         && let Some(bits) = value
             .pointer("/end/sum_received/bits_per_second")
@@ -200,6 +206,7 @@ fn extract_iperf_mbps(content: &str) -> f64 {
 }
 
 fn extract_dhrystone(content: &str) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_dhrystone");
     let row =
         Regex::new(r"(?m)^\s*\d+\s*\|\s*[0-9]+(?:\.[0-9]+)?\s*\|\s*([0-9]+(?:\.[0-9]+)?)\s*$")
             .expect("static regex");
@@ -219,6 +226,7 @@ fn extract_dhrystone(content: &str) -> f64 {
 }
 
 fn extract_mbw(content: &str) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_mbw");
     Regex::new(r"(?m)^AVG\s+Method:\s*MEMCPY.*?Copy:\s*([0-9]+(?:\.[0-9]+)?)\s*MiB/s")
         .expect("static regex")
         .captures(content)
@@ -228,6 +236,7 @@ fn extract_mbw(content: &str) -> f64 {
 }
 
 fn extract_glmark2(content: &str) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "extract_glmark2");
     if let Some(score) = Regex::new(r"(?i)\bglmark2\s+Score:\s*([0-9]+(?:\.[0-9]+)?)\b")
         .expect("static regex")
         .captures(content)
@@ -245,6 +254,7 @@ fn extract_glmark2(content: &str) -> f64 {
 }
 
 fn average(values: impl Iterator<Item = f64>) -> f64 {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::parsing", "average");
     let values = values.collect::<Vec<_>>();
     if values.is_empty() {
         0.0

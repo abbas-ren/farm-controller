@@ -18,6 +18,7 @@ impl ReportService {
         &self,
         request: ConfluenceUploadRequest,
     ) -> Result<ConfluenceUploadResponse, ConfluenceError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "upload_confluence");
         let report_request = ReportRequest {
             test_id: request.test_id.clone(),
             build_version: request.build_version.clone(),
@@ -103,6 +104,7 @@ impl ReportService {
         settings: &ConfluenceSettings,
         title: &str,
     ) -> Result<Option<ConfluencePage>, ConfluenceError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "lookup_page");
         let response = self
             .client
             .get(settings.endpoint("rest/api/content")?)
@@ -127,6 +129,7 @@ impl ReportService {
         parent_id: &str,
         body: &str,
     ) -> Result<String, ConfluenceError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "create_page");
         let response = self
             .client
             .post(settings.endpoint("rest/api/content")?)
@@ -152,6 +155,7 @@ impl ReportService {
         body: &str,
         current_version: u64,
     ) -> Result<String, ConfluenceError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "update_page");
         let response = self
             .client
             .put(settings.endpoint(&format!("rest/api/content/{page_id}"))?)
@@ -174,6 +178,7 @@ impl ReportService {
         page_id: &str,
         root: &Path,
     ) -> Result<(Vec<String>, Vec<String>), ConfluenceError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "upload_images");
         let directory = root.join("perf_compare");
         let mut names = vec!["radar_chart.png".to_owned()];
         names.extend(
@@ -237,6 +242,7 @@ impl ConfluenceSettings {
         config: &ReportsConfig,
         build_version: &str,
     ) -> Result<Self, ConfluenceError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "from_config");
         let required = [
             ("confluence_url", config.confluence_url.trim()),
             ("confluence_pat", config.confluence_pat.trim()),
@@ -289,6 +295,7 @@ impl ConfluenceSettings {
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, ConfluenceError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "endpoint");
         self.api_base
             .join(path)
             .map_err(|error| ConfluenceError::Configuration(error.to_string()))
@@ -317,12 +324,14 @@ struct ConfluencePageId {
 }
 
 fn upstream_transport(error: reqwest::Error) -> ConfluenceError {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "upstream_transport");
     ConfluenceError::Upstream(error.to_string())
 }
 
 async fn upstream_response(
     response: reqwest::Response,
 ) -> Result<reqwest::Response, ConfluenceError> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "upstream_response");
     if response.status().is_success() {
         return Ok(response);
     }
@@ -335,6 +344,7 @@ async fn upstream_response(
 }
 
 pub(crate) fn confluence_body(document: &str) -> Result<String, ConfluenceError> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::confluence", "confluence_body");
     let body = Regex::new(r"(?is)<body[^>]*>(.*)</body>")
         .expect("static regex is valid")
         .captures(document)

@@ -1,4 +1,5 @@
 pub mod entity;
+pub mod orm_util;
 pub mod projection;
 #[cfg(test)]
 pub mod tests;
@@ -8,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder};
 use serde::Deserialize;
 use sqlx::{
     PgPool,
@@ -15,6 +17,8 @@ use sqlx::{
 };
 
 use crate::{config::DatabaseConfig, error::AppError, observability::Metrics};
+
+use self::entity::retention_policy;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
@@ -66,11 +70,16 @@ impl Database {
         Ok(Self { orm, pool, metrics })
     }
 
-    pub async fn ping(&self) -> Result<(), sqlx::Error> {
+    pub async fn ping(&self) -> Result<(), sea_orm::DbErr> {
+        #[derive(Debug, FromQueryResult)]
+        struct PingRow {
+            #[allow(dead_code)]
+            n: i32,
+        }
         let started = Instant::now();
-        let result = sqlx::query_scalar::<_, i32>("SELECT 1")
-            .fetch_one(&self.pool)
+        let result = orm_util::query_one::<_, PingRow>(self.orm(), "SELECT 1 AS n", vec![])
             .await
+            .and_then(|row| row.ok_or(sea_orm::DbErr::RecordNotFound("ping".into())))
             .map(|_| ());
         self.metrics.record_database_operation(
             "readiness",
@@ -88,18 +97,23 @@ impl Database {
         &self.orm
     }
 
-    pub async fn enabled_retention_policies(&self) -> Result<Vec<RetentionPolicy>, sqlx::Error> {
-        sqlx::query_as::<_, RetentionPolicy>(
-            r#"
-            SELECT table_name, timestamp_column, retention_days, batch_size,
-                   archive_before_delete
-            FROM farmcontroller.retention_policies
-            WHERE enabled = true
-            ORDER BY table_name
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
+    pub async fn enabled_retention_policies(
+        &self,
+    ) -> Result<Vec<RetentionPolicy>, sea_orm::DbErr> {
+        Ok(retention_policy::Entity::find()
+            .filter(retention_policy::Column::Enabled.eq(true))
+            .order_by_asc(retention_policy::Column::TableName)
+            .all(self.orm())
+            .await?
+            .into_iter()
+            .map(|row| RetentionPolicy {
+                table_name: row.table_name,
+                timestamp_column: row.timestamp_column,
+                retention_days: row.retention_days,
+                batch_size: row.batch_size,
+                archive_before_delete: row.archive_before_delete,
+            })
+            .collect())
     }
 
     pub async fn clean_retention_batch(
@@ -111,21 +125,23 @@ impl Database {
         }
         let target = RetentionTarget::from_policy(policy)?;
         let started = Instant::now();
-        let result = sqlx::query(target.delete_sql())
-            .bind(policy.retention_days)
-            .bind(policy.batch_size)
-            .execute(&self.pool)
-            .await;
+        // Dynamic DELETE SQL is allowlisted via RetentionTarget — run through SeaORM Statement.
+        let result = orm_util::execute(
+            self.orm(),
+            target.delete_sql(),
+            vec![policy.retention_days.into(), policy.batch_size.into()],
+        )
+        .await;
         self.metrics.record_database_operation(
             "retention_cleanup",
             if result.is_ok() { "success" } else { "failure" },
             started.elapsed(),
         );
-        Ok(result?.rows_affected())
+        Ok(result?)
     }
 }
 
-#[derive(Debug, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Deserialize)]
 pub struct RetentionPolicy {
     pub table_name: String,
     pub timestamp_column: String,
@@ -141,7 +157,7 @@ pub enum RetentionError {
     #[error("retention target requires archival before deletion: {0}")]
     ArchiveRequired(String),
     #[error(transparent)]
-    Database(#[from] sqlx::Error),
+    Database(#[from] sea_orm::DbErr),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

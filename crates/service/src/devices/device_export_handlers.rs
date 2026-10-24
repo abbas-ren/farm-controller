@@ -32,6 +32,7 @@ pub async fn export_devices(
     headers: HeaderMap,
     Query(query): Query<DeviceCsvQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_export_handlers", "export_devices");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

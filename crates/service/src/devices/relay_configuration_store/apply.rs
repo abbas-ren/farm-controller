@@ -1,8 +1,15 @@
 use std::collections::HashSet;
 
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
+    EntityTrait, FromQueryResult, QueryFilter, Set, Statement, TransactionTrait, sea_query::Expr,
+};
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
+
+use crate::persistence::entity::{
+    device, device_controller, pending_relay_config, relay, relay_channel,
+};
 
 use super::super::{
     RelayChannelConfiguration,
@@ -11,7 +18,7 @@ use super::super::{
 };
 use super::mappings::{clear_gpio_mapping, upsert_gpio_mapping};
 
-#[derive(sqlx::FromRow)]
+#[derive(Debug, FromQueryResult)]
 struct ChannelContext {
     controller_address: String,
     mappings: Value,
@@ -21,24 +28,31 @@ struct ChannelContext {
     channel_state: String,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(Debug, FromQueryResult)]
 struct DeviceContext {
     device_id: String,
     mac_address: Option<String>,
     device_generation: Option<String>,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(Debug, FromQueryResult)]
 struct ExistingMapping {
     channel_id: Uuid,
     relay_serial: String,
     channel_number: i32,
 }
 
+#[derive(Debug, FromQueryResult)]
+struct JsonRow {
+    value: Value,
+}
+
 pub(crate) async fn configure(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     configurations: &[RelayChannelConfiguration],
 ) -> Result<RelayConfigurationResult, DeviceRepositoryError> {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::relay_configuration_store::apply", "configure");
     let cleared_channels: HashSet<Uuid> = configurations
         .iter()
         .filter(|configuration| normalized_device_id(configuration).is_none())
@@ -48,18 +62,13 @@ pub(crate) async fn configure(
     // Clear channels first so a device can be reassigned within this same transaction.
     ordered.sort_by_key(|configuration| normalized_device_id(configuration).is_some());
 
-    let mut transaction = pool.begin().await?;
+    let transaction = orm.begin().await?;
     let mut channels = Vec::with_capacity(ordered.len());
     let mut actions = Vec::new();
     for configuration in ordered {
         channels.push(
-            configure_channel(
-                &mut transaction,
-                configuration,
-                &cleared_channels,
-                &mut actions,
-            )
-            .await?,
+            configure_channel(&transaction, configuration, &cleared_channels, &mut actions)
+                .await?,
         );
     }
     transaction.commit().await?;
@@ -67,11 +76,15 @@ pub(crate) async fn configure(
 }
 
 async fn configure_channel(
-    transaction: &mut Transaction<'_, Postgres>,
+    transaction: &impl ConnectionTrait,
     configuration: &RelayChannelConfiguration,
     cleared_channels: &HashSet<Uuid>,
     actions: &mut Vec<RelayControllerAction>,
 ) -> Result<Value, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::relay_configuration_store::apply",
+        "configure_channel",
+    );
     tracing::info!("Configuring relay channel: {:?}", configuration);
     let mut context = load_channel(transaction, configuration).await?;
     if !(0..=7).contains(&context.channel_number) {
@@ -80,43 +93,23 @@ async fn configure_channel(
         ));
     }
     let Some(device_id) = normalized_device_id(configuration) else {
-        // if let Some(previous_device_id) = context.current_device_id.as_deref() {
-        //     if let Some(previous_device) = load_device(transaction, previous_device_id).await? {
-        //         let device_mac = device_mac(&previous_device);
-        //         actions.push(RelayControllerAction::Remove {
-        //             controller_address: context.controller_address.clone(),
-        //             device_mac: device_mac.clone(),
-        //             relay_serial: context.relay_serial.clone(),
-        //             channel_number: context.channel_number,
-        //         });
-        //         clear_gpio_mapping(&mut context.mappings, &device_mac);
-        //         save_mappings(transaction, configuration.relay_id, &context.mappings).await?;
-        //     }
-        //     sqlx::query(
-        //         r#"UPDATE relay_channels SET "deviceId" = NULL, "updatedAt" = now()
-        //            WHERE id = $1 AND "deletedAt" IS NULL"#,
-        //     )
-        //     .bind(configuration.channel_id)
-        //     .execute(&mut **transaction)
-        //     .await?;
-        // }
         return load_channel_json(transaction, configuration.channel_id).await;
     };
 
     let device = load_device(transaction, device_id)
         .await?
         .ok_or_else(|| DeviceRepositoryError::NotFound(format!("Device {device_id} not found")))?;
-    if let Some(existing) = sqlx::query_as::<_, ExistingMapping>(
+    if let Some(existing) = ExistingMapping::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT rc.id AS channel_id, r."serialNumber" AS relay_serial,
              rc."channelNumber" AS channel_number
            FROM relay_channels rc
            JOIN relays r ON r.id = rc."relayId" AND r."deletedAt" IS NULL
            WHERE rc."deviceId" = $1 AND rc.id <> $2 AND rc."deletedAt" IS NULL
            LIMIT 1 FOR UPDATE OF rc"#,
-    )
-    .bind(device_id)
-    .bind(configuration.channel_id)
-    .fetch_optional(&mut **transaction)
+        [device_id.into(), configuration.channel_id.into()],
+    ))
+    .one(transaction)
     .await?
         && !cleared_channels.contains(&existing.channel_id)
     {
@@ -153,14 +146,17 @@ async fn configure_channel(
         clear_gpio_mapping(&mut context.mappings, &previous_mac);
     }
 
-    sqlx::query(
-        r#"UPDATE relay_channels SET "deviceId" = $2, "updatedAt" = now()
-           WHERE id = $1 AND "deletedAt" IS NULL"#,
-    )
-    .bind(configuration.channel_id)
-    .bind(device_id)
-    .execute(&mut **transaction)
-    .await?;
+    let now = chrono::Utc::now();
+    relay_channel::Entity::update_many()
+        .col_expr(
+            relay_channel::Column::DeviceId,
+            Expr::value(Some(device_id.to_owned())),
+        )
+        .col_expr(relay_channel::Column::UpdatedAt, Expr::value(now))
+        .filter(relay_channel::Column::Id.eq(configuration.channel_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .exec(transaction)
+        .await?;
     upsert_gpio_mapping(
         &mut context.mappings,
         &assigned_device_mac,
@@ -169,28 +165,31 @@ async fn configure_channel(
         configuration.relay_default_level,
     );
     save_mappings(transaction, configuration.relay_id, &context.mappings).await?;
-    sqlx::query(
-        r#"UPDATE devices SET power = $2::"enum_devices_power", "updatedAt" = now()
-           WHERE "deviceId" = $1 AND "deletedAt" IS NULL"#,
-    )
-    .bind(device_id)
-    .bind(&context.channel_state)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        r#"INSERT INTO pending_relay_configs (
-             id, "relayChannelId", "relaySerial", "channelNo", "deviceMac",
-             "controllerAddress", "deviceGen", status, "createdAt", "updatedAt"
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', now(), now())"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(configuration.channel_id)
-    .bind(&context.relay_serial)
-    .bind(context.channel_number)
-    .bind(assigned_device_mac.to_lowercase())
-    .bind(&context.controller_address)
-    .bind(device.device_generation.as_deref())
-    .execute(&mut **transaction)
+
+    let power = match context.channel_state.as_str() {
+        "on" => device::DevicePower::On,
+        _ => device::DevicePower::Off,
+    };
+    device::Entity::update_many()
+        .col_expr(device::Column::Power, Expr::value(Some(power)))
+        .col_expr(device::Column::UpdatedAt, Expr::value(now))
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .exec(transaction)
+        .await?;
+    pending_relay_config::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        relay_channel_id: Set(configuration.channel_id),
+        relay_serial: Set(context.relay_serial.clone()),
+        channel_no: Set(context.channel_number),
+        device_mac: Set(assigned_device_mac.to_lowercase()),
+        controller_address: Set(context.controller_address.clone()),
+        device_gen: Set(device.device_generation.clone()),
+        status: Set(pending_relay_config::PendingRelayConfigStatus::Pending),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(transaction)
     .await?;
     actions.push(RelayControllerAction::Configure {
         controller_address: context.controller_address,
@@ -203,10 +202,13 @@ async fn configure_channel(
 }
 
 async fn load_channel(
-    transaction: &mut Transaction<'_, Postgres>,
+    transaction: &impl ConnectionTrait,
     configuration: &RelayChannelConfiguration,
 ) -> Result<ChannelContext, DeviceRepositoryError> {
-    sqlx::query_as::<_, ChannelContext>(
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::relay_configuration_store::apply", "load_channel");
+    ChannelContext::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT dc."ipAddress" AS controller_address,
              COALESCE(dc.mappings, '{}'::jsonb) AS mappings,
              r."serialNumber" AS relay_serial, rc."deviceId" AS current_device_id,
@@ -218,10 +220,9 @@ async fn load_channel(
              ON dc."deviceControllerId" = r."deviceControllerId" AND dc."deletedAt" IS NULL
            WHERE r.id = $1 AND rc.id = $2 AND r."deletedAt" IS NULL
            FOR UPDATE OF rc, dc"#,
-    )
-    .bind(configuration.relay_id)
-    .bind(configuration.channel_id)
-    .fetch_optional(&mut **transaction)
+        [configuration.relay_id.into(), configuration.channel_id.into()],
+    ))
+    .one(transaction)
     .await?
     .ok_or_else(|| {
         DeviceRepositoryError::NotFound(format!(
@@ -232,49 +233,70 @@ async fn load_channel(
 }
 
 async fn load_device(
-    transaction: &mut Transaction<'_, Postgres>,
+    transaction: &impl ConnectionTrait,
     device_id: &str,
 ) -> Result<Option<DeviceContext>, DeviceRepositoryError> {
-    Ok(sqlx::query_as::<_, DeviceContext>(
-        r#"SELECT "deviceId" AS device_id, "macAddress" AS mac_address,
-             "deviceType" AS device_generation
-           FROM devices WHERE "deviceId" = $1 AND "deletedAt" IS NULL"#,
-    )
-    .bind(device_id)
-    .fetch_optional(&mut **transaction)
-    .await?)
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::relay_configuration_store::apply", "load_device");
+    Ok(device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .one(transaction)
+        .await?
+        .map(|row| DeviceContext {
+            device_id: row.device_id,
+            mac_address: row.mac_address,
+            device_generation: row.device_type,
+        }))
 }
 
 async fn save_mappings(
-    transaction: &mut Transaction<'_, Postgres>,
+    transaction: &impl ConnectionTrait,
     relay_id: Uuid,
     mappings: &Value,
 ) -> Result<(), DeviceRepositoryError> {
-    sqlx::query(
-        r#"UPDATE device_controllers SET mappings = $2, "updatedAt" = now()
-           WHERE "deviceControllerId" = (
-             SELECT "deviceControllerId" FROM relays WHERE id = $1
-           )"#,
-    )
-    .bind(relay_id)
-    .bind(sqlx::types::Json(mappings))
-    .execute(&mut **transaction)
-    .await?;
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::relay_configuration_store::apply", "save_mappings");
+    let Some(relay_row) = relay::Entity::find_by_id(relay_id).one(transaction).await? else {
+        return Ok(());
+    };
+    let now = chrono::Utc::now();
+    device_controller::Entity::update_many()
+        .col_expr(
+            device_controller::Column::Mappings,
+            Expr::value(mappings.clone()),
+        )
+        .col_expr(device_controller::Column::UpdatedAt, Expr::value(now))
+        .filter(device_controller::Column::DeviceControllerId.eq(relay_row.device_controller_id))
+        .exec(transaction)
+        .await?;
     Ok(())
 }
 
 async fn load_channel_json(
-    transaction: &mut Transaction<'_, Postgres>,
+    transaction: &impl ConnectionTrait,
     channel_id: Uuid,
 ) -> Result<Value, DeviceRepositoryError> {
-    sqlx::query_scalar(r#"SELECT to_jsonb(rc) FROM relay_channels rc WHERE rc.id = $1"#)
-        .bind(channel_id)
-        .fetch_one(&mut **transaction)
-        .await
-        .map_err(Into::into)
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::relay_configuration_store::apply",
+        "load_channel_json",
+    );
+    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"SELECT to_jsonb(rc) AS value FROM relay_channels rc WHERE rc.id = $1"#,
+        [channel_id.into()],
+    ))
+    .one(transaction)
+    .await?
+    .ok_or_else(|| DeviceRepositoryError::NotFound("Relay channel not found".to_owned()))?
+    .value)
 }
 
 fn normalized_device_id(configuration: &RelayChannelConfiguration) -> Option<&str> {
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::relay_configuration_store::apply",
+        "normalized_device_id",
+    );
     configuration
         .device_id
         .as_deref()
@@ -283,6 +305,8 @@ fn normalized_device_id(configuration: &RelayChannelConfiguration) -> Option<&st
 }
 
 fn device_mac(device: &DeviceContext) -> String {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::relay_configuration_store::apply", "device_mac");
     device
         .mac_address
         .clone()

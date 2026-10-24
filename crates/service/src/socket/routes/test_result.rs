@@ -9,6 +9,7 @@ pub(crate) async fn test_result_session(
     device_id: String,
     mut socket: WebSocket,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::test_result", "test_result_session");
     tracing::info!(%test_id, %device_id, "test result WebSocket connected");
     while let Some(message) = socket.recv().await {
         let case_id = match message {

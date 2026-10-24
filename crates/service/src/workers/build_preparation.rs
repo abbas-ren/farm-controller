@@ -2,9 +2,14 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{
+    persistence::entity::device_action_queue,
+    state::AppState,
+};
 
 use super::artifact_preparation::{artifact_paths, prepare_artifacts, safe_segment};
+
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 pub(crate) async fn prepare_uploaded_build(
     state: &AppState,
@@ -56,22 +61,35 @@ pub(super) async fn enqueue_official_build(
         .database
         .as_ref()
         .ok_or_else(|| "database is unavailable".to_owned())?;
-    sqlx::query(
-        r#"INSERT INTO device_action_queue
-              (id, "deviceType", "userId", type, status, mode, "releaseId", version,
-               "createdAt", "updatedAt")
-           SELECT $1, $2, $3, 'flash', 'queued', 'deviceType', $4, $5, now(), now()
-           WHERE NOT EXISTS (
-               SELECT 1 FROM device_action_queue
-               WHERE "releaseId" = $4 AND type::text = 'flash'
-                 AND status::text IN ('queued', 'running', 'completed'))"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(device_type)
-    .bind(user_id)
-    .bind(release_id)
-    .bind(version)
-    .execute(database.pool())
+    let existing = device_action_queue::Entity::find()
+        .filter(device_action_queue::Column::ReleaseId.eq(release_id))
+        .filter(device_action_queue::Column::Type.eq(device_action_queue::QueueJobType::Flash))
+        .filter(device_action_queue::Column::Status.is_in([
+            device_action_queue::QueueJobStatus::Queued,
+            device_action_queue::QueueJobStatus::Running,
+            device_action_queue::QueueJobStatus::Completed,
+        ]))
+        .one(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
+    if existing.is_some() {
+        return Ok(());
+    }
+    let now = chrono::Utc::now();
+    device_action_queue::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        device_type: Set(device_type.to_owned()),
+        user_id: Set(user_id.to_owned()),
+        r#type: Set(device_action_queue::QueueJobType::Flash),
+        status: Set(device_action_queue::QueueJobStatus::Queued),
+        mode: Set(device_action_queue::QueueDispatchMode::DeviceType),
+        release_id: Set(Some(release_id)),
+        version: Set(Some(version.to_owned())),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(database.orm())
     .await
     .map_err(|error| error.to_string())?;
     Ok(())

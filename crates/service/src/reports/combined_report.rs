@@ -18,6 +18,7 @@ pub(crate) async fn write_combined_report(
     cases: &[TestCaseRecord],
     report_base_url: &str,
 ) -> Result<(), std::io::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::combined_report", "write_combined_report");
     let sanity = cases
         .iter()
         .filter(|case| case.suite_name.eq_ignore_ascii_case("sanity"))
@@ -200,6 +201,7 @@ pub(crate) async fn write_combined_report(
 }
 
 fn parse_boottime_total(content: &str) -> Option<f64> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::combined_report", "parse_boottime_total");
     let document = Html::parse_document(content);
     let table_selector = Selector::parse("table").expect("static selector");
     let header_selector = Selector::parse("th").expect("static selector");

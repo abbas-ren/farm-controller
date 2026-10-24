@@ -97,10 +97,12 @@ async fn execution_creation_preserves_legacy_payload_and_auth_contract() {
     assert_eq!(body["testCases"][0]["testCaseId"], 9);
     assert_eq!(body["createdBy"], "system");
     let event = events.recv().await.unwrap();
-    assert_eq!(event.event, "test_execution");
+    assert_eq!(event.event, "testExecution");
     assert_eq!(event.payload["testId"], body["testId"]);
     assert_eq!(event.payload["type"], "new");
-    assert_eq!(event.payload["data"]["status"], body["status"]);
+    // REST body keeps DB snake_case; Socket.IO payload uses camelCase enums.
+    assert_eq!(event.payload["data"]["status"], "notExecuted");
+    assert_eq!(body["status"], "not_executed");
 
     let invalid = app
         .oneshot(

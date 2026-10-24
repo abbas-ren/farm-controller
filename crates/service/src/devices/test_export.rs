@@ -1,13 +1,29 @@
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sea_orm::{DatabaseBackend, DatabaseConnection, FromQueryResult, Statement};
 
 use super::{error::DeviceRepositoryError, repository_types::TestExportRow};
 
+#[derive(Debug, FromQueryResult)]
+struct TestExportRowOrm {
+    test_plan_name: String,
+    status: String,
+    device_type: Option<String>,
+    started_at: Option<DateTime<Utc>>,
+    ended_at: Option<DateTime<Utc>>,
+    test_cycle_id: Option<String>,
+    total: i64,
+    passed: i64,
+    failed: i64,
+}
+
 pub(crate) async fn rows(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     user_id: &str,
 ) -> Result<Vec<TestExportRow>, DeviceRepositoryError> {
-    Ok(sqlx::query_as::<_, TestExportRow>(
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "rows");
+    // Aggregated export join kept as Statement for FILTER counts.
+    Ok(TestExportRowOrm::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT COALESCE(te."testPlanName", '') AS test_plan_name,
              COALESCE(te.status::text, 'not_executed') AS status,
              d."deviceType" AS device_type, te."startedAt" AS started_at,
@@ -21,16 +37,30 @@ pub(crate) async fn rows(
            WHERE te."createdBy" = $1
            GROUP BY te.id, d."deviceType"
            ORDER BY te.id"#,
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?)
+        [user_id.into()],
+    ))
+    .all(orm)
+    .await?
+    .into_iter()
+    .map(|row| TestExportRow {
+        test_plan_name: row.test_plan_name,
+        status: row.status,
+        device_type: row.device_type,
+        started_at: row.started_at,
+        ended_at: row.ended_at,
+        test_cycle_id: row.test_cycle_id,
+        total: row.total,
+        passed: row.passed,
+        failed: row.failed,
+    })
+    .collect())
 }
 
 pub(crate) fn format_rows(
     rows: &[TestExportRow],
     now: DateTime<Utc>,
 ) -> Result<String, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "format_rows");
     let mut writer = csv::Writer::from_writer(Vec::new());
     writer
         .write_record([
@@ -87,6 +117,7 @@ pub(crate) fn format_rows(
 }
 
 fn sentence_case(value: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "sentence_case");
     value
         .split('_')
         .map(|word| {
@@ -101,6 +132,8 @@ fn sentence_case(value: &str) -> String {
 }
 
 fn format_duration(mut seconds: i64) -> String {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::test_export", "format_duration");
     let units = [
         (2_592_000, "Month"),
         (604_800, "Week"),
@@ -125,12 +158,14 @@ fn format_duration(mut seconds: i64) -> String {
 }
 
 fn iso(value: Option<DateTime<Utc>>) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "iso");
     value
         .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         .unwrap_or_default()
 }
 
 fn csv_error(error: csv::Error) -> DeviceRepositoryError {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_export", "csv_error");
     DeviceRepositoryError::Internal(format!("Failed to generate CSV: {error}"))
 }
 
@@ -140,6 +175,10 @@ mod tests {
 
     #[test]
     fn formats_test_execution_csv_calculations() {
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::test_export",
+            "formats_test_execution_csv_calculations",
+        );
         let started = "2026-10-02T00:00:00Z".parse().unwrap();
         let ended = "2026-10-02T01:01:01Z".parse().unwrap();
         let csv = format_rows(

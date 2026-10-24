@@ -315,6 +315,7 @@ struct SecurityAddon;
 
 impl Modify for SecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let _api_trace = crate::observability::ApiTrace::enter("api::mod", "modify");
         use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 
         if let Some(components) = openapi.components.as_mut() {
@@ -349,6 +350,7 @@ struct ReadinessResponse {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "router");
     let request_id_header = HeaderName::from_static("x-request-id");
     let cors = cors_layer(&state.config.server.cors_allowed_origins);
     let socket_io_layer = state
@@ -425,6 +427,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 }
 
 fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "cors_layer");
     if allowed_origins.is_empty() {
         return CorsLayer::permissive();
     }
@@ -439,6 +442,7 @@ fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
 }
 
 async fn security_headers(request: Request<Body>, next: Next) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "security_headers");
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -454,6 +458,7 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response {
 }
 
 async fn tus_options_headers(request: Request<Body>, next: Next) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "tus_options_headers");
     let is_tus_options = request.method() == axum::http::Method::OPTIONS
         && request
             .uri()
@@ -485,6 +490,7 @@ async fn tus_options_headers(request: Request<Body>, next: Next) -> Response {
     responses((status = 200, description = "Process is alive", body = HealthResponse, example = json!({"status": "ok"})))
 )]
 async fn health() -> Json<HealthResponse> {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "health");
     Json(HealthResponse { status: "ok" })
 }
 
@@ -497,6 +503,7 @@ async fn health() -> Json<HealthResponse> {
     responses((status = 200, description = "Enabled modules are ready", body = ReadinessResponse), (status = 503, description = "A required dependency is not ready", body = ReadinessResponse))
 )]
 async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "ready");
     let modules = state
         .config
         .modules
@@ -536,6 +543,7 @@ async fn ready(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     )
 )]
 async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "metrics");
     let database_pool =
         state
             .database
@@ -574,6 +582,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn not_found(request: Request<Body>) -> impl IntoResponse {
+    let _api_trace = crate::observability::ApiTrace::enter("api::mod", "not_found");
     (
         StatusCode::NOT_FOUND,
         Json(ErrorResponse {

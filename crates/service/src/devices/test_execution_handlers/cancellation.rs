@@ -27,6 +27,7 @@ pub async fn cancel(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "cancel");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -101,6 +102,7 @@ pub async fn cancel(
 }
 
 async fn send_device_cancellation(device_ip: &str, test_id: &str) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "send_device_cancellation");
     let Ok(url) = reqwest::Url::parse(&format!("http://{device_ip}:{EDGE_CONTROLLER_PORT}/cancel"))
     else {
         tracing::warn!(
@@ -128,6 +130,7 @@ async fn send_device_cancellation(device_ip: &str, test_id: &str) {
 }
 
 async fn cleanup_cancelled_preparation(state: &AppState, device_type: &str, test_id: &str) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "cleanup_cancelled_preparation");
     if !super::validation::safe_segment(device_type) || !super::validation::safe_segment(test_id) {
         tracing::warn!(
             device_type,
@@ -150,6 +153,7 @@ pub(crate) async fn complete_deferred_cancellation(
     state: &AppState,
     cancellation: &super::super::repository_types::DeferredCancellation,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::cancellation", "complete_deferred_cancellation");
     if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
         FrontendMessagePayload::TestExecutionUpdate {
             build_id: Some(cancellation.build_id.clone()),
@@ -177,7 +181,7 @@ pub(crate) fn cancellation_events(
     [
         ServerEvent::frontend(FrontendMessagePayload::TestExecution {
             test_id: test_id.to_owned(),
-            r#type: TestExecutionUpdateType::Status,
+            r#type: TestExecutionUpdateType::CancelRequested,
             data: TestExecutionUpdateData {
                 status: Some(TestStatus::CancelRequested),
                 timestamp: chrono::Utc::now().to_rfc3339(),

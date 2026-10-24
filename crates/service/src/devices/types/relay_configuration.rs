@@ -25,6 +25,7 @@ pub enum VoltageLevel {
 }
 
 fn default_low_voltage() -> VoltageLevel {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::types::relay_configuration", "default_low_voltage");
     VoltageLevel::Low
 }
 
@@ -34,6 +35,7 @@ mod voltage_default_tests {
 
     #[test]
     fn relay_channel_voltage_levels_default_low() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::types::relay_configuration", "relay_channel_voltage_levels_default_low");
         let configuration: RelayChannelConfiguration = serde_json::from_value(serde_json::json!({
             "relayId": uuid::Uuid::new_v4(),
             "channelId": uuid::Uuid::new_v4(),

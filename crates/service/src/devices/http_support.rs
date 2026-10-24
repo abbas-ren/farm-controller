@@ -6,6 +6,7 @@ pub(crate) fn repository_error(
     error: DeviceRepositoryError,
     message: &str,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::http_support", "repository_error");
     match error {
         DeviceRepositoryError::Validation(message) => {
             error_response(StatusCode::BAD_REQUEST, "validation", &message)
@@ -32,6 +33,8 @@ pub(crate) fn error_response(
     code: &str,
     message: &str,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::http_support", "error_response");
+    crate::observability::api_fail("error_response", status.as_u16(), message);
     (
         status,
         Json(ErrorResponse {

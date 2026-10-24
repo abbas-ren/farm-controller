@@ -1,17 +1,35 @@
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sea_orm::{
+    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
+    Statement, sea_query::Expr,
+};
+use uuid::Uuid;
+
+use crate::persistence::entity::alert;
 
 use super::{AlertList, error::DeviceRepositoryError};
 
+#[derive(Debug, FromQueryResult)]
+struct CountRow {
+    count: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct JsonRow {
+    value: serde_json::Value,
+}
+
 pub(crate) async fn list_admin(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     page: i64,
     limit: i64,
     sort_by: &str,
     descending: bool,
 ) -> Result<AlertList, DeviceRepositoryError> {
-    let total_data = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*)
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "list_admin");
+    let total_data = CountRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"SELECT COUNT(*) AS count
            FROM alerts a
            WHERE a.deleted_at IS NULL
              AND (a.status::text <> 'read'
@@ -27,18 +45,22 @@ pub(crate) async fn list_admin(
                  OR a.faulty_report_id IS NOT NULL
                  OR a.title ILIKE '%removed%'
              )"#,
-    )
-    .fetch_one(pool)
-    .await?;
+        [],
+    ))
+    .one(orm)
+    .await?
+    .map(|row| row.count)
+    .unwrap_or(0);
 
-    let data = sqlx::query_scalar::<_, serde_json::Value>(
+    let data = JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT jsonb_build_object(
                'id', a.id, 'userId', a.user_id, 'title', a.title, 'message', a.message,
                'data', a.data, 'type', a.type::text, 'status', a.status::text,
                'isRead', a.is_read, 'readAt', a.read_at, 'createdAt', a.created_at,
                'updatedAt', a.updated_at, 'buildId', a.build_id,
                'faultyReportId', a.faulty_report_id, 'deviceId', a.device_id,
-               'deviceControllerId', a.device_controller_id)
+               'deviceControllerId', a.device_controller_id) AS value
            FROM alerts a
            WHERE a.deleted_at IS NULL
              AND (a.status::text <> 'read'
@@ -72,13 +94,18 @@ pub(crate) async fn list_admin(
                  ELSE to_jsonb(a.created_at)
              END END ASC
             LIMIT $1 OFFSET $2"#,
-    )
-    .bind(limit)
-    .bind((page - 1) * limit)
-    .bind(descending)
-    .bind(sort_by)
-    .fetch_all(pool)
-    .await?;
+        [
+            limit.into(),
+            ((page - 1) * limit).into(),
+            descending.into(),
+            sort_by.into(),
+        ],
+    ))
+    .all(orm)
+    .await?
+    .into_iter()
+    .map(|row| row.value)
+    .collect();
 
     Ok(AlertList {
         data,
@@ -90,53 +117,64 @@ pub(crate) async fn list_admin(
 }
 
 pub(crate) async fn list_all(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     page: i64,
     limit: i64,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
 ) -> Result<AlertList, DeviceRepositoryError> {
-    let total_data = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*) FROM alerts
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "list_all");
+    let total_data = CountRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"SELECT COUNT(*) AS count FROM alerts
            WHERE deleted_at IS NULL
              AND ($1::timestamptz IS NULL OR created_at >= $1)
              AND ($2::timestamptz IS NULL OR created_at <= $2)"#,
-    )
-    .bind(from)
-    .bind(to)
-    .fetch_one(pool)
-    .await?;
-    let total_unread_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*) FROM alerts
+        [from.into(), to.into()],
+    ))
+    .one(orm)
+    .await?
+    .map(|row| row.count)
+    .unwrap_or(0);
+    let total_unread_count = CountRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"SELECT COUNT(*) AS count FROM alerts
            WHERE deleted_at IS NULL AND is_read = false
              AND ($1::timestamptz IS NULL OR created_at >= $1)
              AND ($2::timestamptz IS NULL OR created_at <= $2)"#,
-    )
-    .bind(from)
-    .bind(to)
-    .fetch_one(pool)
-    .await?;
-    let data = sqlx::query_scalar::<_, serde_json::Value>(
+        [from.into(), to.into()],
+    ))
+    .one(orm)
+    .await?
+    .map(|row| row.count)
+    .unwrap_or(0);
+    let data = JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT jsonb_build_object(
                'id', a.id, 'userId', a.user_id, 'title', a.title, 'message', a.message,
                'data', a.data, 'type', a.type::text, 'status', a.status::text,
                'isRead', a.is_read, 'readAt', a.read_at, 'createdAt', a.created_at,
                'updatedAt', a.updated_at, 'buildId', a.build_id,
                'faultyReportId', a.faulty_report_id, 'deviceId', a.device_id,
-               'deviceControllerId', a.device_controller_id)
+               'deviceControllerId', a.device_controller_id) AS value
            FROM alerts a
            WHERE a.deleted_at IS NULL
              AND ($3::timestamptz IS NULL OR a.created_at >= $3)
              AND ($4::timestamptz IS NULL OR a.created_at <= $4)
            ORDER BY a.created_at DESC
             LIMIT $1 OFFSET $2"#,
-    )
-    .bind(limit)
-    .bind((page - 1) * limit)
-    .bind(from)
-    .bind(to)
-    .fetch_all(pool)
-    .await?;
+        [
+            limit.into(),
+            ((page - 1) * limit).into(),
+            from.into(),
+            to.into(),
+        ],
+    ))
+    .all(orm)
+    .await?
+    .into_iter()
+    .map(|row| row.value)
+    .collect();
 
     Ok(AlertList {
         data,
@@ -148,28 +186,37 @@ pub(crate) async fn list_all(
 }
 
 pub(crate) async fn mark_read(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     alert_id: &str,
 ) -> Result<bool, DeviceRepositoryError> {
-    Ok(sqlx::query(
-        r#"UPDATE alerts
-           SET status = 'read', is_read = true, read_at = now(), updated_at = now()
-           WHERE id::text = $1 AND deleted_at IS NULL"#,
-    )
-    .bind(alert_id)
-    .execute(pool)
-    .await?
-    .rows_affected()
-        > 0)
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "mark_read");
+    let Ok(id) = Uuid::parse_str(alert_id) else {
+        return Ok(false);
+    };
+    let now = chrono::Utc::now();
+    let result = alert::Entity::update_many()
+        .col_expr(alert::Column::Status, Expr::value(alert::AlertStatus::Read))
+        .col_expr(alert::Column::IsRead, Expr::value(true))
+        .col_expr(alert::Column::ReadAt, Expr::value(Some(now)))
+        .col_expr(alert::Column::UpdatedAt, Expr::value(now))
+        .filter(alert::Column::Id.eq(id))
+        .filter(alert::Column::DeletedAt.is_null())
+        .exec(orm)
+        .await?;
+    Ok(result.rows_affected > 0)
 }
 
-pub(crate) async fn mark_all_read(pool: &PgPool) -> Result<(), DeviceRepositoryError> {
-    sqlx::query(
-        r#"UPDATE alerts
-           SET status = 'read', is_read = true, read_at = now(), updated_at = now()
-           WHERE is_read = false AND deleted_at IS NULL"#,
-    )
-    .execute(pool)
-    .await?;
+pub(crate) async fn mark_all_read(orm: &DatabaseConnection) -> Result<(), DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::alert_store", "mark_all_read");
+    let now = chrono::Utc::now();
+    alert::Entity::update_many()
+        .col_expr(alert::Column::Status, Expr::value(alert::AlertStatus::Read))
+        .col_expr(alert::Column::IsRead, Expr::value(true))
+        .col_expr(alert::Column::ReadAt, Expr::value(Some(now)))
+        .col_expr(alert::Column::UpdatedAt, Expr::value(now))
+        .filter(alert::Column::IsRead.eq(false))
+        .filter(alert::Column::DeletedAt.is_null())
+        .exec(orm)
+        .await?;
     Ok(())
 }

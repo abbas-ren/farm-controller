@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::auth::IdentityError;
 
 pub(super) fn transport_error(error: reqwest::Error) -> IdentityError {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::transport", "transport_error");
     tracing::warn!(%error, "Keycloak transport request failed");
     IdentityError::upstream(
         StatusCode::BAD_GATEWAY,
@@ -19,6 +20,7 @@ pub(super) fn transport_error(error: reqwest::Error) -> IdentityError {
 pub(super) async fn decode_response<T: DeserializeOwned>(
     response: Response,
 ) -> Result<T, IdentityError> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::transport", "decode_response");
     let status = response.status();
     if status.is_success() {
         return response.json().await.map_err(|error| {
@@ -39,6 +41,7 @@ pub(super) async fn decode_response<T: DeserializeOwned>(
 }
 
 pub(super) async fn decode_empty_response(response: Response) -> Result<(), IdentityError> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::transport", "decode_empty_response");
     let status = response.status();
     if status.is_success() {
         return Ok(());

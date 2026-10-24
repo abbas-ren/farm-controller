@@ -12,6 +12,7 @@ impl KeycloakIdentityProvider {
         username: &str,
         password: &str,
     ) -> Result<SigninResult, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::session", "signin_impl");
         let admin_token = self.client_token().await?;
         let token = match self.password_token(username, password).await {
             Ok(token) => token,
@@ -63,6 +64,7 @@ impl KeycloakIdentityProvider {
         refresh_token: Option<&str>,
         required_role: Option<&str>,
     ) -> Result<ValidationResult, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::session", "validate_impl");
         let initial = self.introspect(access_token).await?;
         let (claims, refreshed_tokens) = if initial.active {
             (initial, None)

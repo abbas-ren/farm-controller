@@ -39,7 +39,7 @@ mod flashing_store;
 mod heartbeat_store;
 mod legacy_relay_store;
 pub(crate) mod log_handlers;
-mod postgres;
+pub(crate) mod postgres;
 mod registration_store;
 mod relay_configuration_store;
 pub(crate) mod relay_handlers;
@@ -51,6 +51,7 @@ pub(crate) mod test_catalog_handlers;
 pub(crate) mod test_completion_handlers;
 mod test_completion_store;
 pub(crate) mod test_execution_handlers;
+pub(crate) mod test_log;
 mod test_export;
 pub(crate) mod test_export_handlers;
 #[cfg(test)]

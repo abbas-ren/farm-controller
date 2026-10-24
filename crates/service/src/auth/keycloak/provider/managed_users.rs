@@ -5,6 +5,7 @@ use crate::auth::{IdentityError, ManagedUser};
 
 impl KeycloakIdentityProvider {
     pub(super) async fn pending_users_impl(&self) -> Result<Vec<ManagedUser>, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::managed_users", "pending_users_impl");
         Ok(self
             .managed_users_impl()
             .await?
@@ -19,6 +20,7 @@ impl KeycloakIdentityProvider {
     }
 
     pub(super) async fn managed_users_impl(&self) -> Result<Vec<ManagedUser>, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::managed_users", "managed_users_impl");
         let token = self.client_token().await?;
         let users: Vec<KeycloakUser> = self
             .get_bearer(&format!("admin/realms/{}/users", self.config.realm), &token)
@@ -49,6 +51,7 @@ impl KeycloakIdentityProvider {
         &self,
         user_id: &str,
     ) -> Result<ManagedUser, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::managed_users", "user_by_id_impl");
         let token = self.client_token().await?;
         let user: KeycloakUser = self
             .get_bearer(
@@ -60,6 +63,7 @@ impl KeycloakIdentityProvider {
     }
 
     pub(super) async fn delete_user_impl(&self, user_id: &str) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::managed_users", "delete_user_impl");
         let token = self.client_token().await?;
         let response = self
             .client

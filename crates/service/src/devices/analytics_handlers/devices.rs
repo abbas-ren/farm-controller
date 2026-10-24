@@ -5,6 +5,7 @@ pub(crate) async fn device_state(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::devices", "device_state");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -20,6 +21,7 @@ pub(crate) async fn detailed_device_state(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::devices", "detailed_device_state");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,

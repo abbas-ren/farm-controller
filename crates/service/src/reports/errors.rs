@@ -9,7 +9,7 @@ pub enum ReportError {
     #[error("report worker is unavailable")]
     WorkerUnavailable,
     #[error(transparent)]
-    Database(#[from] sqlx::Error),
+    Database(#[from] sea_orm::DbErr),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

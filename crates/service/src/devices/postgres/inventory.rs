@@ -1,139 +1,239 @@
 use super::*;
+use super::json_models::{device_json, interface_json, test_execution_json};
+
+use crate::persistence::entity::{
+    device, device_controller_heartbeat, device_interface, heartbeat, relay, relay_channel,
+    test_execution,
+};
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    sea_query::{Expr, extension::postgres::PgExpr},
+};
+
+fn device_list_filters(
+    mut select: sea_orm::Select<device::Entity>,
+    is_admin: bool,
+    search: &str,
+    filter_by: &str,
+    filter: &str,
+) -> sea_orm::Select<device::Entity> {
+    select = select.filter(device::Column::DeletedAt.is_null());
+    if !is_admin {
+        select = select.filter(device::Column::Status.eq(device::DeviceStatus::Approved));
+    }
+    if !search.is_empty() {
+        let pattern = format!("%{search}%");
+        select = select.filter(
+            Condition::any()
+                .add(Expr::col(device::Column::DeviceName).ilike(&pattern))
+                .add(Expr::col(device::Column::DeviceId).ilike(&pattern))
+                .add(Expr::col(device::Column::DeviceType).ilike(&pattern))
+                .add(Expr::col(device::Column::MacAddress).ilike(&pattern)),
+        );
+    }
+    if !filter_by.is_empty() && !filter.eq_ignore_ascii_case("all") && !filter.is_empty() {
+        let pattern = format!("%{filter}%");
+        select = match filter_by {
+            "deviceType" => {
+                select.filter(Expr::col(device::Column::DeviceType).ilike(&pattern))
+            }
+            "deviceFamily" => {
+                select.filter(Expr::col(device::Column::DeviceFamily).ilike(&pattern))
+            }
+            "status" => select.filter(Expr::cust_with_values(
+                r#"status::text ILIKE ('%' || $1 || '%')"#,
+                [filter],
+            )),
+            "state" => select.filter(Expr::cust_with_values(
+                r#"state::text ILIKE ('%' || $1 || '%')"#,
+                [filter],
+            )),
+            _ => select,
+        };
+    }
+    select
+}
+
+async fn controller_id_for_device(
+    orm: &sea_orm::DatabaseConnection,
+    device_id: &str,
+    fallback: Option<String>,
+) -> Result<Option<String>, DeviceRepositoryError> {
+    let mapped = relay_channel::Entity::find()
+        .filter(relay_channel::Column::DeviceId.eq(device_id))
+        .filter(relay_channel::Column::DeletedAt.is_null())
+        .find_also_related(relay::Entity)
+        .all(orm)
+        .await?
+        .into_iter()
+        .filter_map(|(_, relay)| {
+            relay.filter(|r| r.deleted_at.is_none())
+                .map(|r| (r.updated_at, r.device_controller_id))
+        })
+        .max_by_key(|(updated_at, _)| *updated_at)
+        .map(|(_, controller_id)| controller_id);
+    Ok(mapped.or(fallback))
+}
 
 #[async_trait]
 impl DeviceInventoryRepository for PostgresDeviceRepository {
     async fn device_families(&self) -> Result<Vec<String>, DeviceRepositoryError> {
-        Ok(sqlx::query_scalar::<_, String>(
-            r#"
-            SELECT DISTINCT "deviceFamily"
-            FROM devices
-            WHERE "deletedAt" IS NULL AND "deviceFamily" IS NOT NULL
-            ORDER BY "deviceFamily"
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?)
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::inventory",
+            "device_families",
+        );
+        let mut families: Vec<String> = device::Entity::find()
+            .filter(device::Column::DeletedAt.is_null())
+            .filter(device::Column::DeviceFamily.is_not_null())
+            .all(self.orm())
+            .await?
+            .into_iter()
+            .filter_map(|d| d.device_family)
+            .collect();
+        families.sort();
+        families.dedup();
+        Ok(families)
     }
 
     async fn device_types(
         &self,
         device_family: Option<&str>,
     ) -> Result<Vec<String>, DeviceRepositoryError> {
-        Ok(sqlx::query_scalar::<_, String>(
-            r#"
-            SELECT DISTINCT "deviceType"
-            FROM devices
-            WHERE "deletedAt" IS NULL AND "deviceType" IS NOT NULL
-              AND ($1::text IS NULL OR $1 = 'ALL' OR "deviceFamily" = $1)
-            ORDER BY "deviceType"
-            "#,
-        )
-        .bind(device_family)
-        .fetch_all(&self.pool)
-        .await?)
+        let _api_trace =
+            crate::observability::ApiTrace::enter("devices::postgres::inventory", "device_types");
+        let mut select = device::Entity::find()
+            .filter(device::Column::DeletedAt.is_null())
+            .filter(device::Column::DeviceType.is_not_null());
+        if let Some(family) = device_family.filter(|f| *f != "ALL") {
+            select = select.filter(device::Column::DeviceFamily.eq(family));
+        }
+        let mut types: Vec<String> = select
+            .all(self.orm())
+            .await?
+            .into_iter()
+            .filter_map(|d| d.device_type)
+            .collect();
+        types.sort();
+        types.dedup();
+        Ok(types)
     }
 
     async fn device_by_id(
         &self,
         device_id: &str,
     ) -> Result<Option<serde_json::Value>, DeviceRepositoryError> {
-        Ok(sqlx::query_scalar::<_, serde_json::Value>(
-            r#"
-            SELECT to_jsonb(device_row) || jsonb_build_object(
-                'interfaces', COALESCE((
-                    SELECT jsonb_agg(to_jsonb(interface_row) ORDER BY interface_row.id)
-                    FROM device_interfaces interface_row
-                    WHERE interface_row."deviceId" = device_row."deviceId"
-                ), '[]'::jsonb),
-                'testExecutions', COALESCE((
-                    SELECT jsonb_agg(to_jsonb(execution_row))
-                    FROM (
-                        SELECT * FROM test_executions
-                        WHERE "deviceId" = device_row."deviceId"
-                        ORDER BY "updatedAt" DESC LIMIT 1
-                    ) execution_row
-                ), '[]'::jsonb)
-            )
-            FROM devices device_row
-            WHERE device_row."deviceId" = $1 AND device_row."deletedAt" IS NULL
-            "#,
-        )
-        .bind(device_id)
-        .fetch_optional(&self.pool)
-        .await?)
+        let _api_trace =
+            crate::observability::ApiTrace::enter("devices::postgres::inventory", "device_by_id");
+        let Some(device_model) = device::Entity::find()
+            .filter(device::Column::DeviceId.eq(device_id))
+            .filter(device::Column::DeletedAt.is_null())
+            .one(self.orm())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let interfaces = device_interface::Entity::find()
+            .filter(device_interface::Column::DeviceId.eq(device_id))
+            .order_by_asc(device_interface::Column::Id)
+            .all(self.orm())
+            .await?
+            .iter()
+            .map(interface_json)
+            .collect::<Vec<_>>();
+        let test_executions = test_execution::Entity::find()
+            .filter(test_execution::Column::DeviceId.eq(device_id))
+            .order_by_desc(test_execution::Column::UpdatedAt)
+            .limit(1)
+            .all(self.orm())
+            .await?
+            .iter()
+            .map(test_execution_json)
+            .collect::<Vec<_>>();
+        let mut value = device_json(&device_model);
+        value["interfaces"] = serde_json::Value::Array(interfaces);
+        value["testExecutions"] = serde_json::Value::Array(test_executions);
+        Ok(Some(value))
     }
 
     async fn latest_heartbeat(
         &self,
         device_id: &str,
     ) -> Result<Option<serde_json::Value>, DeviceRepositoryError> {
-        let heartbeat = sqlx::query_scalar::<_, serde_json::Value>(
-            r#"
-            SELECT jsonb_build_object(
-                'timestamp', timestamp,
-                'data', data,
-                'timeout', timeout
-            )
-            FROM heartbeats
-            WHERE "deviceId" = $1
-              AND NOT (data @> '{"status":"disconnected"}'::jsonb)
-            ORDER BY timestamp DESC LIMIT 1
-            "#,
-        )
-        .bind(device_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        if heartbeat.is_some() {
-            return Ok(heartbeat);
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::inventory",
+            "latest_heartbeat",
+        );
+        let heartbeats = heartbeat::Entity::find()
+            .filter(heartbeat::Column::DeviceId.eq(device_id))
+            .order_by_desc(heartbeat::Column::Timestamp)
+            .all(self.orm())
+            .await?;
+        if let Some(hb) = heartbeats.into_iter().find(|hb| {
+            hb.data
+                .get("status")
+                .and_then(|v| v.as_str())
+                .is_none_or(|s| s != "disconnected")
+        }) {
+            return Ok(Some(serde_json::json!({
+                "timestamp": hb.timestamp,
+                "data": hb.data,
+                "timeout": hb.timeout,
+            })));
         }
-        Ok(sqlx::query_scalar::<_, serde_json::Value>(
-            r#"
-            SELECT jsonb_build_object(
-                'timestamp', timestamp,
-                'data', data,
-                'timeout', timeout
-            )
-            FROM device_controller_heartbeats
-            WHERE "controllerId" = $1
-              AND NOT (data @> '{"status":"disconnected"}'::jsonb)
-            ORDER BY timestamp DESC LIMIT 1
-            "#,
-        )
-        .bind(device_id)
-        .fetch_optional(&self.pool)
-        .await?)
+        let controller_heartbeats = device_controller_heartbeat::Entity::find()
+            .filter(device_controller_heartbeat::Column::ControllerId.eq(device_id))
+            .order_by_desc(device_controller_heartbeat::Column::Timestamp)
+            .all(self.orm())
+            .await?;
+        Ok(controller_heartbeats
+            .into_iter()
+            .find(|hb| {
+                hb.data
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .is_none_or(|s| s != "disconnected")
+            })
+            .map(|hb| {
+                serde_json::json!({
+                    "timestamp": hb.timestamp,
+                    "data": hb.data,
+                    "timeout": hb.timeout,
+                })
+            }))
     }
 
     async fn topology(&self) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
-        Ok(sqlx::query_scalar::<_, serde_json::Value>(
-            r#"
-            SELECT jsonb_build_object(
-                'deviceId', device."deviceId",
-                'deviceName', device."deviceName",
-                'deviceType', device."deviceType",
-                'deviceFamily', device."deviceFamily",
-                'macAddress', device."macAddress",
-                'ipAddress', device."ipAddress",
-                'state', device.state,
-                'status', device.status,
-                'controllerId', COALESCE((
-                    SELECT relay."deviceControllerId"
-                    FROM relay_channels channel
-                    JOIN relays relay ON relay.id = channel."relayId"
-                    WHERE channel."deviceId" = device."deviceId"
-                      AND channel."deletedAt" IS NULL
-                      AND relay."deletedAt" IS NULL
-                    ORDER BY relay."updatedAt" DESC LIMIT 1
-                ), device."controllerId"),
-                'heartbeatTimer', device."heartbeatTimer"
+        let _api_trace =
+            crate::observability::ApiTrace::enter("devices::postgres::inventory", "topology");
+        let devices = device::Entity::find()
+            .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+            .filter(device::Column::DeletedAt.is_null())
+            .order_by_asc(device::Column::DeviceName)
+            .order_by_asc(device::Column::DeviceId)
+            .all(self.orm())
+            .await?;
+        let mut rows = Vec::with_capacity(devices.len());
+        for device_model in devices {
+            let controller_id = controller_id_for_device(
+                self.orm(),
+                &device_model.device_id,
+                device_model.controller_id.clone(),
             )
-            FROM devices device
-            WHERE device.status = 'approved' AND device."deletedAt" IS NULL
-            ORDER BY device."deviceName" NULLS LAST, device."deviceId"
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?)
+            .await?;
+            rows.push(serde_json::json!({
+                "deviceId": device_model.device_id,
+                "deviceName": device_model.device_name,
+                "deviceType": device_model.device_type,
+                "deviceFamily": device_model.device_family,
+                "macAddress": device_model.mac_address,
+                "ipAddress": device_model.ip_address,
+                "state": json_models::device_state_str(device_model.state.as_ref()),
+                "status": json_models::device_status_str(device_model.status.as_ref()),
+                "controllerId": controller_id,
+                "heartbeatTimer": device_model.heartbeat_timer,
+            }));
+        }
+        Ok(rows)
     }
 
     async fn list_devices(
@@ -141,6 +241,8 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
         query: &DeviceListQuery,
         is_admin: bool,
     ) -> Result<DeviceList, DeviceRepositoryError> {
+        let _api_trace =
+            crate::observability::ApiTrace::enter("devices::postgres::inventory", "list_devices");
         let page = query.page.unwrap_or(1).max(1);
         let limit = query.limit.unwrap_or(16).clamp(1, MAX_PAGE_SIZE);
         let offset = i64::from(page.saturating_sub(1)) * i64::from(limit);
@@ -159,95 +261,88 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
             _ => "createdAt",
         };
         let descending = query.desc.unwrap_or(true);
-        let total_devices: i64 = sqlx::query_scalar(
-            r#"SELECT count(*) FROM devices d WHERE
-            d."deletedAt" IS NULL
-            AND ($1 OR d.status::text = 'approved')
-            AND ($2 = '' OR d."deviceName" ILIKE '%' || $2 || '%'
-                OR d."deviceId" ILIKE '%' || $2 || '%'
-                OR d."deviceType" ILIKE '%' || $2 || '%'
-                OR d."macAddress" ILIKE '%' || $2 || '%')
-            AND ($3 = '' OR lower($4) = 'all' OR CASE $3
-                WHEN 'deviceType' THEN d."deviceType" ILIKE '%' || $4 || '%'
-                WHEN 'deviceFamily' THEN d."deviceFamily" ILIKE '%' || $4 || '%'
-                WHEN 'status' THEN d.status::text ILIKE '%' || $4 || '%'
-                WHEN 'state' THEN d.state::text ILIKE '%' || $4 || '%'
-                ELSE TRUE END)
-            "#,
+
+        let total_devices = device_list_filters(
+            device::Entity::find(),
+            is_admin,
+            search,
+            filter_by,
+            filter,
         )
-        .bind(is_admin)
-        .bind(search)
-        .bind(filter_by)
-        .bind(filter)
-        .fetch_one(&self.pool)
-        .await?;
-        let rows = sqlx::query_scalar::<_, serde_json::Value>(
-            r#"
-            SELECT to_jsonb(d) || jsonb_build_object(
-                'interfaces', COALESCE((
-                    SELECT jsonb_agg(to_jsonb(di) ORDER BY di.id)
-                    FROM device_interfaces di WHERE di."deviceId" = d."deviceId"
-                ), '[]'::jsonb),
-                'timeout', COALESCE((
-                    SELECT h.timeout FROM heartbeats h
-                    WHERE h."deviceId" = d."deviceId"
-                    ORDER BY h.timestamp DESC LIMIT 1
-                ), 0),
-                'controllerId', COALESCE((
-                    SELECT r."deviceControllerId" FROM relay_channels rc
-                    JOIN relays r ON r.id = rc."relayId"
-                    WHERE rc."deviceId" = d."deviceId"
-                      AND rc."deletedAt" IS NULL AND r."deletedAt" IS NULL
-                    LIMIT 1
-                ), d."controllerId"),
-                'usage', jsonb_build_object('totalHours', 0, 'states', '{}'::jsonb)
+        .count(self.orm())
+        .await? as i64;
+
+        let mut select =
+            device_list_filters(device::Entity::find(), is_admin, search, filter_by, filter);
+        // requested first, then sort
+        select = select.order_by_asc(Expr::cust(
+            r#"CASE WHEN status::text = 'requested' THEN 0 ELSE 1 END"#,
+        ));
+        select = match (sort_by, descending) {
+            ("updatedAt", true) => select.order_by_desc(device::Column::UpdatedAt),
+            ("updatedAt", false) => select.order_by_asc(device::Column::UpdatedAt),
+            ("deviceName", true) => select.order_by_desc(device::Column::DeviceName),
+            ("deviceName", false) => select.order_by_asc(device::Column::DeviceName),
+            ("status", true) => select.order_by_desc(device::Column::Status),
+            ("status", false) => select.order_by_asc(device::Column::Status),
+            (_, true) => select.order_by_desc(device::Column::CreatedAt),
+            (_, false) => select.order_by_asc(device::Column::CreatedAt),
+        };
+        let devices = select
+            .limit(u64::from(limit))
+            .offset(offset as u64)
+            .all(self.orm())
+            .await?;
+
+        let mut rows = Vec::with_capacity(devices.len());
+        for device_model in devices {
+            let interfaces = device_interface::Entity::find()
+                .filter(device_interface::Column::DeviceId.eq(&device_model.device_id))
+                .order_by_asc(device_interface::Column::Id)
+                .all(self.orm())
+                .await?
+                .iter()
+                .map(interface_json)
+                .collect::<Vec<_>>();
+            let timeout = heartbeat::Entity::find()
+                .filter(heartbeat::Column::DeviceId.eq(&device_model.device_id))
+                .order_by_desc(heartbeat::Column::Timestamp)
+                .one(self.orm())
+                .await?
+                .map(|hb| hb.timeout)
+                .unwrap_or(0);
+            let controller_id = controller_id_for_device(
+                self.orm(),
+                &device_model.device_id,
+                device_model.controller_id.clone(),
             )
-            FROM devices d WHERE
-                d."deletedAt" IS NULL
-                AND ($1 OR d.status::text = 'approved')
-                AND ($2 = '' OR d."deviceName" ILIKE '%' || $2 || '%'
-                    OR d."deviceId" ILIKE '%' || $2 || '%'
-                    OR d."deviceType" ILIKE '%' || $2 || '%'
-                    OR d."macAddress" ILIKE '%' || $2 || '%')
-                AND ($3 = '' OR lower($4) = 'all' OR CASE $3
-                    WHEN 'deviceType' THEN d."deviceType" ILIKE '%' || $4 || '%'
-                    WHEN 'deviceFamily' THEN d."deviceFamily" ILIKE '%' || $4 || '%'
-                    WHEN 'status' THEN d.status::text ILIKE '%' || $4 || '%'
-                    WHEN 'state' THEN d.state::text ILIKE '%' || $4 || '%'
-                    ELSE TRUE END)
-            ORDER BY CASE WHEN d.status::text = 'requested' THEN 0 ELSE 1 END,
-                CASE WHEN $5 = 'createdAt' AND $6 THEN d."createdAt" END DESC,
-                CASE WHEN $5 = 'createdAt' AND NOT $6 THEN d."createdAt" END ASC,
-                CASE WHEN $5 = 'updatedAt' AND $6 THEN d."updatedAt" END DESC,
-                CASE WHEN $5 = 'updatedAt' AND NOT $6 THEN d."updatedAt" END ASC,
-                CASE WHEN $5 = 'deviceName' AND $6 THEN d."deviceName" END DESC,
-                CASE WHEN $5 = 'deviceName' AND NOT $6 THEN d."deviceName" END ASC,
-                CASE WHEN $5 = 'status' AND $6 THEN d.status::text END DESC,
-                CASE WHEN $5 = 'status' AND NOT $6 THEN d.status::text END ASC
-            LIMIT $7 OFFSET $8
-            "#,
-        )
-        .bind(is_admin)
-        .bind(search)
-        .bind(filter_by)
-        .bind(filter)
-        .bind(sort_by)
-        .bind(descending)
-        .bind(i64::from(limit))
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
-        let requested_count: i64 = sqlx::query_scalar(
-            r#"SELECT count(*) FROM devices WHERE "deletedAt" IS NULL AND status::text = 'requested'"#,
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        let state_rows: Vec<(String, i64)> = sqlx::query_as(
-            r#"SELECT state::text, count(*) FROM devices
-               WHERE "deletedAt" IS NULL AND status::text = 'approved' GROUP BY state"#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
+            .await?;
+            let mut value = device_json(&device_model);
+            value["interfaces"] = serde_json::Value::Array(interfaces);
+            value["timeout"] = serde_json::json!(timeout);
+            value["controllerId"] = serde_json::json!(controller_id);
+            value["usage"] = serde_json::json!({"totalHours": 0, "states": {}});
+            rows.push(value);
+        }
+
+        let requested_count = device::Entity::find()
+            .filter(device::Column::DeletedAt.is_null())
+            .filter(device::Column::Status.eq(device::DeviceStatus::Requested))
+            .count(self.orm())
+            .await? as i64;
+
+        let approved = device::Entity::find()
+            .filter(device::Column::DeletedAt.is_null())
+            .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+            .all(self.orm())
+            .await?;
+        let mut state_count = BTreeMap::new();
+        for device_model in approved {
+            if let Some(state) = json_models::device_state_str(device_model.state.as_ref()) {
+                *state_count.entry(state.to_owned()).or_insert(0u64) += 1;
+            }
+        }
+
         let mut device_timers = BTreeMap::new();
         let mut device_timeouts = BTreeMap::new();
         for row in &rows {
@@ -276,10 +371,7 @@ impl DeviceInventoryRepository for PostgresDeviceRepository {
             requested_count: u64::try_from(requested_count).unwrap_or(0),
             device_timers,
             device_timeouts,
-            state_count: state_rows
-                .into_iter()
-                .map(|(state, count)| (state, u64::try_from(count).unwrap_or(0)))
-                .collect(),
+            state_count,
         })
     }
 }

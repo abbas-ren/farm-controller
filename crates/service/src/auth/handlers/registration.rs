@@ -26,6 +26,7 @@ pub async fn register_user(
     headers: axum::http::HeaderMap,
     Json(mut payload): Json<AdminRegistrationRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "register_user");
     payload.username = payload.username.trim().to_owned();
     payload.email = payload.email.trim().to_owned();
     payload.role = payload.role.trim().to_ascii_lowercase();
@@ -67,6 +68,7 @@ pub async fn register_user(
 
 #[utoipa::path(post, path = "/api/v1/auth/user-registration/confirmation/send-mail", tag = "Authentication", summary = "Acknowledge a registration mail event", description = "Compatibility webhook consumed by the Keycloak event-listener provider.", request_body = UserEventRequest, responses((status = 200, description = "Event acknowledged", body = AuthMessageResponse), (status = 400, description = "Invalid event", body = AuthErrorResponse)))]
 pub async fn user_event_webhook(Json(payload): Json<UserEventRequest>) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "user_event_webhook");
     if payload.user_id.trim().is_empty() || payload.event_type.trim().is_empty() {
         return legacy_error(StatusCode::BAD_REQUEST, "userId and eventType are required");
     }
@@ -82,6 +84,7 @@ pub async fn forgot_password(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ForgotPasswordRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "forgot_password");
     let username = payload.email_or_username.trim();
     if username.is_empty() {
         return legacy_error(StatusCode::BAD_REQUEST, "Email or username is required");
@@ -107,6 +110,7 @@ pub async fn verify_user(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<VerifyUserRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "verify_user");
     let token = payload.token.trim();
     let user_id = payload.user_id.trim();
     if token.is_empty() || user_id.is_empty() {
@@ -133,6 +137,7 @@ pub async fn reset_password(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ResetPasswordRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "reset_password");
     let token = payload.token.trim();
     let user_id = payload.user_id.trim();
     let password = payload.password.trim();
@@ -178,6 +183,7 @@ pub async fn request_registration(
     State(state): State<Arc<AppState>>,
     Json(mut payload): Json<RegistrationRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "request_registration");
     payload.username = payload.username.trim().to_owned();
     payload.email = payload.email.trim().to_owned();
     if payload.username.is_empty() {
@@ -232,6 +238,7 @@ pub async fn registration_action(
     headers: axum::http::HeaderMap,
     Json(mut payload): Json<RegistrationActionRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::registration", "registration_action");
     payload.user_id = payload.user_id.trim().to_owned();
     if payload.user_id.is_empty() {
         return legacy_error(StatusCode::BAD_REQUEST, "UserId is required");

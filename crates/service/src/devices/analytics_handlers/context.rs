@@ -40,6 +40,7 @@ pub(super) async fn analytics_context(
     state: &Arc<AppState>,
     headers: &HeaderMap,
 ) -> Result<AnalyticsContext, Box<axum::response::Response>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::context", "analytics_context");
     let response_headers = auth::authorize_request(state, headers, None)
         .await
         .map_err(|error| Box::new(error.into_response()))?;
@@ -58,6 +59,7 @@ pub(super) async fn analytics_context(
 }
 
 pub(super) fn invalid_date_response() -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::context", "invalid_date_response");
     error_response(
         StatusCode::BAD_REQUEST,
         "validation",

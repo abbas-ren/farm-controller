@@ -12,6 +12,7 @@ pub(super) fn render_radar(
     old_label: &str,
     new_label: &str,
 ) -> io::Result<()> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::rendering", "render_radar");
     let path = output.join("radar_chart.png");
     let path = path.to_string_lossy().into_owned();
     let root = BitMapBackend::new(&path, (1200, 700)).into_drawing_area();
@@ -107,6 +108,7 @@ pub(super) fn render_bars(
     old_label: &str,
     new_label: &str,
 ) -> io::Result<()> {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::rendering", "render_bars");
     let name = format!(
         "{}_bar.png",
         category.category.to_ascii_lowercase().replace(' ', "_")
@@ -168,5 +170,6 @@ pub(super) fn render_bars(
 }
 
 fn plot_error(error: impl std::fmt::Display) -> io::Error {
+    let _api_trace = crate::observability::ApiTrace::enter("reports::performance_graphs::rendering", "plot_error");
     io::Error::other(error.to_string())
 }

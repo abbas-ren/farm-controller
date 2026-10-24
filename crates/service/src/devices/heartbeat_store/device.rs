@@ -1,143 +1,185 @@
-use sqlx::PgPool;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection,
+    EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    TransactionTrait, sea_query::Expr,
+};
+use uuid::Uuid;
 
-use crate::devices::repository_types::DeviceHeartbeatResult;
+use crate::{
+    devices::repository_types::DeviceHeartbeatResult,
+    persistence::entity::{alert, device, device_state_change, heartbeat},
+};
 
 use super::super::error::DeviceRepositoryError;
 use super::{interface, state_transition::process_device_post_update};
 
 pub(crate) async fn record_device(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     device_id: &str,
-    heartbeat: &serde_json::Value,
+    heartbeat_payload: &serde_json::Value,
 ) -> Result<Option<DeviceHeartbeatResult>, DeviceRepositoryError> {
-    if !heartbeat.is_object() {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::heartbeat_store::device", "record_device");
+    if !heartbeat_payload.is_object() {
         return Err(DeviceRepositoryError::Validation(
             "device heartbeat must be a JSON object".to_owned(),
         ));
     }
-    let heartbeat_data = interface::interface_heartbeat_data(heartbeat);
+    let heartbeat_data = interface::interface_heartbeat_data(heartbeat_payload);
     let interface_statuses = interface::parse_interface_statuses(&heartbeat_data);
-    let mut transaction = pool.begin().await?;
-    let device = sqlx::query_as::<_, (String, bool)>(
-        r#"SELECT COALESCE(device.state::text, 'unknown'),
+    let transaction = orm.begin().await?;
+
+    // Complex FOR UPDATE + EXISTS active-work check — keep as raw SQL.
+    #[derive(Debug, FromQueryResult)]
+    struct LockedDevice {
+        state: String,
+        has_active_work: bool,
+    }
+    let device_row = LockedDevice::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"SELECT COALESCE(device.state::text, 'unknown') AS state,
                   (EXISTS (SELECT 1 FROM device_action_queue action
                            WHERE action."targetDeviceId" = device."deviceId"
                              AND action.status::text IN ('queued', 'waiting', 'running'))
                    OR EXISTS (SELECT 1 FROM fallback_updates fallback
                               WHERE fallback."deviceId" = device."deviceId"
                                 AND fallback.status::text IN ('pending', 'flashing')))
+                  AS has_active_work
            FROM devices device
            WHERE device."deviceId" = $1
              AND device."deletedAt" IS NULL
              AND device.status::text = 'approved'
            FOR UPDATE OF device"#,
-    )
-    .bind(device_id)
-    .fetch_optional(&mut *transaction)
+        [device_id.into()],
+    ))
+    .one(&transaction)
     .await?;
-    let Some((previous_state, has_active_work)) = device else {
+    let Some(LockedDevice {
+        state: previous_state,
+        has_active_work,
+    }) = device_row
+    else {
         transaction.rollback().await?;
         return Ok(None);
     };
 
-    let existing = sqlx::query_as::<_, (i64, serde_json::Value)>(
-        r#"SELECT id::bigint, data FROM heartbeats
-           WHERE "deviceId" = $1 ORDER BY timestamp DESC LIMIT 1 FOR UPDATE"#,
-    )
-    .bind(device_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
+    let existing = heartbeat::Entity::find()
+        .filter(heartbeat::Column::DeviceId.eq(device_id))
+        .order_by_desc(heartbeat::Column::Timestamp)
+        .lock(sea_orm::sea_query::LockType::Update)
+        .one(&transaction)
+        .await?;
+    let now = chrono::Utc::now();
     match existing {
-        Some((heartbeat_id, data)) if data == *heartbeat => {
-            sqlx::query("UPDATE heartbeats SET timestamp = now(), timeout = 0 WHERE id = $1")
-                .bind(heartbeat_id)
-                .execute(&mut *transaction)
+        Some(row) if row.data == *heartbeat_payload => {
+            heartbeat::Entity::update_many()
+                .col_expr(heartbeat::Column::Timestamp, Expr::value(now))
+                .col_expr(heartbeat::Column::Timeout, Expr::value(0))
+                .filter(heartbeat::Column::Id.eq(row.id))
+                .exec(&transaction)
                 .await?;
         }
         _ => {
-            sqlx::query(
-                r#"INSERT INTO heartbeats ("deviceId", timestamp, timeout, data)
-                   VALUES ($1, now(), 0, $2)"#,
-            )
-            .bind(device_id)
-            .bind(sqlx::types::Json(heartbeat.clone()))
-            .execute(&mut *transaction)
+            heartbeat::ActiveModel {
+                device_id: Set(device_id.to_owned()),
+                timestamp: Set(now),
+                timeout: Set(0),
+                data: Set(heartbeat_payload.clone()),
+                ..Default::default()
+            }
+            .insert(&transaction)
             .await?;
         }
     }
 
-    let state = if has_active_work { "busy" } else { "free" };
-    let state_update = if has_active_work {
-        r#"UPDATE devices SET state = 'busy', "stateUpdatedAt" = now(),
-                            "lastConnectedOn" = now(), upgrading = false,
-                            flashing = false, "updatedAt" = now()
-           WHERE "deviceId" = $1"#
+    let state = if has_active_work {
+        device::DeviceState::Busy
     } else {
-        r#"UPDATE devices SET state = 'free', "stateUpdatedAt" = now(),
-                            "lastConnectedOn" = now(), upgrading = false,
-                            flashing = false, "updatedAt" = now()
-           WHERE "deviceId" = $1"#
+        device::DeviceState::Free
     };
-    sqlx::query(state_update)
-        .bind(device_id)
-        .execute(&mut *transaction)
+    let state_text = if has_active_work { "busy" } else { "free" };
+    device::Entity::update_many()
+        .col_expr(device::Column::State, Expr::value(Some(state)))
+        .col_expr(device::Column::StateUpdatedAt, Expr::value(Some(now)))
+        .col_expr(device::Column::LastConnectedOn, Expr::value(now))
+        .col_expr(device::Column::Upgrading, Expr::value(Some(false)))
+        .col_expr(device::Column::Flashing, Expr::value(Some(false)))
+        .col_expr(device::Column::UpdatedAt, Expr::value(now))
+        .filter(device::Column::DeviceId.eq(device_id))
+        .exec(&transaction)
         .await
         .map_err(|error| {
-            tracing::error!(%error, device_id, target_state = state, "failed to persist device heartbeat state transition");
+            tracing::error!(%error, device_id, target_state = state_text, "failed to persist device heartbeat state transition");
             error
         })?;
-    let state_change_insert = if has_active_work {
-        r#"INSERT INTO device_state_change
-              ("deviceId", state, "changedAt", "createdAt", "updatedAt")
-           VALUES ($1, 'busy', now(), now(), now())"#
+
+    let change_state = if has_active_work {
+        device_state_change::DeviceStateChangeState::Busy
     } else {
-        r#"INSERT INTO device_state_change
-              ("deviceId", state, "changedAt", "createdAt", "updatedAt")
-           VALUES ($1, 'free', now(), now(), now())"#
+        device_state_change::DeviceStateChangeState::Free
     };
-    sqlx::query(state_change_insert)
-        .bind(device_id)
-        .execute(&mut *transaction)
-        .await?;
+    device_state_change::ActiveModel {
+        device_id: Set(device_id.to_owned()),
+        state: Set(change_state),
+        changed_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&transaction)
+    .await?;
 
     let mut alerts = Vec::new();
     if !has_active_work && matches!(previous_state.as_str(), "faulty" | "not_reachable") {
-        alerts.push(
-            sqlx::query_scalar::<_, serde_json::Value>(
-                r#"INSERT INTO alerts
-                      (id, user_id, title, message, type, status, is_read,
-                       device_id, data, created_at, updated_at)
-                   VALUES (gen_random_uuid(), 'ADMIN', 'Device comes as Available',
-                           'Device ' || $1 || ' is now available', 'success', 'unread', false,
-                           $1, jsonb_build_object('deviceId', $1, 'previousState', $2,
-                                                  'state', 'free'), now(), now())
-                   RETURNING to_jsonb(alerts)"#,
-            )
-            .bind(device_id)
-            .bind(&previous_state)
-            .fetch_one(&mut *transaction)
-            .await?,
-        );
+        let inserted = alert::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            user_id: Set("ADMIN".to_owned()),
+            title: Set("Device comes as Available".to_owned()),
+            message: Set(format!("Device {device_id} is now available")),
+            r#type: Set(alert::AlertType::Success),
+            status: Set(alert::AlertStatus::Unread),
+            is_read: Set(false),
+            device_id: Set(Some(device_id.to_owned())),
+            data: Set(Some(serde_json::json!({
+                "deviceId": device_id,
+                "previousState": previous_state,
+                "state": "free",
+            }))),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await?;
+        alerts.push(alert_json(&inserted));
     }
 
+    // Interface rows still use raw SQL (legacy `type` column vs entity `interfaceType`).
     let mut interface_changes = Vec::new();
     for interface_status in interface_statuses {
         if let Some(interface_id) = interface_status.interface_id.as_deref() {
-            let existing = sqlx::query_as::<_, (i32, String)>(
-                r#"SELECT id, status::text FROM device_interfaces
+            #[derive(Debug, FromQueryResult)]
+            struct ExistingInterface {
+                id: i32,
+                status: String,
+            }
+            let existing = ExistingInterface::find_by_statement(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"SELECT id, status::text AS status FROM device_interfaces
                    WHERE "deviceId" = $1 AND type = $2 AND "interfaceId" = $3
                    FOR UPDATE"#,
-            )
-            .bind(device_id)
-            .bind(&interface_status.interface_type)
-            .bind(interface_id)
-            .fetch_optional(&mut *transaction)
+                [
+                    device_id.into(),
+                    interface_status.interface_type.clone().into(),
+                    interface_id.into(),
+                ],
+            ))
+            .one(&transaction)
             .await?;
             match existing {
-                Some((row_id, previous_status)) if previous_status != interface_status.status => {
+                Some(row) if row.status != interface_status.status => {
                     interface::update_interface_status(
-                        &mut transaction,
-                        row_id,
+                        &transaction,
+                        row.id,
                         interface_status.status,
                     )
                     .await?;
@@ -145,22 +187,25 @@ pub(crate) async fn record_device(
                         interface_type: interface_status.interface_type,
                         interface_id: interface_id.to_owned(),
                         status: interface_status.status,
-                        previous_status: Some(previous_status),
+                        previous_status: Some(row.status),
                     });
                 }
                 None => {
-                    sqlx::query(
-                        r#"INSERT INTO device_interfaces
-                              ("deviceId", "interfaceId", type, status, "createdAt", "updatedAt")
-                           VALUES ($1, $2, $3, ($4::text)::"enum_device_interfaces_status",
-                                   now(), now())"#,
-                    )
-                    .bind(device_id)
-                    .bind(interface_id)
-                    .bind(&interface_status.interface_type)
-                    .bind(interface_status.status)
-                    .execute(&mut *transaction)
-                    .await?;
+                    transaction
+                        .execute_raw(Statement::from_sql_and_values(
+                            DatabaseBackend::Postgres,
+                            r#"INSERT INTO device_interfaces
+                                  ("deviceId", "interfaceId", type, status, "createdAt", "updatedAt")
+                               VALUES ($1, $2, $3, ($4::text)::"enum_device_interfaces_status",
+                                       now(), now())"#,
+                            [
+                                device_id.into(),
+                                interface_id.into(),
+                                interface_status.interface_type.clone().into(),
+                                interface_status.status.into(),
+                            ],
+                        ))
+                        .await?;
                     interface_changes.push(interface::InterfaceChange {
                         interface_type: interface_status.interface_type,
                         interface_id: interface_id.to_owned(),
@@ -171,29 +216,35 @@ pub(crate) async fn record_device(
                 Some(_) => {}
             }
         } else {
-            let existing = sqlx::query_as::<_, (i32, String, String)>(
-                r#"SELECT id, "interfaceId", status::text FROM device_interfaces
+            #[derive(Debug, FromQueryResult)]
+            struct ExistingInterface {
+                id: i32,
+                interface_id: String,
+                status: String,
+            }
+            let existing = ExistingInterface::find_by_statement(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"SELECT id, "interfaceId" AS interface_id, status::text AS status
+                   FROM device_interfaces
                    WHERE "deviceId" = $1 AND type = $2 FOR UPDATE"#,
-            )
-            .bind(device_id)
-            .bind(&interface_status.interface_type)
-            .fetch_all(&mut *transaction)
+                [
+                    device_id.into(),
+                    interface_status.interface_type.clone().into(),
+                ],
+            ))
+            .all(&transaction)
             .await?;
-            for (row_id, interface_id, previous_status) in existing {
-                if previous_status == interface_status.status {
+            for row in existing {
+                if row.status == interface_status.status {
                     continue;
                 }
-                interface::update_interface_status(
-                    &mut transaction,
-                    row_id,
-                    interface_status.status,
-                )
-                .await?;
+                interface::update_interface_status(&transaction, row.id, interface_status.status)
+                    .await?;
                 interface_changes.push(interface::InterfaceChange {
                     interface_type: interface_status.interface_type.clone(),
-                    interface_id,
+                    interface_id: row.interface_id,
                     status: interface_status.status,
-                    previous_status: Some(previous_status),
+                    previous_status: Some(row.status),
                 });
             }
         }
@@ -204,41 +255,50 @@ pub(crate) async fn record_device(
             continue;
         }
         let interface_label = format!("{}:{}", change.interface_type, change.interface_id);
-        alerts.push(
-            sqlx::query_scalar::<_, serde_json::Value>(
-                r#"INSERT INTO alerts
-                      (id, user_id, title, message, type, status, is_read,
-                       device_id, data, created_at, updated_at)
-                   VALUES (gen_random_uuid(), 'ADMIN', 'Interface ' || $2 || ' ' || $3,
-                           'Device ' || $1 || ' interface ' || $2 || ' status is ' || $3,
-                           'warning', 'unread', false, $1,
-                           jsonb_build_object('alertCategory', 'interface-status',
-                                              'deviceId', $1, 'interfaceType', $4,
-                                              'interfaceId', $5, 'interfaceStatus', $3,
-                                              'previousInterfaceStatus', $6::text),
-                           now(), now())
-                   RETURNING to_jsonb(alerts)"#,
-            )
-            .bind(device_id)
-            .bind(&interface_label)
-            .bind(change.status)
-            .bind(&change.interface_type)
-            .bind(&change.interface_id)
-            .bind(change.previous_status.as_deref())
-            .fetch_one(&mut *transaction)
-            .await?,
-        );
+        let inserted = alert::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            user_id: Set("ADMIN".to_owned()),
+            title: Set(format!(
+                "Interface {} {}",
+                interface_label, change.status
+            )),
+            message: Set(format!(
+                "Device {device_id} interface {interface_label} status is {}",
+                change.status
+            )),
+            r#type: Set(alert::AlertType::Warning),
+            status: Set(alert::AlertStatus::Unread),
+            is_read: Set(false),
+            device_id: Set(Some(device_id.to_owned())),
+            data: Set(Some(serde_json::json!({
+                "alertCategory": "interface-status",
+                "deviceId": device_id,
+                "interfaceType": change.interface_type,
+                "interfaceId": change.interface_id,
+                "interfaceStatus": change.status,
+                "previousInterfaceStatus": change.previous_status,
+            }))),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await?;
+        alerts.push(alert_json(&inserted));
     }
 
-    let (post_update_events, deferred_cancellations) = process_device_post_update(
-        &mut transaction,
-        device_id,
-        heartbeat.get("nfsPath").and_then(serde_json::Value::as_str),
-    )
-    .await?;
+    let (post_update_events, deferred_cancellations, deferred_test_logs) =
+        process_device_post_update(
+            &transaction,
+            device_id,
+            heartbeat_payload
+                .get("nfsPath")
+                .and_then(serde_json::Value::as_str),
+        )
+        .await?;
     transaction.commit().await?;
-    let state_changed = previous_state != state;
-    if matches!(previous_state.as_str(), "faulty" | "not_reachable") && state == "free" {
+    let state_changed = previous_state != state_text;
+    if matches!(previous_state.as_str(), "faulty" | "not_reachable") && state_text == "free" {
         tracing::info!(
             device_id,
             previous_state,
@@ -246,7 +306,7 @@ pub(crate) async fn record_device(
         );
     }
     Ok(Some(DeviceHeartbeatResult {
-        state: state.to_owned(),
+        state: state_text.to_owned(),
         state_changed,
         interface_changes: interface_changes
             .into_iter()
@@ -256,5 +316,32 @@ pub(crate) async fn record_device(
         alerts,
         post_update_events,
         deferred_cancellations,
+        deferred_test_logs,
     }))
 }
+
+fn alert_json(model: &alert::Model) -> serde_json::Value {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::heartbeat_store::device", "alert_json");
+    serde_json::json!({
+        "id": model.id,
+        "user_id": model.user_id,
+        "title": model.title,
+        "message": model.message,
+        "type": match model.r#type {
+            alert::AlertType::Info => "info",
+            alert::AlertType::Success => "success",
+            alert::AlertType::Warning => "warning",
+            alert::AlertType::Error => "error",
+        },
+        "status": match model.status {
+            alert::AlertStatus::Unread => "unread",
+            alert::AlertStatus::Read => "read",
+        },
+        "is_read": model.is_read,
+        "device_id": model.device_id,
+        "data": model.data,
+        "created_at": model.created_at,
+        "updated_at": model.updated_at,
+    })
+}
+

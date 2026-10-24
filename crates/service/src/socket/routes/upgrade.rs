@@ -47,6 +47,7 @@ pub(crate) async fn upgrade(
     headers: HeaderMap,
     websocket: WebSocketUpgrade,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::upgrade", "upgrade");
     let browser_authorization = match browser_authorization(&query) {
         Ok(authorization) => authorization,
         Err(()) => return StatusCode::BAD_REQUEST.into_response(),
@@ -89,11 +90,11 @@ pub(crate) async fn upgrade(
             .on_upgrade(move |socket| web_cli::session(state, user_id, user_name, socket));
     }
     if let (Some(test_id), Some(device_id)) = (query.test_id, query.device_id.clone()) {
-        let pool = match state.database.as_ref() {
-            Some(database) => database.pool(),
+        let orm = match state.database.as_ref() {
+            Some(database) => database.orm(),
             None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-        return match crate::test_results::validate_session(pool, &test_id, &device_id).await {
+        return match crate::test_results::validate_session(orm, &test_id, &device_id).await {
             Ok(()) => websocket
                 .on_upgrade(move |socket| test_result_session(state, test_id, device_id, socket)),
             Err(error) => {

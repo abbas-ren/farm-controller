@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 fn default_log_type() -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::types::logs", "default_log_type");
     "general".to_owned()
 }
 
 fn default_log_level() -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::types::logs", "default_log_level");
     "info".to_owned()
 }
 

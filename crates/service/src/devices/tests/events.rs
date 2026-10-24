@@ -11,10 +11,10 @@ fn device_power_event_preserves_frontend_contract() {
 #[test]
 fn new_execution_event_preserves_frontend_contract() {
     let event = test_execution_handlers::new_execution_event("test-1", "user-1");
-    assert_eq!(event.event, "test_execution");
+    assert_eq!(event.event, "testExecution");
     assert_eq!(event.payload["testId"], "test-1");
     assert_eq!(event.payload["type"], "new");
-    assert_eq!(event.payload["data"]["status"], "not_executed");
+    assert_eq!(event.payload["data"]["status"], "notExecuted");
     assert_eq!(
         event.payload["data"]["message"],
         "Test execution test-1 created"
@@ -30,11 +30,11 @@ fn cancellation_events_preserve_user_and_build_contracts() {
         "PREPARE_ARTIFACTS",
         "user-1",
     );
-    assert_eq!(user_event.event, "test_execution");
-    assert_eq!(user_event.payload["type"], "cancel_requested");
+    assert_eq!(user_event.event, "testExecution");
+    assert_eq!(user_event.payload["type"], "cancelRequested");
     assert_eq!(user_event.payload["data"]["cancelRequested"], true);
     assert_eq!(user_event.payload["data"]["phase"], "PREPARE_ARTIFACTS");
-    assert_eq!(build_event.event, "test_execution_update");
+    assert_eq!(build_event.event, "testExecutionUpdate");
     assert_eq!(build_event.payload["testId"], "test-1");
     assert_eq!(build_event.payload["buildId"], "build-1");
     assert_eq!(build_event.payload["cancelRequested"], true);

@@ -50,6 +50,7 @@ pub async fn patch(
     AxumPath(id): AxumPath<Uuid>,
     body: Bytes,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_handlers::patch", "patch");
     let response_headers = match authorize(&state, &headers).await {
         Ok(headers) => headers,
         Err(response) => return *response,

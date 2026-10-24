@@ -20,6 +20,7 @@ pub(crate) async fn send_user_message(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UserMessageRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::user", "send_user_message");
     let user_data_payload = FrontendMessagePayload::UserDataPayload {
         method: "send_user_message".to_owned(),
         message: request.data.unwrap_or(serde_json::Value::Null),

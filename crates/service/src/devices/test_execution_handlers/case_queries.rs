@@ -11,6 +11,7 @@ use axum::{
 use std::sync::Arc;
 
 pub(super) async fn add_logs(state: &AppState, execution: &mut serde_json::Value) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "add_logs");
     let test_id = execution
         .get("testId")
         .and_then(serde_json::Value::as_str)
@@ -30,6 +31,7 @@ pub async fn single(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "single");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -57,6 +59,7 @@ pub async fn case_ids(
     State(state): State<Arc<AppState>>,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "case_ids");
     let Some(repository) = &state.device_repository else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -81,6 +84,7 @@ pub async fn cases(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "cases");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -110,6 +114,7 @@ pub async fn testcase(
     headers: HeaderMap,
     Path(case_id): Path<i64>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "testcase");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -138,6 +143,7 @@ pub async fn logs(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "logs");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -179,6 +185,7 @@ pub async fn testcase_log(
     headers: HeaderMap,
     Path(case_id): Path<i64>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::case_queries", "testcase_log");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

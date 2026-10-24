@@ -11,6 +11,7 @@ pub(crate) async fn configure_relay_channels(
     headers: HeaderMap,
     payload: Result<Json<RelayConfigurationRequest>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::configuration", "configure_relay_channels");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -75,6 +76,7 @@ pub(crate) async fn confirm_relay_configuration(
     State(state): State<Arc<AppState>>,
     payload: Result<Json<RelayConfigurationConfirmation>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::configuration", "confirm_relay_configuration");
     let Json(confirmation) = match payload {
         Ok(payload) => payload,
         Err(_) => {
@@ -112,6 +114,7 @@ pub(crate) async fn confirm_relay_configuration(
 }
 
 pub(crate) fn confirmation_events(response: &RelayConfirmationResponse) -> Vec<ServerEvent> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_handlers::configuration", "confirmation_events");
     let Some(relay_id) = response.relay_id else {
         return Vec::new();
     };

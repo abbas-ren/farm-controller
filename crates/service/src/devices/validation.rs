@@ -18,6 +18,7 @@ pub(crate) struct DeviceInterfaceInput {
 pub(crate) fn validate_device_registration(
     registration: &DeviceRegistration,
 ) -> Result<String, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "validate_device_registration");
     let octets: Vec<&str> = registration.mac_address.split([':', '-']).collect();
     if octets.len() != 6
         || octets
@@ -59,6 +60,7 @@ pub(crate) fn validate_device_registration(
 
 /// Flattens grouped interface IDs into rows suitable for persistence.
 pub(crate) fn device_interfaces(registration: &DeviceRegistration) -> Vec<DeviceInterfaceInput> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_interfaces");
     registration
         .interfaces
         .iter()
@@ -75,6 +77,7 @@ pub(crate) fn device_interfaces(registration: &DeviceRegistration) -> Vec<Device
 
 /// Compares dotted firmware versions using the legacy upgrade direction.
 pub(crate) fn compare_versions(current: &str, target: &str) -> i8 {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "compare_versions");
     let normalize = |version: &str| {
         version
             .trim()
@@ -107,6 +110,7 @@ pub(crate) fn compare_versions(current: &str, target: &str) -> i8 {
 pub(crate) fn relay_configurations(
     request: RelayConfigurationRequest,
 ) -> Result<(Vec<RelayChannelConfiguration>, bool), DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_configurations");
     let (configurations, is_batch) = match request {
         RelayConfigurationRequest::One(configuration) => (vec![configuration], false),
         RelayConfigurationRequest::Many(configurations) => (configurations, true),
@@ -155,6 +159,7 @@ pub(crate) fn relay_configurations(
 pub(crate) fn relay_channels(
     relay: &RelayRegistration,
 ) -> Result<Vec<RelayChannelRegistration>, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_channels");
     if !relay.channels.is_empty() {
         if relay
             .channels
@@ -200,6 +205,7 @@ pub(crate) fn relay_channels(
 pub(crate) fn validate_registration(
     registration: &ControllerRegistration,
 ) -> Result<(), DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "validate_registration");
     if registration.ip_address.trim().is_empty() {
         return Err(DeviceRepositoryError::Validation(
             "ipAddress must not be empty".to_owned(),
@@ -210,6 +216,7 @@ pub(crate) fn validate_registration(
 
 /// Removes supported MAC separators and validates a hexadecimal controller ID.
 pub(crate) fn normalized_controller_id(mac_address: &str) -> Result<String, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "normalized_controller_id");
     let controller_id = mac_address.trim().replace([':', '-'], "").to_lowercase();
     if controller_id.is_empty()
         || !controller_id
@@ -225,6 +232,7 @@ pub(crate) fn normalized_controller_id(mac_address: &str) -> Result<String, Devi
 
 /// Normalizes a mapping callback MAC with the controller identity rules.
 pub(crate) fn normalize_mapping_mac(mac_address: &str) -> Result<String, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "normalize_mapping_mac");
     normalized_controller_id(mac_address)
 }
 
@@ -239,6 +247,7 @@ mod tests {
     use super::*;
 
     fn device_registration() -> DeviceRegistration {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration");
         DeviceRegistration {
             mac_address: "00:1A:2b:3C:4d:5E".to_owned(),
             ip_address: "192.168.1.20".to_owned(),
@@ -257,6 +266,7 @@ mod tests {
 
     #[test]
     fn device_registration_normalizes_mac_and_accepts_ipv4() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration_normalizes_mac_and_accepts_ipv4");
         assert_eq!(
             validate_device_registration(&device_registration()).unwrap(),
             "001a2b3c4d5e"
@@ -265,6 +275,7 @@ mod tests {
 
     #[test]
     fn device_registration_rejects_invalid_mac_ipv4_and_empty_name() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration_rejects_invalid_mac_ipv4_and_empty_name");
         let mut registration = device_registration();
         registration.mac_address = "001a2b3c4d5e".to_owned();
         assert!(validate_device_registration(&registration).is_err());
@@ -280,6 +291,7 @@ mod tests {
 
     #[test]
     fn device_registration_flattens_interfaces_by_type() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "device_registration_flattens_interfaces_by_type");
         let mut registration = device_registration();
         registration.interfaces.insert(
             "ethernet".to_owned(),
@@ -310,6 +322,7 @@ mod tests {
 
     #[test]
     fn firmware_version_comparison_matches_legacy_direction() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "firmware_version_comparison_matches_legacy_direction");
         assert_eq!(compare_versions("v1.2.3", "1.3.0-beta"), 1);
         assert_eq!(compare_versions("2.0", "v1.9.9"), -1);
         assert_eq!(compare_versions("1.2", "1.2.0"), 0);
@@ -317,6 +330,7 @@ mod tests {
     }
 
     fn configuration(channel_id: Uuid, device_id: Option<&str>) -> RelayChannelConfiguration {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "configuration");
         let gpio = device_id
             .is_some_and(|device_id| !device_id.trim().is_empty())
             .then(|| "17".to_owned());
@@ -332,6 +346,7 @@ mod tests {
 
     #[test]
     fn relay_configuration_rejects_duplicate_channels() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_configuration_rejects_duplicate_channels");
         let channel_id = Uuid::new_v4();
         let error = relay_configurations(RelayConfigurationRequest::Many(vec![
             configuration(channel_id, Some("device-a")),
@@ -343,6 +358,7 @@ mod tests {
 
     #[test]
     fn relay_configuration_rejects_duplicate_non_empty_devices() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_configuration_rejects_duplicate_non_empty_devices");
         let error = relay_configurations(RelayConfigurationRequest::Many(vec![
             configuration(Uuid::new_v4(), Some("device-a")),
             configuration(Uuid::new_v4(), Some("device-a")),
@@ -353,6 +369,7 @@ mod tests {
 
     #[test]
     fn relay_configuration_allows_multiple_clears() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::validation", "relay_configuration_allows_multiple_clears");
         let (configurations, is_batch) =
             relay_configurations(RelayConfigurationRequest::Many(vec![
                 configuration(Uuid::new_v4(), None),

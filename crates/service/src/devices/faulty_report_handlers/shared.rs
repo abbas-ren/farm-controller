@@ -7,6 +7,7 @@ pub(super) async fn context(
     headers: &HeaderMap,
     role: Option<&str>,
 ) -> Result<(HeaderMap, Arc<dyn DeviceRepository>), Box<axum::response::Response>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::shared", "context");
     let response_headers = auth::authorize_request(state, headers, role)
         .await
         .map_err(|error| Box::new(error.into_response()))?;
@@ -21,6 +22,7 @@ pub(super) async fn context(
 }
 
 pub(super) fn report_id(value: &str) -> Result<Uuid, Box<axum::response::Response>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::shared", "report_id");
     Uuid::parse_str(value).map_err(|_| {
         Box::new(
             (
@@ -33,6 +35,7 @@ pub(super) fn report_id(value: &str) -> Result<Uuid, Box<axum::response::Respons
 }
 
 pub(super) fn safe_file_name(value: &str) -> Option<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::shared", "safe_file_name");
     let name = FilePath::new(value).file_name()?.to_str()?;
     let extension = FilePath::new(name)
         .extension()
@@ -44,12 +47,14 @@ pub(super) fn safe_file_name(value: &str) -> Option<String> {
 }
 
 pub(super) fn safe_segment(value: &str) -> bool {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::shared", "safe_segment");
     let mut components = FilePath::new(value).components();
     matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()
 }
 
 pub(super) async fn remove_pending(path: Option<&PathBuf>) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::shared", "remove_pending");
     if let Some(path) = path {
         let _ = tokio::fs::remove_file(path).await;
     }

@@ -19,14 +19,17 @@ pub struct ControllerRegistration {
 }
 
 fn default_device_state() -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::types::registration", "default_device_state");
     "free".to_owned()
 }
 
 fn default_device_status() -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::types::registration", "default_device_status");
     "requested".to_owned()
 }
 
 fn default_heartbeat_timeout() -> i64 {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::types::registration", "default_heartbeat_timeout");
     5
 }
 

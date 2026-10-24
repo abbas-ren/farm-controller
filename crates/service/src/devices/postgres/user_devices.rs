@@ -1,4 +1,50 @@
 use super::*;
+use super::json_models::{device_json, interface_json, test_case_json, test_execution_json};
+
+use crate::persistence::entity::{device, device_interface, test_case, test_execution};
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    sea_query::{Expr, extension::postgres::PgExpr},
+};
+
+fn user_device_filters(
+    mut select: sea_orm::Select<device::Entity>,
+    family: &str,
+    state_filter: &str,
+    search: &str,
+    show_all: bool,
+) -> sea_orm::Select<device::Entity> {
+    select = select
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved));
+    if !family.is_empty() && !family.eq_ignore_ascii_case("ALL") {
+        let pattern = format!("%{family}%");
+        select = select.filter(Expr::col(device::Column::DeviceFamily).ilike(pattern));
+    }
+    if !state_filter.is_empty() && !state_filter.eq_ignore_ascii_case("all") {
+        select = select.filter(Expr::cust_with_values(
+            r#"state::text = $1"#,
+            [state_filter],
+        ));
+    }
+    if !search.is_empty() {
+        let pattern = format!("%{search}%");
+        select = select.filter(
+            Condition::any()
+                .add(Expr::col(device::Column::DeviceName).ilike(&pattern))
+                .add(Expr::col(device::Column::SoftwareVersion).ilike(&pattern)),
+        );
+    }
+    if !show_all {
+        select = select.filter(Expr::cust(
+            r#"(state::text IN ('free', 'busy') OR (
+                "lastTestExecution" IS NOT NULL
+                AND COALESCE("lastExecutionStatus"::text, '') NOT IN ('failed', 'completed', 'cancelled')
+                AND state::text <> 'unknown'))"#,
+        ));
+    }
+    select
+}
 
 #[async_trait]
 impl UserDeviceRepository for PostgresDeviceRepository {
@@ -6,6 +52,10 @@ impl UserDeviceRepository for PostgresDeviceRepository {
         &self,
         query: &UserDeviceListQuery,
     ) -> Result<DeviceList, DeviceRepositoryError> {
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::user_devices",
+            "list_user_devices",
+        );
         let page = query.page.unwrap_or(1).max(1);
         let limit = query.limit.unwrap_or(10).clamp(1, MAX_PAGE_SIZE);
         let offset = i64::from(page.saturating_sub(1)) * i64::from(limit);
@@ -20,54 +70,72 @@ impl UserDeviceRepository for PostgresDeviceRepository {
             _ => "createdAt",
         };
         let descending = query.desc.unwrap_or(true);
-        let total_devices: i64 = sqlx::query_scalar(
-            r#"SELECT count(*) FROM devices d WHERE d."deletedAt" IS NULL
-               AND d.status::text = 'approved'
-               AND ($1 = '' OR upper($1) = 'ALL' OR d."deviceFamily" ILIKE '%' || $1 || '%')
-               AND ($2 = '' OR lower($2) = 'all' OR d.state::text = $2)
-               AND ($3 = '' OR d."deviceName" ILIKE '%' || $3 || '%'
-                    OR d."softwareVersion" ILIKE '%' || $3 || '%')
-               AND ($4 OR d.state::text IN ('free', 'busy') OR (
-                    d."lastTestExecution" IS NOT NULL
-                    AND COALESCE(d."lastExecutionStatus"::text, '') NOT IN ('failed', 'completed', 'cancelled')
-                    AND d.state::text <> 'unknown'))"#,
-        )
-        .bind(family).bind(state_filter).bind(search).bind(show_all)
-        .fetch_one(&self.pool).await?;
-        let data = sqlx::query_scalar::<_, serde_json::Value>(
-            r#"SELECT to_jsonb(d) || jsonb_build_object(
-                'interfaces', COALESCE((SELECT jsonb_agg(to_jsonb(di) ORDER BY di.id)
-                    FROM device_interfaces di WHERE di."deviceId" = d."deviceId"), '[]'::jsonb),
-                'testExecutions', COALESCE((SELECT jsonb_agg(to_jsonb(te) || jsonb_build_object(
-                    'testCases', COALESCE((SELECT jsonb_agg(to_jsonb(tc) ORDER BY tc.id)
-                        FROM testcase tc WHERE tc."executionId" = te."testId"), '[]'::jsonb)))
-                    FROM (SELECT * FROM test_executions WHERE "deviceId" = d."deviceId"
-                        ORDER BY "updatedAt" DESC LIMIT 1) te), '[]'::jsonb))
-               FROM devices d WHERE d."deletedAt" IS NULL AND d.status::text = 'approved'
-               AND ($1 = '' OR upper($1) = 'ALL' OR d."deviceFamily" ILIKE '%' || $1 || '%')
-               AND ($2 = '' OR lower($2) = 'all' OR d.state::text = $2)
-               AND ($3 = '' OR d."deviceName" ILIKE '%' || $3 || '%'
-                    OR d."softwareVersion" ILIKE '%' || $3 || '%')
-               AND ($4 OR d.state::text IN ('free', 'busy') OR (
-                    d."lastTestExecution" IS NOT NULL
-                    AND COALESCE(d."lastExecutionStatus"::text, '') NOT IN ('failed', 'completed', 'cancelled')
-                    AND d.state::text <> 'unknown'))
-               ORDER BY
-                 CASE WHEN $5 IN ('createdAt') AND $6 THEN d."createdAt" END DESC,
-                 CASE WHEN $5 IN ('createdAt') AND NOT $6 THEN d."createdAt" END ASC,
-                 CASE WHEN $5 IN ('updatedAt', 'lastTestExecution') AND $6 THEN d."updatedAt" END DESC,
-                 CASE WHEN $5 IN ('updatedAt', 'lastTestExecution') AND NOT $6 THEN d."updatedAt" END ASC,
-                 CASE WHEN $5 = 'deviceName' AND $6 THEN d."deviceName" END DESC,
-                 CASE WHEN $5 = 'deviceName' AND NOT $6 THEN d."deviceName" END ASC,
-                 CASE WHEN $5 = 'status' AND $6 THEN d.status::text END DESC,
-                 CASE WHEN $5 = 'status' AND NOT $6 THEN d.status::text END ASC,
-                 CASE WHEN $5 = 'softwareVersion' AND $6 THEN d."softwareVersion" END DESC,
-                 CASE WHEN $5 = 'softwareVersion' AND NOT $6 THEN d."softwareVersion" END ASC
-               LIMIT $7 OFFSET $8"#,
-        )
-        .bind(family).bind(state_filter).bind(search).bind(show_all)
-        .bind(sort_by).bind(descending).bind(i64::from(limit)).bind(offset)
-        .fetch_all(&self.pool).await?;
+
+        let total_devices =
+            user_device_filters(device::Entity::find(), family, state_filter, search, show_all)
+                .count(self.orm())
+                .await? as i64;
+
+        let mut select =
+            user_device_filters(device::Entity::find(), family, state_filter, search, show_all);
+        select = match (sort_by, descending) {
+            ("updatedAt" | "lastTestExecution", true) => {
+                select.order_by_desc(device::Column::UpdatedAt)
+            }
+            ("updatedAt" | "lastTestExecution", false) => {
+                select.order_by_asc(device::Column::UpdatedAt)
+            }
+            ("deviceName", true) => select.order_by_desc(device::Column::DeviceName),
+            ("deviceName", false) => select.order_by_asc(device::Column::DeviceName),
+            ("status", true) => select.order_by_desc(device::Column::Status),
+            ("status", false) => select.order_by_asc(device::Column::Status),
+            ("softwareVersion", true) => select.order_by_desc(device::Column::SoftwareVersion),
+            ("softwareVersion", false) => select.order_by_asc(device::Column::SoftwareVersion),
+            (_, true) => select.order_by_desc(device::Column::CreatedAt),
+            (_, false) => select.order_by_asc(device::Column::CreatedAt),
+        };
+        let devices = select
+            .limit(u64::from(limit))
+            .offset(offset as u64)
+            .all(self.orm())
+            .await?;
+
+        let mut data = Vec::with_capacity(devices.len());
+        for device_model in devices {
+            let interfaces = device_interface::Entity::find()
+                .filter(device_interface::Column::DeviceId.eq(&device_model.device_id))
+                .order_by_asc(device_interface::Column::Id)
+                .all(self.orm())
+                .await?
+                .iter()
+                .map(interface_json)
+                .collect::<Vec<_>>();
+            let executions = test_execution::Entity::find()
+                .filter(test_execution::Column::DeviceId.eq(&device_model.device_id))
+                .order_by_desc(test_execution::Column::UpdatedAt)
+                .limit(1)
+                .all(self.orm())
+                .await?;
+            let mut test_executions = Vec::new();
+            for execution in executions {
+                let cases = test_case::Entity::find()
+                    .filter(test_case::Column::ExecutionId.eq(&execution.test_id))
+                    .order_by_asc(test_case::Column::Id)
+                    .all(self.orm())
+                    .await?
+                    .iter()
+                    .map(test_case_json)
+                    .collect::<Vec<_>>();
+                let mut value = test_execution_json(&execution);
+                value["testCases"] = serde_json::Value::Array(cases);
+                test_executions.push(value);
+            }
+            let mut value = device_json(&device_model);
+            value["interfaces"] = serde_json::Value::Array(interfaces);
+            value["testExecutions"] = serde_json::Value::Array(test_executions);
+            data.push(value);
+        }
+
         Ok(DeviceList {
             data,
             total_pages: u64::try_from(total_devices)
@@ -83,16 +151,31 @@ impl UserDeviceRepository for PostgresDeviceRepository {
     }
 
     async fn active_devices(&self) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
-        Ok(sqlx::query_scalar::<_, serde_json::Value>(
-            r#"SELECT to_jsonb(d) || jsonb_build_object(
-                'interfaces', COALESCE((SELECT jsonb_agg(to_jsonb(di) ORDER BY di.id)
-                    FROM device_interfaces di WHERE di."deviceId" = d."deviceId"), '[]'::jsonb))
-               FROM devices d
-               WHERE d."deletedAt" IS NULL AND d.status::text = 'approved'
-               ORDER BY d."createdAt" DESC"#,
-        )
-        .fetch_all(&self.pool)
-        .await?)
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::user_devices",
+            "active_devices",
+        );
+        let devices = device::Entity::find()
+            .filter(device::Column::DeletedAt.is_null())
+            .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+            .order_by_desc(device::Column::CreatedAt)
+            .all(self.orm())
+            .await?;
+        let mut data = Vec::with_capacity(devices.len());
+        for device_model in devices {
+            let interfaces = device_interface::Entity::find()
+                .filter(device_interface::Column::DeviceId.eq(&device_model.device_id))
+                .order_by_asc(device_interface::Column::Id)
+                .all(self.orm())
+                .await?
+                .iter()
+                .map(interface_json)
+                .collect::<Vec<_>>();
+            let mut value = device_json(&device_model);
+            value["interfaces"] = serde_json::Value::Array(interfaces);
+            data.push(value);
+        }
+        Ok(data)
     }
 
     async fn update_heartbeat_timeout(
@@ -100,15 +183,21 @@ impl UserDeviceRepository for PostgresDeviceRepository {
         device_id: &str,
         value: i64,
     ) -> Result<bool, DeviceRepositoryError> {
-        Ok(sqlx::query(
-            r#"UPDATE devices SET "heartbeatTimer" = $2, "updatedAt" = now()
-               WHERE "deviceId" = $1 AND "deletedAt" IS NULL"#,
-        )
-        .bind(device_id)
-        .bind(value)
-        .execute(&self.pool)
-        .await?
-        .rows_affected()
-            > 0)
+        let _api_trace = crate::observability::ApiTrace::enter(
+            "devices::postgres::user_devices",
+            "update_heartbeat_timeout",
+        );
+        let timer = i32::try_from(value).unwrap_or(i32::MAX);
+        let result = device::Entity::update_many()
+            .col_expr(device::Column::HeartbeatTimer, Expr::value(timer))
+            .col_expr(
+                device::Column::UpdatedAt,
+                Expr::value(chrono::Utc::now()),
+            )
+            .filter(device::Column::DeviceId.eq(device_id))
+            .filter(device::Column::DeletedAt.is_null())
+            .exec(self.orm())
+            .await?;
+        Ok(result.rows_affected > 0)
     }
 }

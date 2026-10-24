@@ -1,6 +1,6 @@
 use crate::socket::types::farm::ServerEvent;
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct StaleAction {
     pub id: uuid::Uuid,
     pub job_type: String,

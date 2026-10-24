@@ -7,6 +7,7 @@ async fn download(
     field: &str,
     missing: &str,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::downloads", "download");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -68,6 +69,7 @@ async fn download(
 }
 
 fn missing_file(missing: &str, id: Uuid) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::downloads", "missing_file");
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({"message": format!("{missing} file not found for report {id}")})),
@@ -76,6 +78,7 @@ fn missing_file(missing: &str, id: Uuid) -> axum::response::Response {
 }
 
 fn content_type(name: &str) -> &'static str {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::downloads", "content_type");
     match FilePath::new(name)
         .extension()
         .and_then(|value| value.to_str())
@@ -100,6 +103,7 @@ pub(crate) async fn download_file(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::downloads", "download_file");
     download(state, headers, id, "filePath", "attachment").await
 }
 
@@ -109,5 +113,6 @@ pub(crate) async fn download_logs(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::downloads", "download_logs");
     download(state, headers, id, "logsPath", "logs").await
 }

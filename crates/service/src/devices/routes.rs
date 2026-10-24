@@ -57,6 +57,7 @@ use super::{
 };
 
 pub(crate) fn router() -> Router<Arc<AppState>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::routes", "router");
     Router::new()
         .route("/", get(list_devices).post(register_device))
         .route("/export", get(export_devices))

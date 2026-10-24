@@ -10,6 +10,7 @@ impl KeycloakIdentityProvider {
         token: &str,
         user_id: &str,
     ) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::password", "verify_reset_user_impl");
         let claims = self.introspect(token).await?;
         if !claims.active {
             return Err(IdentityError::upstream(
@@ -32,6 +33,7 @@ impl KeycloakIdentityProvider {
         user_id: &str,
         password: &str,
     ) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::password", "reset_password_impl");
         self.verify_reset_user_impl(token, user_id).await?;
         let response = self
             .client
@@ -60,6 +62,7 @@ impl KeycloakIdentityProvider {
     }
 
     pub(super) async fn forgot_password_impl(&self, username: &str) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::password", "forgot_password_impl");
         let token = self.client_token().await?;
         let mut users_url = self.endpoint(&format!("admin/realms/{}/users", self.config.realm))?;
         users_url

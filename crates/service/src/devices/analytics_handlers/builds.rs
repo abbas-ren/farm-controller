@@ -6,6 +6,7 @@ pub(crate) async fn build_comparisons(
     headers: HeaderMap,
     Query(query): Query<RecentExecutionQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::builds", "build_comparisons");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -27,6 +28,7 @@ pub(crate) async fn build_comparison_by_id(
     headers: HeaderMap,
     Path(build_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::builds", "build_comparison_by_id");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -52,6 +54,7 @@ pub(crate) async fn builds_performance(
     headers: HeaderMap,
     Query(query): Query<RecentExecutionQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::builds", "builds_performance");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -69,6 +72,7 @@ pub(crate) async fn build_performance_by_id(
     headers: HeaderMap,
     Path(build_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::builds", "build_performance_by_id");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,

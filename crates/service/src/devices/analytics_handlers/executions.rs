@@ -6,6 +6,7 @@ pub(crate) async fn recent_executions(
     headers: HeaderMap,
     Query(query): Query<RecentExecutionQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::executions", "recent_executions");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -26,6 +27,7 @@ pub(crate) async fn daily_executions(
     headers: HeaderMap,
     Query(query): Query<ExecutionDailyQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::executions", "daily_executions");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -61,6 +63,7 @@ pub(crate) async fn execution_by_id(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::analytics_handlers::executions", "execution_by_id");
     let context = match analytics_context(&state, &headers).await {
         Ok(context) => context,
         Err(response) => return *response,

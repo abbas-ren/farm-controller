@@ -61,7 +61,7 @@ pub(crate) struct TestCancellationResult {
     pub test_cycle_id: Option<String>,
 }
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug)]
 pub(crate) struct TestCompletionTarget {
     pub status: String,
     pub device_family: Option<String>,
@@ -136,7 +136,7 @@ pub(crate) struct BuildStatusResult {
     pub alert: serde_json::Value,
 }
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug)]
 pub(crate) struct TestExportRow {
     pub test_plan_name: String,
     pub status: String,
@@ -172,7 +172,7 @@ pub(crate) struct DeviceRebootTarget {
     pub power_port: Option<String>,
 }
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, sqlx::FromRow, sea_orm::FromQueryResult)]
 pub(crate) struct DevicePowerTarget {
     pub device_family: Option<String>,
     pub current_power: Option<String>,
@@ -183,7 +183,7 @@ pub(crate) struct DevicePowerTarget {
     pub channel_number: Option<i32>,
 }
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, sqlx::FromRow, sea_orm::FromQueryResult)]
 pub(crate) struct RelayStateTarget {
     pub controller_ip: String,
     pub relay_serial: String,
@@ -191,7 +191,7 @@ pub(crate) struct RelayStateTarget {
     pub channel_number: i32,
 }
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, sqlx::FromRow, sea_orm::FromQueryResult)]
 pub(crate) struct RelayIdentityTarget {
     pub controller_id: String,
     pub controller_ip: String,
@@ -227,6 +227,7 @@ pub(crate) struct DeviceHeartbeatResult {
     #[allow(unused)]
     pub post_update_events: Vec<ServerEvent>,
     pub deferred_cancellations: Vec<DeferredCancellation>,
+    pub deferred_test_logs: Vec<DeferredTestLog>,
 }
 
 #[derive(Clone, Debug)]
@@ -235,6 +236,12 @@ pub(crate) struct DeferredCancellation {
     pub build_id: String,
     #[allow(unused)]
     pub created_by: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DeferredTestLog {
+    pub test_id: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Default)]

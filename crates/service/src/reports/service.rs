@@ -62,11 +62,13 @@ impl ReportService {
     }
 
     pub(crate) fn with_event_publisher(mut self, event_publisher: Arc<EventHub>) -> Self {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "with_event_publisher");
         self.event_publisher = Some(event_publisher);
         self
     }
 
     pub async fn enqueue(&self, request: ReportRequest) -> Result<Uuid, ReportError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "enqueue");
         self.enqueue_with_id(Uuid::new_v4(), request).await
     }
 
@@ -75,6 +77,7 @@ impl ReportService {
         job_id: Uuid,
         request: ReportRequest,
     ) -> Result<Uuid, ReportError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "enqueue_with_id");
         super::validate_request(&request)?;
         self.jobs.write().await.insert(
             job_id,
@@ -100,6 +103,7 @@ impl ReportService {
     }
 
     pub async fn status(&self, job_id: Uuid) -> Option<ReportJobSnapshot> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "status");
         self.jobs.read().await.get(&job_id).cloned()
     }
 
@@ -107,6 +111,7 @@ impl ReportService {
         &self,
         cancellation: CancellationToken,
     ) -> Option<tokio::task::JoinHandle<()>> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "start_worker");
         let service = self.clone();
         Some(tokio::spawn(async move {
             let Some(mut receiver) = service.receiver.lock().await.take() else {
@@ -126,6 +131,7 @@ impl ReportService {
     }
 
     async fn process(&self, job_id: Uuid, request: ReportRequest) {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "process");
         tracing::info!(%job_id, worker = "reports", "report job started");
         self.set_status(job_id, ReportStatus::Processing, None)
             .await;
@@ -146,6 +152,7 @@ impl ReportService {
     }
 
     async fn generate(&self, job_id: Uuid, request: &ReportRequest) -> Result<(), ReportError> {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "generate");
         let root = report_root(&self.config.test_results_dir, request)?;
         tokio::fs::create_dir_all(&root).await?;
         append_log(
@@ -206,6 +213,7 @@ impl ReportService {
     }
 
     async fn set_status(&self, job_id: Uuid, status: ReportStatus, error: Option<String>) {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "set_status");
         if matches!(status, ReportStatus::Completed | ReportStatus::Failed)
             && let Err(persistence_error) = self
                 .data_source
@@ -230,6 +238,7 @@ impl ReportService {
     }
 
     fn publish_status(&self, snapshot: &ReportJobSnapshot) {
+        let _api_trace = crate::observability::ApiTrace::enter("reports::service", "publish_status");
         let Some(event_publisher) = &self.event_publisher else {
             return;
         };

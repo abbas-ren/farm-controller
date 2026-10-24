@@ -5,6 +5,7 @@ pub(crate) async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::records", "list");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -20,6 +21,7 @@ async fn report_detail(
     repository: &Arc<dyn DeviceRepository>,
     id: Uuid,
 ) -> Result<serde_json::Value, Box<axum::response::Response>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::records", "report_detail");
     let Some(mut detail) = repository
         .faulty_report_by_id(id)
         .await
@@ -63,6 +65,7 @@ pub(crate) async fn by_id(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::records", "by_id");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -84,6 +87,7 @@ pub(crate) async fn update_status(
     Path(id): Path<String>,
     Json(request): Json<FaultyReportStatusRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::records", "update_status");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,
@@ -119,6 +123,7 @@ pub(crate) async fn delete(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::faulty_report_handlers::records", "delete");
     let (response_headers, repository) = match context(&state, &headers, Some("admin")).await {
         Ok(context) => context,
         Err(response) => return *response,

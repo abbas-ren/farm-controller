@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 use crate::socket::types::farm::ServerEvent;
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct StuckDevice {
     pub device_id: String,
     pub attempted_at: Option<DateTime<Utc>>,
@@ -10,7 +10,7 @@ pub struct StuckDevice {
     pub power_port: Option<String>,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sea_orm::FromQueryResult)]
 pub struct FailedTest {
     pub test_id: String,
     pub build_id: Option<String>,

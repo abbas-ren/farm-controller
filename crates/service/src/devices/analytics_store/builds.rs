@@ -1,13 +1,23 @@
-use sqlx::PgPool;
+use sea_orm::{DatabaseBackend, DatabaseConnection, FromQueryResult, Statement};
 
 use super::super::error::DeviceRepositoryError;
 
+#[derive(Debug, FromQueryResult)]
+struct JsonRow {
+    value: serde_json::Value,
+}
+
 pub(crate) async fn build_comparisons(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     user_id: &str,
     count: i64,
 ) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
-    Ok(sqlx::query_scalar(
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::analytics_store::builds",
+        "build_comparisons",
+    );
+    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"WITH builds AS (
                  SELECT te."buildId" AS build_id, max(te."createdAt") AS last_used
                  FROM test_executions te JOIN releases r ON r.id::text = te."buildId"
@@ -38,24 +48,31 @@ pub(crate) async fn build_comparisons(
                      THEN round((m.duration_ms / m.executions)::numeric, 2) ELSE 0 END,
                  'totalTestCases', m.total_cases,
                  'passedPercentage', CASE WHEN m.total_cases > 0
-                     THEN round((m.passed_cases::numeric / m.total_cases) * 100, 2) ELSE 0 END)
+                     THEN round((m.passed_cases::numeric / m.total_cases) * 100, 2) ELSE 0 END) AS value
              FROM metrics m JOIN releases r ON r.id::text = m.build_id
              ORDER BY CASE WHEN m.total_cases > 0
                  THEN m.passed_cases::numeric / m.total_cases ELSE 0 END DESC,
                  m.last_used DESC LIMIT $2"#,
-    )
-    .bind(user_id)
-    .bind(count)
-    .fetch_all(pool)
-    .await?)
+        [user_id.into(), count.into()],
+    ))
+    .all(orm)
+    .await?
+    .into_iter()
+    .map(|row| row.value)
+    .collect())
 }
 
 pub(crate) async fn build_comparison_by_id(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     user_id: &str,
     build_id: &str,
 ) -> Result<Option<serde_json::Value>, DeviceRepositoryError> {
-    Ok(sqlx::query_scalar(
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::analytics_store::builds",
+        "build_comparison_by_id",
+    );
+    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT jsonb_build_object(
                  'buildId', $2::text,
                  'buildVersion', COALESCE((SELECT version FROM releases WHERE id::text = $2),
@@ -73,21 +90,26 @@ pub(crate) async fn build_comparison_by_id(
                      count(*) FILTER (WHERE tc.result::text = 'PASS')::numeric /
                          NULLIF(count(*), 0) * 100, 2)
                      FROM testcase tc JOIN test_executions te ON te."testId" = tc."executionId"
-                     WHERE te."buildId" = $2 AND te.status::text = 'completed'), 0))
+                     WHERE te."buildId" = $2 AND te.status::text = 'completed'), 0)) AS value
              WHERE EXISTS(SELECT 1 FROM test_executions
                  WHERE "createdBy" = $1 AND "buildId" = $2 AND status::text = 'completed')"#,
-    )
-    .bind(user_id)
-    .bind(build_id)
-    .fetch_optional(pool)
-    .await?)
+        [user_id.into(), build_id.into()],
+    ))
+    .one(orm)
+    .await?
+    .map(|row| row.value))
 }
 
 pub(crate) async fn build_performance(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     count: i64,
 ) -> Result<Vec<serde_json::Value>, DeviceRepositoryError> {
-    Ok(sqlx::query_scalar(
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::analytics_store::builds",
+        "build_performance",
+    );
+    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"WITH builds AS (
                  SELECT te."buildId" AS build_id, max(te."createdAt") AS last_used
                  FROM test_executions te JOIN releases r ON r.id::text = te."buildId"
@@ -122,20 +144,28 @@ pub(crate) async fn build_performance(
                      FROM device_action_queue WHERE "releaseId"::text = b.build_id
                          AND "targetDeviceId" IS NOT NULL),
                  'executionCount', (SELECT count(*) FROM test_executions
-                     WHERE "buildId" = b.build_id))
+                     WHERE "buildId" = b.build_id)) AS value
              FROM builds b JOIN releases r ON r.id::text = b.build_id
              ORDER BY b.last_used DESC"#,
-    )
-    .bind(count)
-    .fetch_all(pool)
-    .await?)
+        [count.into()],
+    ))
+    .all(orm)
+    .await?
+    .into_iter()
+    .map(|row| row.value)
+    .collect())
 }
 
 pub(crate) async fn build_performance_by_id(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     build_id: &str,
 ) -> Result<serde_json::Value, DeviceRepositoryError> {
-    Ok(sqlx::query_scalar(
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::analytics_store::builds",
+        "build_performance_by_id",
+    );
+    Ok(JsonRow::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"SELECT jsonb_build_object(
                  'buildId', $1::text, 'buildVersion', COALESCE(r.version,
                      (SELECT "buildVersion" FROM test_executions WHERE "buildId" = $1
@@ -163,10 +193,12 @@ pub(crate) async fn build_performance_by_id(
                  'uniqueDeviceCount', (SELECT count(DISTINCT "targetDeviceId")
                      FROM device_action_queue WHERE "releaseId"::text = $1
                          AND "targetDeviceId" IS NOT NULL),
-                 'executionCount', (SELECT count(*) FROM test_executions WHERE "buildId" = $1))
+                 'executionCount', (SELECT count(*) FROM test_executions WHERE "buildId" = $1)) AS value
              FROM (SELECT 1) seed LEFT JOIN releases r ON r.id::text = $1"#,
-    )
-    .bind(build_id)
-    .fetch_one(pool)
-    .await?)
+        [build_id.into()],
+    ))
+    .one(orm)
+    .await?
+    .map(|row| row.value)
+    .unwrap_or_else(|| serde_json::json!({})))
 }

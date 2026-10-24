@@ -1,6 +1,13 @@
 use std::path::Path;
 
-use sqlx::PgPool;
+use chrono::Utc;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    TransactionTrait,
+};
+use uuid::Uuid;
+
+use crate::persistence::entity::{alert, device_type_folder, release, upload_build};
 
 use super::super::{
     build_ingestion,
@@ -9,10 +16,12 @@ use super::super::{
 };
 
 pub(crate) async fn finalize_upload(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     request: &BuildUploadFinalization,
 ) -> Result<BuildUploadResult, DeviceRepositoryError> {
-    let upload_id = uuid::Uuid::parse_str(&request.upload_id)
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::build_store::uploads", "finalize_upload");
+    let upload_id = Uuid::parse_str(&request.upload_id)
         .map_err(|_| DeviceRepositoryError::Internal("Upload session not found".to_owned()))?;
     let filename = Path::new(&request.filename)
         .file_name()
@@ -56,7 +65,7 @@ pub(crate) async fn finalize_upload(
         ));
     }
     let is_custom = request.is_custom;
-    let generated_tag = format!("build-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let generated_tag = format!("build-{}", &Uuid::new_v4().simple().to_string()[..8]);
     let stored_tag = tag.unwrap_or(&generated_tag);
     let version = format!(
         "v{}{}",
@@ -67,16 +76,15 @@ pub(crate) async fn finalize_upload(
             String::new()
         }
     );
-    let folder = sqlx::query_as::<_, (String, String)>(
-        r#"SELECT "folderName", "deviceFamily" FROM device_type_folders WHERE "deviceType" = $1"#,
-    )
-    .bind(device_type)
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or_else(|| (device_type.to_owned(), "unknown".to_owned()));
+    let folder = device_type_folder::Entity::find()
+        .filter(device_type_folder::Column::DeviceType.eq(device_type))
+        .one(orm)
+        .await?
+        .map(|row| (row.folder_name, row.device_family))
+        .unwrap_or_else(|| (device_type.to_owned(), "unknown".to_owned()));
     let staging = request
         .artifacts_root
-        .join(format!(".upload-{}", uuid::Uuid::new_v4()));
+        .join(format!(".upload-{}", Uuid::new_v4()));
     let destination = request.artifacts_root.join(&folder.0).join(&version);
     if tokio::fs::try_exists(&destination)
         .await
@@ -124,65 +132,94 @@ pub(crate) async fn finalize_upload(
             .await
             .map_err(|error| DeviceRepositoryError::Internal(error.to_string()))?;
     }
-    let mut transaction = pool.begin().await?;
-    let release_id = uuid::Uuid::new_v4();
-    let status = if is_custom { "passed" } else { "untested" };
-    let release = sqlx::query_scalar::<_, serde_json::Value>(
-        r#"INSERT INTO releases
-               (id, "folderName", version, artifacts, tag, "uploadedBy", "buildType",
-                "deviceFamily", "deviceType", status, "isFaulty", "createdAt", "updatedAt")
-           VALUES ($1, $2, $3, $4, $5, $6, $7::"enum_releases_buildType", $8, $9,
-                   $10::"enum_releases_status", false, now(), now())
-           RETURNING to_jsonb(releases)"#,
-    )
-    .bind(release_id)
-    .bind(&folder.0)
-    .bind(&version)
-    .bind(serde_json::Value::Array(artifacts))
-    .bind(stored_tag)
-    .bind(&request.user_id)
-    .bind(if is_custom { "custom" } else { "official" })
-    .bind(&folder.1)
-    .bind(device_type)
-    .bind(status)
-    .fetch_one(&mut *transaction)
-    .await;
-    let release = match release {
-        Ok(release) => release,
+    let transaction = orm.begin().await?;
+    let release_id = Uuid::new_v4();
+    let now = Utc::now();
+    let status = if is_custom {
+        release::ReleaseTestStatus::Passed
+    } else {
+        release::ReleaseTestStatus::Untested
+    };
+    let build_type = if is_custom {
+        release::BuildType::Custom
+    } else {
+        release::BuildType::Official
+    };
+    let release_model = match (release::ActiveModel {
+        id: Set(release_id),
+        folder_name: Set(folder.0.clone()),
+        version: Set(version.clone()),
+        artifacts: Set(serde_json::Value::Array(artifacts)),
+        tag: Set(stored_tag.to_owned()),
+        uploaded_by: Set(request.user_id.clone()),
+        build_type: Set(build_type),
+        device_family: Set(folder.1.clone()),
+        device_type: Set(device_type.to_owned()),
+        status: Set(Some(status)),
+        is_faulty: Set(Some(false)),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    })
+    .insert(&transaction)
+    .await
+    {
+        Ok(model) => model,
         Err(error) => {
             let _ = transaction.rollback().await;
             let _ = tokio::fs::remove_dir_all(&staging).await;
             return Err(error.into());
         }
     };
-    sqlx::query(
-        r#"UPDATE upload_builds SET status = 'completed', "fileName" = $2,
-               "filesArray" = array_append(COALESCE("filesArray", ARRAY[]::text[]), $2),
-               "completedFiles" = COALESCE("completedFiles", 0) + 1, "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(upload_id)
-    .bind(filename)
-    .execute(&mut *transaction)
+    let release = release_json(&release_model);
+
+    let Some(upload) = upload_build::Entity::find_by_id(upload_id)
+        .one(&transaction)
+        .await?
+    else {
+        let _ = transaction.rollback().await;
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(DeviceRepositoryError::Internal(
+            "Upload session not found".to_owned(),
+        ));
+    };
+    let mut files = upload.files_array;
+    files.push(filename.to_owned());
+    let completed = upload.completed_files.unwrap_or(0) + 1;
+    upload_build::ActiveModel {
+        id: Set(upload.id),
+        file_name: Set(Some(filename.to_owned())),
+        status: Set(upload_build::UploadStatus::Completed),
+        files_array: Set(files),
+        completed_files: Set(Some(completed)),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .update(&transaction)
     .await?;
-    let alert = sqlx::query_scalar::<_, serde_json::Value>(
-        r#"INSERT INTO alerts
-              (id, user_id, title, message, type, status, is_read, build_id,
-               data, created_at, updated_at)
-           VALUES (gen_random_uuid(), 'ADMIN', 'Build Upload Success',
-                   'Build ' || $2 || ' uploaded successfully', 'success', 'unread', false,
-                   $1::text, jsonb_build_object('buildId', $1, 'version', $2,
-                                                'deviceType', $3), now(), now())
-           RETURNING jsonb_build_object(
-               'id', id, 'userId', user_id, 'title', title, 'message', message,
-               'type', type::text, 'status', status::text, 'isRead', is_read,
-               'buildId', build_id, 'data', data, 'createdAt', created_at)"#,
-    )
-    .bind(release_id)
-    .bind(&version)
-    .bind(device_type)
-    .fetch_one(&mut *transaction)
+
+    let alert_model = alert::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        user_id: Set("ADMIN".to_owned()),
+        title: Set("Build Upload Success".to_owned()),
+        message: Set(format!("Build {version} uploaded successfully")),
+        r#type: Set(alert::AlertType::Success),
+        status: Set(alert::AlertStatus::Unread),
+        is_read: Set(false),
+        build_id: Set(Some(release_id.to_string())),
+        data: Set(Some(serde_json::json!({
+            "buildId": release_id,
+            "version": version,
+            "deviceType": device_type,
+        }))),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&transaction)
     .await?;
+    let alert = alert_json(&alert_model);
+
     tokio::fs::rename(&staging, &destination)
         .await
         .map_err(|error| DeviceRepositoryError::Internal(error.to_string()))?;
@@ -195,48 +232,135 @@ pub(crate) async fn finalize_upload(
 }
 
 pub(crate) async fn init_upload(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     file_count: i32,
     user_id: &str,
-) -> Result<uuid::Uuid, DeviceRepositoryError> {
-    let upload_id = uuid::Uuid::new_v4();
-    sqlx::query(r#"INSERT INTO upload_builds (id, status, "userId", "filesArray", "totalFiles", "completedFiles", "createdAt", "updatedAt") VALUES ($1, 'not_started', $2, $3, $4, 0, now(), now())"#)
-        .bind(upload_id)
-        .bind(user_id)
-        .bind(Vec::<String>::new())
-        .bind(file_count)
-        .execute(pool)
-        .await?;
+) -> Result<Uuid, DeviceRepositoryError> {
+    let _api_trace =
+        crate::observability::ApiTrace::enter("devices::build_store::uploads", "init_upload");
+    let upload_id = Uuid::new_v4();
+    let now = Utc::now();
+    upload_build::ActiveModel {
+        id: Set(upload_id),
+        status: Set(upload_build::UploadStatus::NotStarted),
+        user_id: Set(user_id.to_owned()),
+        files_array: Set(Vec::new()),
+        total_files: Set(Some(file_count)),
+        completed_files: Set(Some(0)),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(orm)
+    .await?;
     Ok(upload_id)
 }
 
 pub(crate) async fn mark_upload_started(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     upload_id: &str,
     user_id: &str,
 ) -> Result<(), DeviceRepositoryError> {
-    let upload_id = uuid::Uuid::parse_str(upload_id)
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::build_store::uploads",
+        "mark_upload_started",
+    );
+    let upload_id = Uuid::parse_str(upload_id)
         .map_err(|_| DeviceRepositoryError::Internal("Upload session not found".to_owned()))?;
-    sqlx::query(
-        r#"UPDATE upload_builds SET status = 'uploading', "userId" = $2, "updatedAt" = now()
-           WHERE id = $1"#,
-    )
-    .bind(upload_id)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
+    let now = Utc::now();
+    upload_build::Entity::update_many()
+        .col_expr(
+            upload_build::Column::Status,
+            sea_orm::sea_query::Expr::value(upload_build::UploadStatus::Uploading),
+        )
+        .col_expr(
+            upload_build::Column::UserId,
+            sea_orm::sea_query::Expr::value(user_id.to_owned()),
+        )
+        .col_expr(
+            upload_build::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(now),
+        )
+        .filter(upload_build::Column::Id.eq(upload_id))
+        .exec(orm)
+        .await?;
     Ok(())
 }
 
 pub(crate) async fn mark_upload_failed(
-    pool: &PgPool,
+    orm: &DatabaseConnection,
     upload_id: &str,
 ) -> Result<(), DeviceRepositoryError> {
-    let upload_id = uuid::Uuid::parse_str(upload_id)
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "devices::build_store::uploads",
+        "mark_upload_failed",
+    );
+    let upload_id = Uuid::parse_str(upload_id)
         .map_err(|_| DeviceRepositoryError::Internal("Upload session not found".to_owned()))?;
-    sqlx::query(r#"UPDATE upload_builds SET status = 'failed', "updatedAt" = now() WHERE id = $1"#)
-        .bind(upload_id)
-        .execute(pool)
+    let now = Utc::now();
+    upload_build::Entity::update_many()
+        .col_expr(
+            upload_build::Column::Status,
+            sea_orm::sea_query::Expr::value(upload_build::UploadStatus::Failed),
+        )
+        .col_expr(
+            upload_build::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(now),
+        )
+        .filter(upload_build::Column::Id.eq(upload_id))
+        .exec(orm)
         .await?;
     Ok(())
+}
+
+pub(super) fn release_json(model: &release::Model) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.id,
+        "folderName": model.folder_name,
+        "version": model.version,
+        "artifacts": model.artifacts,
+        "lastScannedAt": model.last_scanned_at,
+        "testedDeviceId": model.tested_device_id,
+        "buildType": match model.build_type {
+            release::BuildType::Custom => "custom",
+            release::BuildType::Official => "official",
+        },
+        "allDevicesFlashed": model.all_devices_flashed,
+        "uploadedBy": model.uploaded_by,
+        "tag": model.tag,
+        "status": model.status.as_ref().map(|s| match s {
+            release::ReleaseTestStatus::Untested => "untested",
+            release::ReleaseTestStatus::Testing => "testing",
+            release::ReleaseTestStatus::Passed => "passed",
+            release::ReleaseTestStatus::Failed => "failed",
+        }),
+        "isFaulty": model.is_faulty,
+        "deviceFamily": model.device_family,
+        "deviceType": model.device_type,
+        "createdAt": model.created_at,
+        "updatedAt": model.updated_at,
+    })
+}
+
+pub(super) fn alert_json(model: &alert::Model) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.id,
+        "userId": model.user_id,
+        "title": model.title,
+        "message": model.message,
+        "type": match model.r#type {
+            alert::AlertType::Info => "info",
+            alert::AlertType::Success => "success",
+            alert::AlertType::Warning => "warning",
+            alert::AlertType::Error => "error",
+        },
+        "status": match model.status {
+            alert::AlertStatus::Unread => "unread",
+            alert::AlertStatus::Read => "read",
+        },
+        "isRead": model.is_read,
+        "buildId": model.build_id,
+        "data": model.data,
+        "createdAt": model.created_at,
+    })
 }

@@ -20,6 +20,7 @@ pub(crate) async fn create(
     length: u64,
     metadata: BTreeMap<String, String>,
 ) -> std::io::Result<TusUpload> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "create");
     tokio::fs::create_dir_all(root).await?;
     let upload = TusUpload {
         id: Uuid::new_v4(),
@@ -33,6 +34,7 @@ pub(crate) async fn create(
 }
 
 pub(crate) async fn load(root: &Path, id: Uuid) -> std::io::Result<TusUpload> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "load");
     let bytes = tokio::fs::read(metadata_path(root, id)).await?;
     serde_json::from_slice(&bytes).map_err(std::io::Error::other)
 }
@@ -43,6 +45,7 @@ pub(crate) async fn append(
     expected_offset: u64,
     bytes: &[u8],
 ) -> std::io::Result<TusUpload> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "append");
     let lock_path = root.join(format!("{id}.lock"));
     let _lock = tokio::fs::OpenOptions::new()
         .write(true)
@@ -79,6 +82,7 @@ pub(crate) async fn append(
 }
 
 pub(crate) async fn rollback(root: &Path, id: Uuid, offset: u64) -> std::io::Result<()> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "rollback");
     let mut upload = load(root, id).await?;
     let file = tokio::fs::OpenOptions::new()
         .write(true)
@@ -90,6 +94,7 @@ pub(crate) async fn rollback(root: &Path, id: Uuid, offset: u64) -> std::io::Res
 }
 
 async fn save(root: &Path, upload: &TusUpload) -> std::io::Result<()> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "save");
     let path = metadata_path(root, upload.id);
     let temporary = path.with_extension("json.tmp");
     let bytes = serde_json::to_vec(upload).map_err(std::io::Error::other)?;
@@ -98,10 +103,12 @@ async fn save(root: &Path, upload: &TusUpload) -> std::io::Result<()> {
 }
 
 pub(crate) fn data_path(root: &Path, id: Uuid) -> PathBuf {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "data_path");
     root.join(id.to_string())
 }
 
 fn metadata_path(root: &Path, id: Uuid) -> PathBuf {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "metadata_path");
     root.join(format!("{id}.json"))
 }
 
@@ -111,6 +118,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_offset_survives_storage_reload() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::tus_store", "upload_offset_survives_storage_reload");
         let directory = tempfile::tempdir().unwrap();
         let upload = create(
             directory.path(),

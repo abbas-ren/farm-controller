@@ -19,6 +19,7 @@ pub async fn report(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "report");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -47,6 +48,7 @@ pub async fn report_html(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "report_html");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -111,6 +113,7 @@ pub async fn create_report(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "create_report");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -187,6 +190,7 @@ pub async fn upload_report(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "upload_report");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -340,6 +344,7 @@ fn publish_report_update(
     error: Option<&str>,
     upload_error: Option<&str>,
 ) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::reports", "publish_report_update");
     for event in super::events::report_update_events(
         report_id,
         test_id,

@@ -11,6 +11,7 @@ impl KeycloakIdentityProvider {
         &self,
         request: &RegistrationRequest,
     ) -> Result<serde_json::Value, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::registration", "request_registration_impl");
         let admin_token = self.client_token().await?;
         let user_id = uuid::Uuid::new_v4().to_string();
         let url = self.endpoint(&format!("admin/realms/{}/users", self.config.realm))?;
@@ -39,6 +40,7 @@ impl KeycloakIdentityProvider {
         &self,
         request: &AdminRegistrationRequest,
     ) -> Result<AdminRegistrationResult, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::registration", "register_user_impl");
         let token = self.client_token().await?;
         let user_id = uuid::Uuid::new_v4().to_string();
         let response = self
@@ -125,6 +127,7 @@ impl KeycloakIdentityProvider {
         &self,
         request: &RegistrationActionRequest,
     ) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::keycloak::provider::registration", "registration_action_impl");
         let token = self.client_token().await?;
         match request.action {
             RegistrationAction::Decline => {

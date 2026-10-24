@@ -5,6 +5,7 @@ use tracing::{info, warn};
 use crate::{socket::helpers::device_heartbeat_events, state::AppState};
 
 pub(crate) async fn device_session(state: Arc<AppState>, device_id: String, mut socket: WebSocket) {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::edge_agent", "device_session");
     info!(device_id, "device WebSocket connected");
     while let Some(message) = socket.recv().await {
         let bytes = match message {
@@ -29,6 +30,7 @@ pub(crate) async fn process_device_heartbeat(
     device_id: &str,
     bytes: &[u8],
 ) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::edge_agent", "process_device_heartbeat");
     let heartbeat: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     if heartbeat.get("type").and_then(serde_json::Value::as_str) != Some("heartbeat") {
@@ -49,6 +51,13 @@ pub(crate) async fn process_device_heartbeat(
             cancellation,
         )
         .await;
+    }
+    for log in &result.deferred_test_logs {
+        if let Err(error) =
+            crate::devices::test_log::append_test_log(state, &log.test_id, &log.message).await
+        {
+            warn!(%error, test_id = %log.test_id, "failed to append deferred heartbeat test log");
+        }
     }
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     for event in device_heartbeat_events(device_id, result, &timestamp) {

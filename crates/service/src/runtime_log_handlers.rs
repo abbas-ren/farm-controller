@@ -79,6 +79,7 @@ pub async fn logs(
     headers: HeaderMap,
     Query(query): Query<RuntimeLogsQuery>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "logs");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -151,6 +152,7 @@ pub async fn update_level(
     headers: HeaderMap,
     Json(request): Json<RuntimeLogLevelRequest>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "update_level");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -196,6 +198,7 @@ async fn proxy_agent(
     limit: Option<usize>,
     body: Option<serde_json::Value>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "proxy_agent");
     let device_id = match canonical_device_id(device_id) {
         Ok(device_id) => device_id,
         Err(message) => return bad_request(message),
@@ -268,6 +271,7 @@ async fn proxy_agent(
 }
 
 fn canonical_device_id(device_id: Option<&str>) -> Result<String, &'static str> {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "canonical_device_id");
     let Some(device_id) = device_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return Err("deviceId is required for EdgeAgent logs");
     };
@@ -281,6 +285,7 @@ async fn approved_device_address(
     state: &AppState,
     device_id: &str,
 ) -> Result<Option<std::net::Ipv4Addr>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "approved_device_address");
     let repository = state
         .device_repository
         .as_ref()
@@ -314,6 +319,7 @@ async fn proxy_edge(
     limit: Option<usize>,
     body: Option<serde_json::Value>,
 ) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "proxy_edge");
     let Some(controller_id) = controller_id.filter(|value| !value.trim().is_empty()) else {
         return bad_request("controllerId is required for EdgeController logs");
     };
@@ -395,6 +401,7 @@ async fn controller_address(
     state: &AppState,
     controller_id: &str,
 ) -> Result<Option<String>, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "controller_address");
     let repository = state
         .device_repository
         .as_ref()
@@ -420,10 +427,12 @@ async fn controller_address(
 }
 
 fn bad_request(message: impl Into<String>) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "bad_request");
     error(StatusCode::BAD_REQUEST, "invalid_request", message)
 }
 
 fn internal_error(message: impl Into<String>) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "internal_error");
     tracing::error!(error = %message.into(), "runtime logging request failed");
     error(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -433,6 +442,7 @@ fn internal_error(message: impl Into<String>) -> Response {
 }
 
 fn error(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
+    let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "error");
     (
         status,
         Json(serde_json::json!({
@@ -448,6 +458,7 @@ mod tests {
 
     #[test]
     fn edge_agent_device_id_is_canonical_mac_without_separators() {
+        let _api_trace = crate::observability::ApiTrace::enter("runtime_log_handlers", "edge_agent_device_id_is_canonical_mac_without_separators");
         assert_eq!(
             canonical_device_id(Some("AABBCCDDEEFF")).unwrap(),
             "aabbccddeeff"

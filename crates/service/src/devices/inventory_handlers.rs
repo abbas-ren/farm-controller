@@ -17,6 +17,7 @@ pub async fn list_devices(
     headers: HeaderMap,
     Query(query): Query<DeviceListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "list_devices");
     let (response_headers, is_admin) =
         match auth::authorize_request(&state, &headers, Some("admin")).await {
             Ok(headers) => (headers, true),
@@ -56,6 +57,7 @@ pub async fn device_families(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_families");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -86,6 +88,7 @@ pub async fn device_types(
     headers: HeaderMap,
     Query(query): Query<DeviceTypesQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_types");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -119,6 +122,7 @@ pub async fn device_by_id(
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_by_id");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -161,6 +165,7 @@ pub async fn latest_heartbeat(
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "latest_heartbeat");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -200,6 +205,7 @@ pub async fn device_topology(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "device_topology");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -230,6 +236,7 @@ where
     F: FnOnce(Arc<dyn DeviceRepository>) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<String>, DeviceRepositoryError>>,
 {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::inventory_handlers", "protected_string_list");
     let Some(repository) = state.device_repository.clone() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,

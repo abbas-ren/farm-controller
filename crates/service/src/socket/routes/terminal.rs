@@ -19,6 +19,7 @@ impl client::Handler for SshClient {
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "check_server_key");
         if self.accept_unknown_host_keys {
             return Ok(true);
         }
@@ -57,6 +58,7 @@ enum TerminalAuthMethod {
 }
 
 fn terminal_auth_method(password: &str) -> TerminalAuthMethod {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "terminal_auth_method");
     if password.is_empty() {
         TerminalAuthMethod::None
     } else {
@@ -65,6 +67,7 @@ fn terminal_auth_method(password: &str) -> TerminalAuthMethod {
 }
 
 pub(super) async fn session(state: Arc<AppState>, mut socket: WebSocket, allow_farm_host: bool) {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "session");
     let Some(target) = receive_target(&state, &mut socket, allow_farm_host).await else {
         return;
     };
@@ -225,6 +228,7 @@ async fn receive_target(
     socket: &mut WebSocket,
     allow_farm_host: bool,
 ) -> Option<TerminalTarget> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "receive_target");
     while let Some(message) = socket.recv().await {
         let text = match message {
             Ok(Message::Text(text)) => text,
@@ -316,75 +320,103 @@ async fn receive_target(
 }
 
 async fn approved_device_host(state: &AppState, requested: &str) -> Result<String, String> {
-    let pool = state
+    use crate::persistence::entity::device;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let _api_trace =
+        crate::observability::ApiTrace::enter("socket::routes::terminal", "approved_device_host");
+    let orm = state
         .database
         .as_ref()
-        .map(|database| database.pool())
+        .map(|database| database.orm())
         .ok_or_else(|| "device persistence is unavailable".to_owned())?;
-    sqlx::query_scalar::<_, String>(
-        r#"SELECT "ipAddress" FROM devices
-           WHERE "deletedAt" IS NULL AND status::text = 'approved'
-             AND "ipAddress" = $1 LIMIT 1"#,
-    )
-    .bind(requested)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| error.to_string())?
-    .ok_or_else(|| "target is not an approved device".to_owned())
+    device::Entity::find()
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .filter(device::Column::IpAddress.eq(requested))
+        .one(orm)
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|d| d.ip_address)
+        .ok_or_else(|| "target is not an approved device".to_owned())
 }
 
 async fn approved_controller_host(state: &AppState, requested: &str) -> Result<String, String> {
-    let pool = state
+    use crate::persistence::entity::device_controller;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let _api_trace = crate::observability::ApiTrace::enter(
+        "socket::routes::terminal",
+        "approved_controller_host",
+    );
+    let orm = state
         .database
         .as_ref()
-        .map(|database| database.pool())
+        .map(|database| database.orm())
         .ok_or_else(|| "device persistence is unavailable".to_owned())?;
-    sqlx::query_scalar::<_, String>(
-        r#"SELECT "ipAddress" FROM device_controllers
-           WHERE "deletedAt" IS NULL AND status::text = 'approved'
-             AND "ipAddress" = $1 LIMIT 1"#,
-    )
-    .bind(requested)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| error.to_string())?
-    .ok_or_else(|| "target is not an approved device controller".to_owned())
+    device_controller::Entity::find()
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .filter(
+            device_controller::Column::Status
+                .eq(device_controller::DeviceControllerStatus::Approved),
+        )
+        .filter(device_controller::Column::IpAddress.eq(requested))
+        .one(orm)
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|c| c.ip_address)
+        .ok_or_else(|| "target is not an approved device controller".to_owned())
 }
 
 async fn resolve_rtos_target(
     state: &AppState,
     message: &serde_json::Value,
 ) -> Result<TerminalTarget, String> {
+    use crate::persistence::entity::{device, device_controller, device_uart_mapping};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let _api_trace =
+        crate::observability::ApiTrace::enter("socket::routes::terminal", "resolve_rtos_target");
     let device_id = message
         .get("deviceId")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "deviceId is required.".to_owned())?;
-    let pool = state
+    let orm = state
         .database
         .as_ref()
-        .map(|database| database.pool())
+        .map(|database| database.orm())
         .ok_or_else(|| "device persistence is unavailable".to_owned())?;
-    let target = sqlx::query_as::<_, (String, String, i16)>(
-        r#"SELECT controller."ipAddress", mapping.tty, mapping.generation
-                     FROM device_uart_mappings mapping
-                     JOIN devices device ON device."deviceId" = mapping."deviceId"
-                     JOIN device_controllers controller
-                         ON controller."deviceControllerId" = mapping."controllerId"
-                     WHERE mapping."deviceId" = $1 AND mapping.verified = true
-                         AND device."deletedAt" IS NULL AND device.status::text = 'approved'
-                         AND controller."deletedAt" IS NULL AND controller.status::text = 'approved'
-                     LIMIT 1"#,
-    )
-    .bind(device_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| error.to_string())?
-    .ok_or_else(|| format!("No mapped device controller found for device {device_id}"))?;
-    let startup_command = rtos_command(&target.1, target.2)?;
+    let mapping = device_uart_mapping::Entity::find()
+        .filter(device_uart_mapping::Column::DeviceId.eq(device_id))
+        .filter(device_uart_mapping::Column::Verified.eq(true))
+        .one(orm)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("No mapped device controller found for device {device_id}"))?;
+    let device_ok = device::Entity::find()
+        .filter(device::Column::DeviceId.eq(device_id))
+        .filter(device::Column::DeletedAt.is_null())
+        .filter(device::Column::Status.eq(device::DeviceStatus::Approved))
+        .one(orm)
+        .await
+        .map_err(|error| error.to_string())?
+        .is_some();
+    if !device_ok {
+        return Err(format!("No mapped device controller found for device {device_id}"));
+    }
+    let controller = device_controller::Entity::find()
+        .filter(device_controller::Column::DeviceControllerId.eq(&mapping.controller_id))
+        .filter(device_controller::Column::DeletedAt.is_null())
+        .filter(
+            device_controller::Column::Status
+                .eq(device_controller::DeviceControllerStatus::Approved),
+        )
+        .one(orm)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("No mapped device controller found for device {device_id}"))?;
+    let startup_command = rtos_command(&mapping.tty, mapping.generation)?;
     Ok(TerminalTarget {
-        host: target.0,
+        host: controller.ip_address,
         port: message_port(message),
         username: state.config.device.rtos_username.clone(),
         password: state.config.device.rtos_password.clone(),
@@ -393,6 +425,7 @@ async fn resolve_rtos_target(
 }
 
 fn message_port(message: &serde_json::Value) -> u16 {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "message_port");
     message
         .get("port")
         .and_then(serde_json::Value::as_u64)
@@ -401,6 +434,7 @@ fn message_port(message: &serde_json::Value) -> u16 {
 }
 
 fn valid_username(username: &str) -> bool {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "valid_username");
     !username.is_empty()
         && username.len() <= 64
         && username
@@ -409,12 +443,14 @@ fn valid_username(username: &str) -> bool {
 }
 
 fn message_dimensions(message: &serde_json::Value) -> Option<(u32, u32)> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "message_dimensions");
     let columns = u32::try_from(message.get("cols")?.as_u64()?).ok()?;
     let rows = u32::try_from(message.get("rows")?.as_u64()?).ok()?;
     ((1..=1_000).contains(&columns) && (1..=1_000).contains(&rows)).then_some((columns, rows))
 }
 
 fn rtos_command(tty: &str, generation: i16) -> Result<String, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "rtos_command");
     let tty = tty.trim();
     let suffix = tty
         .strip_prefix("/dev/ttyUSB")
@@ -432,6 +468,7 @@ fn rtos_command(tty: &str, generation: i16) -> Result<String, String> {
 }
 
 async fn send_error(socket: &mut WebSocket, error: impl Into<String>) {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "send_error");
     let _ = send_output(socket, "stderr", error.into()).await;
 }
 
@@ -440,6 +477,7 @@ async fn send_output(
     stream: &str,
     chunk: impl Into<String>,
 ) -> Result<(), axum::Error> {
+    let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "send_output");
     socket
         .send(Message::Text(
             serde_json::json!({"type": "ssh", "stream": stream, "chunk": chunk.into()})
@@ -458,6 +496,7 @@ mod tests {
 
     #[test]
     fn empty_terminal_password_uses_ssh_none_authentication() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "empty_terminal_password_uses_ssh_none_authentication");
         assert_eq!(terminal_auth_method(""), TerminalAuthMethod::None);
         assert_eq!(
             terminal_auth_method("configured-secret"),
@@ -467,6 +506,7 @@ mod tests {
 
     #[test]
     fn rtos_command_uses_verified_uart_and_generation_baud() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "rtos_command_uses_verified_uart_and_generation_baud");
         assert_eq!(
             rtos_command("/dev/ttyUSB1", 3).unwrap(),
             "picocom /dev/ttyUSB1 -b 115200"
@@ -480,6 +520,7 @@ mod tests {
 
     #[test]
     fn host_terminal_username_is_bounded_and_shell_safe() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "host_terminal_username_is_bounded_and_shell_safe");
         assert!(valid_username("farm-admin"));
         assert!(!valid_username(""));
         assert!(!valid_username("root;reboot"));
@@ -487,12 +528,14 @@ mod tests {
 
     #[test]
     fn terminal_port_is_bounded_to_u16() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "terminal_port_is_bounded_to_u16");
         assert_eq!(message_port(&serde_json::json!({"port": 2222})), 2222);
         assert_eq!(message_port(&serde_json::json!({"port": 70000})), 22);
     }
 
     #[test]
     fn terminal_dimensions_are_positive_and_bounded() {
+        let _api_trace = crate::observability::ApiTrace::enter("socket::routes::terminal", "terminal_dimensions_are_positive_and_bounded");
         assert_eq!(
             message_dimensions(&serde_json::json!({"cols": 120, "rows": 40})),
             Some((120, 40))

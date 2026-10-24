@@ -22,36 +22,42 @@ pub trait IdentityProvider: Send + Sync {
         &self,
         _request: &RegistrationRequest,
     ) -> Result<serde_json::Value, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "request_registration");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "Registration is unavailable",
         ))
     }
     async fn pending_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "pending_users");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "User administration is unavailable",
         ))
     }
     async fn managed_users(&self) -> Result<Vec<ManagedUser>, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "managed_users");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "User administration is unavailable",
         ))
     }
     async fn user_by_id(&self, _user_id: &str) -> Result<ManagedUser, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "user_by_id");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "User administration is unavailable",
         ))
     }
     async fn delete_user(&self, _user_id: &str) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "delete_user");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "User administration is unavailable",
         ))
     }
     async fn verify_reset_user(&self, _token: &str, _user_id: &str) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "verify_reset_user");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "Password reset is unavailable",
@@ -63,12 +69,14 @@ pub trait IdentityProvider: Send + Sync {
         _user_id: &str,
         _password: &str,
     ) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "reset_password");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "Password reset is unavailable",
         ))
     }
     async fn forgot_password(&self, _username: &str) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "forgot_password");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "Password reset is unavailable",
@@ -78,6 +86,7 @@ pub trait IdentityProvider: Send + Sync {
         &self,
         _request: &AdminRegistrationRequest,
     ) -> Result<AdminRegistrationResult, IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "register_user");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "User administration is unavailable",
@@ -87,6 +96,7 @@ pub trait IdentityProvider: Send + Sync {
         &self,
         _request: &RegistrationActionRequest,
     ) -> Result<(), IdentityError> {
+        let _api_trace = crate::observability::ApiTrace::enter("auth::identity_provider", "registration_action");
         Err(IdentityError::upstream(
             StatusCode::NOT_IMPLEMENTED,
             "User administration is unavailable",

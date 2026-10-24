@@ -25,6 +25,7 @@ pub async fn delete_device(
     Path(device_id): Path<String>,
     Query(query): Query<DeleteDeviceQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::controller_handlers", "delete_device");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -133,6 +134,7 @@ pub async fn edit_controller(
     Path(controller_id): Path<String>,
     Json(request): Json<ControllerEditRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::controller_handlers", "edit_controller");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -179,6 +181,7 @@ pub async fn delete_controller(
     headers: HeaderMap,
     Path(controller_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::controller_handlers", "delete_controller");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -236,6 +239,7 @@ pub async fn delete_controller(
 }
 
 pub(super) fn publish_controller_changed(state: &AppState, action: &str, controller_id: &str) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::controller_handlers", "publish_controller_changed");
     if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
         FrontendMessagePayload::DeviceControllerChanged {
             action: Action::from(action),

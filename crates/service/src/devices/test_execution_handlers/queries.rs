@@ -17,6 +17,7 @@ pub async fn list(
     headers: HeaderMap,
     Query(query): Query<ExecutionListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::queries", "list");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -41,6 +42,7 @@ pub async fn by_device(
     headers: HeaderMap,
     Path(device_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::queries", "by_device");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -75,6 +77,7 @@ pub async fn progress(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::queries", "progress");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -105,6 +108,7 @@ pub async fn execution(
     Path(id): Path<String>,
     Query(query): Query<ExecutionDetailQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::queries", "execution");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -149,6 +153,7 @@ pub async fn by_build(
     Path(build_id): Path<String>,
     Query(query): Query<BuildExecutionQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::queries", "by_build");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -177,6 +182,7 @@ pub async fn results(
     headers: HeaderMap,
     Path(test_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::queries", "results");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

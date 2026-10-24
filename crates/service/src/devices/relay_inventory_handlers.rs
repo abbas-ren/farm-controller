@@ -17,6 +17,7 @@ pub async fn available_relay_devices(
     headers: HeaderMap,
     Query(query): Query<AvailableRelayDevicesQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_inventory_handlers", "available_relay_devices");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -40,6 +41,7 @@ pub async fn relays_for_controller(
     headers: HeaderMap,
     Path(controller_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_inventory_handlers", "relays_for_controller");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -63,6 +65,7 @@ pub async fn channels_for_relay(
     headers: HeaderMap,
     Path(relay_id): Path<Uuid>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::relay_inventory_handlers", "channels_for_relay");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

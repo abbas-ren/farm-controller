@@ -12,6 +12,7 @@ use crate::config::DeviceConfig;
 use super::{DeviceTypeFolder, constants::DEVICE_CALLBACK_TIMEOUT};
 
 pub(crate) async fn discover_versions(base_url: &str, folder_keyword: &str) -> Vec<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "discover_versions");
     let Ok(base_url) = reqwest::Url::parse(base_url) else {
         return Vec::new();
     };
@@ -44,6 +45,7 @@ pub(crate) async fn discover_versions(base_url: &str, folder_keyword: &str) -> V
 }
 
 fn html_directories(html: &str) -> Vec<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "html_directories");
     let link = regex::Regex::new(r#"(?i)href\s*=\s*["']([^"']+/)["']"#)
         .expect("static directory link regex is valid");
     link.captures_iter(html)
@@ -62,6 +64,7 @@ pub(crate) async fn copy_defaults(
     entries: &[DeviceTypeFolder],
     force: bool,
 ) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "copy_defaults");
     let base_url = reqwest::Url::parse(&config.artifacts_base_url)
         .map_err(|error| format!("invalid artifacts base URL: {error}"))?;
     let client = crate::external_http::client(std::time::Duration::from_secs(
@@ -128,6 +131,7 @@ async fn install_entry(
     config: &DeviceConfig,
     force: bool,
 ) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "install_entry");
     for file in [image, dtb, archive] {
         validate_segment(file)?;
         download(
@@ -156,6 +160,7 @@ async fn install_entry(
 }
 
 async fn get_text(client: &reqwest::Client, url: reqwest::Url) -> Result<String, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "get_text");
     client
         .get(url)
         .send()
@@ -169,6 +174,7 @@ async fn get_text(client: &reqwest::Client, url: reqwest::Url) -> Result<String,
 }
 
 async fn download(client: &reqwest::Client, url: reqwest::Url, path: &Path) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "download");
     let response = client
         .get(url)
         .send()
@@ -185,6 +191,7 @@ async fn download(client: &reqwest::Client, url: reqwest::Url, path: &Path) -> R
 }
 
 async fn extract_archive(archive: PathBuf, destination: PathBuf) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "extract_archive");
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let file = std::fs::File::open(archive).map_err(io_error)?;
         let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(file));
@@ -208,6 +215,7 @@ async fn extract_archive(archive: PathBuf, destination: PathBuf) -> Result<(), S
 }
 
 async fn directory_is_empty(path: &Path) -> Result<bool, String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "directory_is_empty");
     Ok(tokio::fs::read_dir(path)
         .await
         .map_err(io_error)?
@@ -218,11 +226,13 @@ async fn directory_is_empty(path: &Path) -> Result<bool, String> {
 }
 
 async fn replace_directory(path: &Path) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "replace_directory");
     tokio::fs::remove_dir_all(path).await.map_err(io_error)?;
     tokio::fs::create_dir_all(path).await.map_err(io_error)
 }
 
 async fn copy_if_needed(source: &Path, destination: &Path, force: bool) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "copy_if_needed");
     if force || !tokio::fs::try_exists(destination).await.map_err(io_error)? {
         tokio::fs::copy(source, destination)
             .await
@@ -232,6 +242,7 @@ async fn copy_if_needed(source: &Path, destination: &Path, force: bool) -> Resul
 }
 
 fn html_files(html: &str) -> Vec<String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "html_files");
     let link = regex::Regex::new(r#"(?i)href\s*=\s*["']([^"'/]+)["']"#)
         .expect("static file link regex is valid");
     link.captures_iter(html)
@@ -242,6 +253,7 @@ fn html_files(html: &str) -> Vec<String> {
 }
 
 fn validate_segment(segment: &str) -> Result<(), String> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "validate_segment");
     let path = Path::new(segment);
     if segment.is_empty()
         || path.components().count() != 1
@@ -253,10 +265,12 @@ fn validate_segment(segment: &str) -> Result<(), String> {
 }
 
 fn io_error(error: io::Error) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "io_error");
     error.to_string()
 }
 
 fn staging_name() -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "staging_name");
     uuid::Uuid::new_v4().simple().to_string()
 }
 
@@ -266,18 +280,21 @@ mod tests {
 
     #[test]
     fn directory_listing_ignores_parent_and_files() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "directory_listing_ignores_parent_and_files");
         let html = r#"<a href="../">parent</a><a href="v1/">v1</a><a href="Image">file</a>"#;
         assert_eq!(html_directories(html), vec!["v1"]);
     }
 
     #[test]
     fn file_listing_keeps_only_single_path_segments() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "file_listing_keeps_only_single_path_segments");
         let html = r#"<a href="../">parent</a><a href="Image">image</a><a href="board.dtb">dtb</a><a href="nested/file">bad</a>"#;
         assert_eq!(html_files(html), vec!["Image", "board.dtb"]);
     }
 
     #[test]
     fn artifact_path_segments_reject_traversal() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::artifacts", "artifact_path_segments_reject_traversal");
         assert!(validate_segment("device-v1").is_ok());
         for segment in ["", "..", "../escape", "/absolute", "nested/path"] {
             assert!(validate_segment(segment).is_err(), "segment: {segment}");

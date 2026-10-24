@@ -35,6 +35,7 @@ pub async fn register_device(
     State(state): State<Arc<AppState>>,
     payload: Result<Json<DeviceRegistration>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_registration_handlers", "register_device");
     let Json(registration) = match payload {
         Ok(payload) => payload,
         Err(error) => {
@@ -71,6 +72,7 @@ pub async fn register_device(
 }
 
 fn publish_alert(state: &AppState, subtype: &str, device: serde_json::Value) {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_registration_handlers", "publish_alert");
     if let Err(error) = state.event_publisher.publish(ServerEvent::frontend(
         FrontendMessagePayload::AlertDataPayload {
             level: Some(AlertLevel::Info),

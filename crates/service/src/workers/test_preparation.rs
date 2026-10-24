@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
+    persistence::entity::{device_action_queue, test_case, test_execution},
     socket::types::{
         farm::ServerEvent,
         frontend::{
@@ -21,6 +22,12 @@ use crate::{
 };
 
 use super::artifact_preparation::{artifact_paths, prepare_artifacts, safe_segment};
+
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
+    sea_query::Expr,
+};
 
 pub(super) async fn worker(state: Arc<AppState>, cancellation: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_secs(
@@ -70,11 +77,13 @@ async fn run_cycle(state: &AppState) {
     }
 }
 
-async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sqlx::Error> {
+async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sea_orm::DbErr> {
     let database = state.database.as_ref().expect("worker requires database");
     let lease_seconds =
         i64::try_from(state.config.workers.test_preparation_lease_seconds).unwrap_or(i64::MAX);
-    sqlx::query_as::<_, TestPreparation>(
+    // CTE claim with lease reclaim + release join — keep as raw SQL.
+    TestPreparation::find_by_statement(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
         r#"WITH candidate AS (
                SELECT execution."testId"
                FROM test_executions execution
@@ -104,9 +113,9 @@ async fn claim(state: &AppState) -> Result<Option<TestPreparation>, sqlx::Error>
                   claimed."testCycleId" AS test_cycle_id, release.artifacts
            FROM claimed
            JOIN releases release ON release.id::text = claimed."buildId"::text"#,
-    )
-    .bind(lease_seconds)
-    .fetch_optional(database.pool())
+        [lease_seconds.into()],
+    ))
+    .one(database.orm())
     .await
 }
 
@@ -115,15 +124,17 @@ async fn prepare(
     mut preparation: TestPreparation,
 ) -> Result<ServerEvent, String> {
     let database = state.database.as_ref().expect("worker requires database");
-    let cases = sqlx::query_as::<_, TestPreparationCase>(
-        r#"SELECT "testCaseId"::bigint AS test_case_id,
-              COALESCE("scriptFile", '') AS script_file
-           FROM testcase WHERE "executionId" = $1 ORDER BY "suiteId", id"#,
-    )
-    .bind(&preparation.test_id)
-    .fetch_all(database.pool())
-    .await
-    .map_err(|error| error.to_string())?;
+    let cases = test_case::Entity::find()
+        .filter(test_case::Column::ExecutionId.eq(&preparation.test_id))
+        .order_by_asc(test_case::Column::SuiteId)
+        .order_by_asc(test_case::Column::Id)
+        .select_only()
+        .column_as(test_case::Column::TestCaseId, "test_case_id")
+        .column_as(Expr::cust("COALESCE(\"scriptFile\", '')"), "script_file")
+        .into_model::<TestPreparationCase>()
+        .all(database.orm())
+        .await
+        .map_err(|error| error.to_string())?;
     let paths = artifact_paths(
         &preparation.artifacts,
         &state.config.device.rootfs_archive_extension,
@@ -164,15 +175,17 @@ async fn prepare(
             .await
             .map_err(|error| error.to_string())?;
         let run_id = run_id.to_string();
-        sqlx::query(
-            r#"UPDATE test_executions SET "testCycleId" = $2, "updatedAt" = now()
-               WHERE "testId" = $1"#,
-        )
-        .bind(&preparation.test_id)
-        .bind(&run_id)
-        .execute(database.pool())
-        .await
-        .map_err(|error| error.to_string())?;
+        let now = chrono::Utc::now();
+        test_execution::Entity::update_many()
+            .col_expr(
+                test_execution::Column::TestCycleId,
+                Expr::value(Some(run_id.clone())),
+            )
+            .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+            .filter(test_execution::Column::TestId.eq(&preparation.test_id))
+            .exec(database.orm())
+            .await
+            .map_err(|error| error.to_string())?;
         preparation.test_cycle_id = Some(run_id);
     }
 
@@ -209,50 +222,86 @@ async fn prepare(
     }
 
     let queue_id = Uuid::new_v4();
-    let mut transaction = database
-        .pool()
+    let transaction = database
+        .orm()
         .begin()
         .await
         .map_err(|error| error.to_string())?;
-    sqlx::query(
-        r#"INSERT INTO device_action_queue
-              (id, "testId", "deviceType", "userId", type, status, mode,
-               "releaseId", "createdAt", "updatedAt")
-           SELECT $1, $2, $3, $4, 'test', 'queued', 'deviceType', $5::uuid, now(), now()
-           WHERE NOT EXISTS (SELECT 1 FROM device_action_queue WHERE "testId" = $2)"#,
-    )
-    .bind(queue_id)
-    .bind(&preparation.test_id)
-    .bind(&preparation.device_type)
-    .bind(&preparation.created_by)
-    .bind(&preparation.build_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    let persisted_queue_id = sqlx::query_scalar::<_, Uuid>(
-        r#"SELECT id FROM device_action_queue WHERE "testId" = $1
-           ORDER BY "createdAt" ASC LIMIT 1"#,
-    )
-    .bind(&preparation.test_id)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    sqlx::query(
-        r#"UPDATE test_executions
-           SET "executionPhase" = 'QUEUE_TEST_EXECUTION', "queueId" = $2,
-               "updatedAt" = now()
-           WHERE "testId" = $1 AND status::text = 'not_executed'
-             AND COALESCE("cancelRequested", false) = false"#,
-    )
-    .bind(&preparation.test_id)
-    .bind(persisted_queue_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?;
+    let now = chrono::Utc::now();
+    let existing_queue = device_action_queue::Entity::find()
+        .filter(device_action_queue::Column::TestId.eq(&preparation.test_id))
+        .one(&transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    if existing_queue.is_none() {
+        let release_id = Uuid::parse_str(&preparation.build_id).ok();
+        device_action_queue::ActiveModel {
+            id: Set(queue_id),
+            test_id: Set(Some(preparation.test_id.clone())),
+            device_type: Set(preparation.device_type.clone()),
+            user_id: Set(preparation.created_by.clone()),
+            r#type: Set(device_action_queue::QueueJobType::Test),
+            status: Set(device_action_queue::QueueJobStatus::Queued),
+            mode: Set(device_action_queue::QueueDispatchMode::DeviceType),
+            release_id: Set(release_id),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    let persisted_queue_id = device_action_queue::Entity::find()
+        .filter(device_action_queue::Column::TestId.eq(&preparation.test_id))
+        .order_by_asc(device_action_queue::Column::CreatedAt)
+        .one(&transaction)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            format!(
+                "device_action_queue row missing for test {}",
+                preparation.test_id
+            )
+        })?
+        .id;
+    test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            Expr::value(Some(test_execution::ExecutionPhase::QueueTestExecution)),
+        )
+        .col_expr(
+            test_execution::Column::QueueId,
+            Expr::value(Some(persisted_queue_id.to_string())),
+        )
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(&preparation.test_id))
+        .filter(test_execution::Column::Status.eq(test_execution::TestStatus::NotExecuted))
+        .filter(
+            sea_orm::Condition::any()
+                .add(test_execution::Column::CancelRequested.eq(false))
+                .add(test_execution::Column::CancelRequested.is_null()),
+        )
+        .exec(&transaction)
+        .await
+        .map_err(|error| error.to_string())?;
     transaction
         .commit()
         .await
         .map_err(|error| error.to_string())?;
+    let message = format!(
+        "Test artifacts prepared and queued for device type {}",
+        preparation.device_type
+    );
+    if let Err(error) =
+        crate::devices::test_log::append_test_log(state, &preparation.test_id, &message).await
+    {
+        tracing::warn!(
+            %error,
+            test_id = %preparation.test_id,
+            "failed to append preparation success log"
+        );
+    }
     Ok(prepared_event(
         &preparation.test_id,
         &preparation.created_by,
@@ -274,25 +323,42 @@ async fn set_executable(_path: &Path) -> io::Result<()> {
 
 async fn mark_failed(state: &AppState, test_id: &str, error: &str) -> Option<ServerEvent> {
     let database = state.database.as_ref()?;
-    let _owner = sqlx::query_as::<_, (String, String)>(
-        r#"UPDATE test_executions
-           SET status = 'failed', "executionPhase" = 'COMPLETE_FAILED',
-               "endedAt" = now(), "updatedAt" = now()
-           WHERE "testId" = $1
-           RETURNING COALESCE("createdBy", 'system'), "buildId"::text"#,
-    )
-    .bind(test_id)
-    .fetch_optional(database.pool())
-    .await
-    .ok()??;
-    Some(ServerEvent {
-        event: "test_execution".to_owned(),
-        payload: serde_json::json!({
-            "testId": test_id,
-            "type": "status",
-            "data": {"status": "failed", "message": error, "timestamp": chrono::Utc::now().to_rfc3339()},
-        }),
-    })
+    let now = chrono::Utc::now();
+    let updated = test_execution::Entity::update_many()
+        .col_expr(
+            test_execution::Column::Status,
+            Expr::value(Some(test_execution::TestStatus::Failed)),
+        )
+        .col_expr(
+            test_execution::Column::ExecutionPhase,
+            Expr::value(Some(test_execution::ExecutionPhase::CompleteFailed)),
+        )
+        .col_expr(test_execution::Column::EndedAt, Expr::value(Some(now)))
+        .col_expr(test_execution::Column::UpdatedAt, Expr::value(now))
+        .filter(test_execution::Column::TestId.eq(test_id))
+        .exec(database.orm())
+        .await
+        .ok()?;
+    if updated.rows_affected == 0 {
+        return None;
+    }
+    let message = format!("Test preparation failed: {error}");
+    if let Err(log_error) = crate::devices::test_log::append_test_log(state, test_id, &message).await
+    {
+        tracing::warn!(%log_error, %test_id, "failed to append preparation failure log");
+    }
+    Some(ServerEvent::frontend(FrontendMessagePayload::TestExecution {
+        test_id: test_id.to_owned(),
+        r#type: TestExecutionUpdateType::Status,
+        data: TestExecutionUpdateData {
+            status: Some(TestStatus::Failed),
+            message: Some(error.to_owned()),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            cancel_requested: None,
+            phase: None,
+            rtos_log_path: None,
+        },
+    }))
 }
 
 fn prepared_event(test_id: &str, _user_id: &str) -> ServerEvent {
@@ -310,7 +376,7 @@ fn prepared_event(test_id: &str, _user_id: &str) -> ServerEvent {
     })
 }
 
-fn record_failure(state: &AppState, error: &sqlx::Error) {
+fn record_failure(state: &AppState, error: &sea_orm::DbErr) {
     state
         .metrics
         .record_worker_run("test_preparation", "failure");

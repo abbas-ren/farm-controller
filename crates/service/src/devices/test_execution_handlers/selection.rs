@@ -8,6 +8,7 @@ pub(super) async fn resolve_execution(
     request: CreateExecutionRequest,
     user_id: String,
 ) -> Result<ExecutionCreation, super::super::error::DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::selection", "resolve_execution");
     use super::super::error::DeviceRepositoryError;
 
     if request.device_type.trim().is_empty() {
@@ -253,6 +254,7 @@ pub(super) async fn resolve_execution(
 }
 
 fn encoded_id(value: &str) -> Result<i64, super::super::error::DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::selection", "encoded_id");
     let digits = value
         .chars()
         .skip_while(|character| !character.is_ascii_digit())
@@ -266,6 +268,7 @@ fn encoded_id(value: &str) -> Result<i64, super::super::error::DeviceRepositoryE
 }
 
 fn catalog_case(case: crate::test_catalog::TestCase, suite_name: String) -> ExecutionCaseInput {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::selection", "catalog_case");
     ExecutionCaseInput {
         test_case_id: case.id as i64,
         name: None,

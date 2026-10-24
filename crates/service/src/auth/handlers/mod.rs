@@ -30,6 +30,7 @@ use crate::state::AppState;
 
 /// Builds the authentication subrouter mounted by the service API.
 pub fn router() -> Router<Arc<AppState>> {
+    let _api_trace = crate::observability::ApiTrace::enter("auth::handlers::mod", "router");
     Router::new()
         .route("/register/request", post(request_registration))
         .route("/register/action", post(registration_action))

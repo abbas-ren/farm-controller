@@ -27,6 +27,7 @@ pub async fn update_build_status(
     Path(build_id): Path<String>,
     Json(request): Json<BuildStatusRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "update_build_status");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -92,6 +93,7 @@ pub async fn flag_build(
     Path(build_id): Path<String>,
     payload: Result<Json<BuildFlagRequest>, JsonRejection>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "flag_build");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -156,6 +158,7 @@ pub async fn delete_build(
     headers: HeaderMap,
     Path(build_id): Path<String>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "delete_build");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -215,6 +218,7 @@ pub async fn delete_build(
 }
 
 fn safe_segment(value: &str) -> bool {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_handlers::mutations", "safe_segment");
     let mut components = std::path::Path::new(value).components();
     matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()

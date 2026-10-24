@@ -34,6 +34,7 @@ pub async fn update_status(
     Path(test_id): Path<String>,
     Json(request): Json<ExecutionStatusRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::commands", "update_status");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -93,6 +94,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(request): Json<CreateExecutionRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::commands", "create");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -109,6 +111,7 @@ pub(crate) async fn create_for_user(
     request: CreateExecutionRequest,
     user_id: String,
 ) -> Result<serde_json::Value, super::super::error::DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::commands", "create_for_user");
     use super::super::error::DeviceRepositoryError;
 
     let execution = super::selection::resolve_execution(state, request, user_id).await?;
@@ -134,6 +137,7 @@ pub async fn update(
     Path(case_id): Path<String>,
     Json(request): Json<UpdateExecutionRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::test_execution_handlers::commands", "update");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

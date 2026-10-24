@@ -26,7 +26,7 @@ pub struct RelayChannelRegistration {
     pub device_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema, sqlx::FromRow)]
+#[derive(Clone, Debug, Serialize, ToSchema, sqlx::FromRow, sea_orm::FromQueryResult)]
 #[serde(rename_all = "camelCase")]
 pub struct Relay {
     pub id: Uuid,

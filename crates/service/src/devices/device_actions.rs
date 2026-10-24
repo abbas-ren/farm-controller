@@ -15,6 +15,7 @@ use axum::{
 
 #[utoipa::path(get, path = "/api/v1/device/all/active", tag = "Devices", summary = "List approved active devices", description = "Public compatibility route returning complete approved, non-deleted legacy device rows.", responses((status = 200, description = "Approved devices", body = [Object]), (status = 500, description = "Device query failed", body = ErrorResponse), (status = 503, description = "Device persistence unavailable", body = ErrorResponse)))]
 pub async fn active_devices(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_actions", "active_devices");
     let Some(repository) = state.device_repository.clone() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -34,6 +35,7 @@ pub async fn update_heartbeat_timeout(
     headers: HeaderMap,
     Json(request): Json<HeartbeatTimeoutRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_actions", "update_heartbeat_timeout");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -107,6 +109,7 @@ pub async fn list_user_devices(
     headers: HeaderMap,
     Query(query): Query<UserDeviceListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_actions", "list_user_devices");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -130,6 +133,7 @@ pub async fn list_controllers(
     headers: HeaderMap,
     Query(query): Query<ControllerListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_actions", "list_controllers");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -154,6 +158,7 @@ pub async fn device_action(
     Path(device_id): Path<String>,
     Json(request): Json<DeviceActionRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::device_actions", "device_action");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

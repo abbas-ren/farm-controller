@@ -126,6 +126,7 @@ fn device_heartbeat_events_follow_committed_frontend_contract() {
             alerts: vec![serde_json::json!({"title": "Device comes as Available"})],
             post_update_events: Vec::new(),
             deferred_cancellations: Vec::new(),
+            deferred_test_logs: Vec::new(),
         },
         "2026-10-02T00:00:00.000Z",
     );

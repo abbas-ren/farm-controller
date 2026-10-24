@@ -13,6 +13,7 @@ pub(crate) fn extract_zip(
     stored_archive_name: &str,
     max_expanded_bytes: u64,
 ) -> io::Result<Vec<serde_json::Value>> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "extract_zip");
     let file = File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(file).map_err(io::Error::other)?;
     let family = device_family
@@ -113,6 +114,7 @@ pub(crate) fn extract_zip(
 }
 
 fn normalize_entry(name: &str) -> io::Result<PathBuf> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "normalize_entry");
     let replaced = name.replace('\\', "/");
     if replaced.starts_with('/') {
         return Err(invalid("Invalid path inside zip"));
@@ -134,6 +136,7 @@ fn normalize_entry(name: &str) -> io::Result<PathBuf> {
 }
 
 fn strip_root(path: &Path, expected_root: &str) -> Option<PathBuf> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "strip_root");
     let mut components = path.components();
     let first = components.next();
     if first
@@ -161,6 +164,7 @@ fn validate_layout(
     gen5_ipl_count: &mut usize,
     rootfs_archive_extension: &str,
 ) -> io::Result<()> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "validate_layout");
     let lower = relative.to_lowercase();
     let base = Path::new(relative)
         .file_name()
@@ -198,6 +202,7 @@ fn validate_layout(
 }
 
 fn invalid(message: &str) -> io::Error {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "invalid");
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
@@ -208,6 +213,7 @@ mod tests {
     use super::*;
 
     fn archive(path: &Path, entries: &[(&str, &[u8])]) {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "archive");
         let file = File::create(path).unwrap();
         let mut writer = ZipWriter::new(file);
         for (name, bytes) in entries {
@@ -221,6 +227,7 @@ mod tests {
 
     #[test]
     fn extracts_legacy_root_layout() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "extracts_legacy_root_layout");
         let directory = tempfile::tempdir().unwrap();
         let zip = directory.path().join("x5h__1.2.3.zip");
         archive(
@@ -253,6 +260,7 @@ mod tests {
 
     #[test]
     fn rejects_parent_paths_and_expansion_limit() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "rejects_parent_paths_and_expansion_limit");
         let directory = tempfile::tempdir().unwrap();
         let zip = directory.path().join("unsafe.zip");
         archive(&zip, &[("../Image", b"image")]);
@@ -287,6 +295,7 @@ mod tests {
 
     #[test]
     fn accepts_configured_rootfs_archive_extension() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::build_ingestion", "accepts_configured_rootfs_archive_extension");
         let directory = tempfile::tempdir().unwrap();
         let zip = directory.path().join("v4h__1.2.3.zip");
         archive(

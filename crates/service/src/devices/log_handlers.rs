@@ -17,6 +17,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(request): Json<LogCreateRequest>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::log_handlers", "create");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -49,6 +50,7 @@ pub async fn list(
     headers: HeaderMap,
     Query(query): Query<LogListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::log_handlers", "list");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
@@ -72,6 +74,7 @@ pub async fn search(
     headers: HeaderMap,
     Query(query): Query<LogListQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::log_handlers", "search");
     let response_headers = match auth::authorize_request(&state, &headers, None).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),

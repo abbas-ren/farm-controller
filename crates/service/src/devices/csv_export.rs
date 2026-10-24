@@ -22,6 +22,7 @@ const BASE_HEADERS: [&str; 12] = [
 pub(crate) fn format_devices(
     devices: &[serde_json::Value],
 ) -> Result<String, DeviceRepositoryError> {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "format_devices");
     let interface_types = devices
         .iter()
         .flat_map(interfaces)
@@ -88,6 +89,7 @@ pub(crate) fn format_devices(
 }
 
 fn interfaces(device: &serde_json::Value) -> &[serde_json::Value] {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "interfaces");
     device
         .get("interfaces")
         .and_then(serde_json::Value::as_array)
@@ -96,6 +98,7 @@ fn interfaces(device: &serde_json::Value) -> &[serde_json::Value] {
 }
 
 fn text(device: &serde_json::Value, field: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "text");
     device
         .get(field)
         .and_then(serde_json::Value::as_str)
@@ -104,6 +107,7 @@ fn text(device: &serde_json::Value, field: &str) -> String {
 }
 
 fn date(device: &serde_json::Value, field: &str) -> String {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "date");
     device
         .get(field)
         .and_then(serde_json::Value::as_str)
@@ -113,6 +117,7 @@ fn date(device: &serde_json::Value, field: &str) -> String {
 }
 
 fn csv_error(error: csv::Error) -> DeviceRepositoryError {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "csv_error");
     DeviceRepositoryError::Validation(format!("Failed to generate CSV: {error}"))
 }
 
@@ -122,6 +127,7 @@ mod tests {
 
     #[test]
     fn export_adds_dynamic_interface_columns_and_quotes_lists() {
+        let _api_trace = crate::observability::ApiTrace::enter("devices::csv_export", "export_adds_dynamic_interface_columns_and_quotes_lists");
         let csv = format_devices(&[serde_json::json!({
             "deviceId": "device-1",
             "deviceName": "Bench 1",

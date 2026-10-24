@@ -20,6 +20,7 @@ pub(crate) async fn copy_default_artifacts(
     headers: HeaderMap,
     Query(query): Query<DefaultArtifactCopyQuery>,
 ) -> axum::response::Response {
+    let _api_trace = crate::observability::ApiTrace::enter("devices::artifact_handlers", "copy_default_artifacts");
     let response_headers = match auth::authorize_request(&state, &headers, Some("admin")).await {
         Ok(headers) => headers,
         Err(error) => return error.into_response(),
